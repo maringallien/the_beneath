@@ -48,6 +48,10 @@ export const SCENE_KEYS = {
   GAME: 'GameScene'
 } as const;
 
-export const ASSET_KEYS = {
-  PLATFORM: 'platform'
-} as const;
+// LDtk level identifier rendered by GameScene. The PreloadScene must inspect
+// the same identifier when picking which tilesets to load — keep them aligned.
+export const CURRENT_LEVEL_IDENTIFIER = 'Level_3';
+
+// Render depth for the player and other dynamic entities. Tile layers occupy
+// depth 0..N (back→front) per LevelRenderer; this sits above all of them.
+export const ENTITY_DEPTH = 100;

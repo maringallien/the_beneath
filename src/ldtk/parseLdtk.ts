@@ -1,18 +1,11 @@
-import type { LdtkEntityInstance, LdtkLevel, LdtkProject } from './types';
-
-export const PLAYER_SPAWN_ENTITY = 'PlayerSpawn';
-
-export interface SpawnPoint {
-  x: number;
-  y: number;
-}
-
-export interface ParsedLevel {
-  id: string;
-  widthPx: number;
-  heightPx: number;
-  playerSpawn: SpawnPoint;
-}
+import type {
+  LdtkAutoLayerTile,
+  LdtkEntityInstance,
+  LdtkLayerType,
+  LdtkLevel,
+  LdtkProject,
+  LdtkTilesetDef,
+} from './types';
 
 export function parseLdtkProject(rawJson: string): LdtkProject {
   let parsed: unknown;
@@ -37,43 +30,70 @@ export function getLevel(project: LdtkProject, identifier: string): LdtkLevel {
   return level;
 }
 
-export function findSpawn(level: LdtkLevel, entityIdentifier: string): SpawnPoint {
-  const matches: LdtkEntityInstance[] = [];
-  for (const layer of level.layerInstances) {
-    if (layer.__type !== 'Entities' || !layer.entityInstances) {
-      continue;
-    }
-    for (const entity of layer.entityInstances) {
-      if (entity.__identifier === entityIdentifier) {
-        matches.push(entity);
-      }
-    }
+export function getTilesetDefs(project: LdtkProject): Map<number, LdtkTilesetDef> {
+  const map = new Map<number, LdtkTilesetDef>();
+  for (const ts of project.defs.tilesets) {
+    map.set(ts.uid, ts);
   }
-  if (matches.length === 0) {
-    throw new Error(`Entity "${entityIdentifier}" not found in level "${level.identifier}"`);
-  }
-  if (matches.length > 1) {
-    throw new Error(
-      `Expected exactly one "${entityIdentifier}" in level "${level.identifier}", found ${matches.length}`,
-    );
-  }
-  const [entity] = matches;
-  const [x, y] = entity.px;
-  return { x, y };
+  return map;
 }
 
-export function parseLevel(
-  rawJson: string,
-  levelIdentifier: string,
-  spawnEntityIdentifier: string = PLAYER_SPAWN_ENTITY,
-): ParsedLevel {
-  const project = parseLdtkProject(rawJson);
-  const level = getLevel(project, levelIdentifier);
-  const playerSpawn = findSpawn(level, spawnEntityIdentifier);
+export interface RenderableTileLayer {
+  identifier: string;
+  type: Exclude<LdtkLayerType, 'Entities'>;
+  cWid: number;
+  cHei: number;
+  gridSize: number;
+  tilesetUid: number;
+  tiles: ReadonlyArray<LdtkAutoLayerTile>;
+}
+
+// LDtk stores layer instances top-to-bottom (front-most first). Returns them
+// in render order (back-to-front) so callers iterate and depth-stack
+// consistently. Entity-only layers and tile-empty layers are filtered out.
+export function getRenderableLayers(level: LdtkLevel): RenderableTileLayer[] {
+  const layers: RenderableTileLayer[] = [];
+  for (const li of level.layerInstances) {
+    if (li.__type === 'Entities') continue;
+    const tiles = li.autoLayerTiles ?? li.gridTiles ?? [];
+    if (tiles.length === 0) continue;
+    if (li.__tilesetDefUid == null) continue;
+    layers.push({
+      identifier: li.__identifier,
+      type: li.__type,
+      cWid: li.__cWid,
+      cHei: li.__cHei,
+      gridSize: li.__gridSize,
+      tilesetUid: li.__tilesetDefUid,
+      tiles,
+    });
+  }
+  return layers.reverse();
+}
+
+export interface IntGridData {
+  cWid: number;
+  cHei: number;
+  gridSize: number;
+  csv: ReadonlyArray<number>;
+}
+
+export function getIntGrid(level: LdtkLevel): IntGridData | null {
+  const li = level.layerInstances.find((l) => l.__type === 'IntGrid');
+  if (!li || !li.intGridCsv) return null;
   return {
-    id: level.identifier,
-    widthPx: level.pxWid,
-    heightPx: level.pxHei,
-    playerSpawn,
+    cWid: li.__cWid,
+    cHei: li.__cHei,
+    gridSize: li.__gridSize,
+    csv: li.intGridCsv,
   };
+}
+
+export function getEntities(level: LdtkLevel): LdtkEntityInstance[] {
+  const out: LdtkEntityInstance[] = [];
+  for (const li of level.layerInstances) {
+    if (!li.entityInstances) continue;
+    out.push(...li.entityInstances);
+  }
+  return out;
 }

@@ -1,5 +1,11 @@
 import Phaser from 'phaser';
-import { SCENE_KEYS, ASSET_KEYS } from '../constants';
+import { CURRENT_LEVEL_IDENTIFIER, SCENE_KEYS } from '../constants';
+import { ldtkRaw } from '../ldtk/ldtkData';
+import { getLevel, parseLdtkProject } from '../ldtk/parseLdtk';
+import {
+  collectTilesetsForLevel,
+  preloadTilesets,
+} from '../level/TilesetRegistry';
 import {
   preloadAllCharacters,
   registerAllCharacterAnimations,
@@ -13,10 +19,14 @@ export class PreloadScene extends Phaser.Scene {
   preload(): void {
     this.createLoadingBar();
     preloadAllCharacters(this);
+
+    const project = parseLdtkProject(ldtkRaw);
+    const level = getLevel(project, CURRENT_LEVEL_IDENTIFIER);
+    const tilesets = collectTilesetsForLevel(project, level);
+    preloadTilesets(this, tilesets);
   }
 
   create(): void {
-    this.createPlaceholderTextures();
     registerAllCharacterAnimations(this);
     this.scene.start(SCENE_KEYS.GAME);
   }
@@ -48,13 +58,5 @@ export class PreloadScene extends Phaser.Scene {
       progressBox.destroy();
       loadingText.destroy();
     });
-  }
-
-  private createPlaceholderTextures(): void {
-    const platformGraphics = this.make.graphics({ x: 0, y: 0 }, false);
-    platformGraphics.fillStyle(0x7ed321);
-    platformGraphics.fillRect(0, 0, 64, 16);
-    platformGraphics.generateTexture(ASSET_KEYS.PLATFORM, 64, 16);
-    platformGraphics.destroy();
   }
 }
