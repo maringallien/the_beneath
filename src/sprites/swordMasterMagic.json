@@ -1,0 +1,93 @@
+{
+  "type": "standard",
+  "id": "playable_character/sword_master_magic",
+  "path": "assets/characters/sword_master/magic_attacks",
+  "mode": "sword_master_magic",
+  "animations": {
+    "attack1": {
+      "type": "simple",
+      "key": "attack1",
+      "file": "assets/characters/sword_master/magic_attacks/attack1.png",
+      "category": "attack",
+      "loops": false,
+      "frames": {
+        "sheetWidth": 1150,
+        "sheetHeight": 75,
+        "frameWidth": 115,
+        "frameHeight": 75,
+        "frameCount": 10,
+        "anchorX": 46,
+        "anchorY": 56
+      },
+      "originalName": "attack1"
+    },
+    "attack2": {
+      "type": "simple",
+      "key": "attack2",
+      "file": "assets/characters/sword_master/magic_attacks/attack2.png",
+      "category": "attack",
+      "loops": false,
+      "frames": {
+        "sheetWidth": 500,
+        "sheetHeight": 37,
+        "frameWidth": 100,
+        "frameHeight": 37,
+        "frameCount": 5,
+        "anchorX": 47,
+        "anchorY": 36
+      },
+      "originalName": "attack2"
+    },
+    "attack3": {
+      "type": "simple",
+      "key": "attack3",
+      "file": "assets/characters/sword_master/magic_attacks/attack3.png",
+      "category": "attack",
+      "loops": false,
+      "frames": {
+        "sheetWidth": 889,
+        "sheetHeight": 86,
+        "frameWidth": 127,
+        "frameHeight": 86,
+        "frameCount": 7,
+        "anchorX": 55,
+        "anchorY": 61
+      },
+      "originalName": "attack3"
+    },
+    "attack4": {
+      "type": "simple",
+      "key": "attack4",
+      "file": "assets/characters/sword_master/magic_attacks/attack4.png",
+      "category": "attack",
+      "loops": false,
+      "frames": {
+        "sheetWidth": 450,
+        "sheetHeight": 79,
+        "frameWidth": 90,
+        "frameHeight": 79,
+        "frameCount": 5,
+        "anchorX": 34,
+        "anchorY": 58
+      },
+      "originalName": "attack4"
+    },
+    "attack5": {
+      "type": "simple",
+      "key": "attack5",
+      "file": "assets/characters/sword_master/magic_attacks/attack5.png",
+      "category": "attack",
+      "loops": false,
+      "frames": {
+        "sheetWidth": 906,
+        "sheetHeight": 90,
+        "frameWidth": 151,
+        "frameHeight": 90,
+        "frameCount": 6,
+        "anchorX": 59,
+        "anchorY": 65
+      },
+      "originalName": "attack5"
+    }
+  }
+}

@@ -1,0 +1,297 @@
+{
+  "type": "standard",
+  "id": "playable_character/sword_master",
+  "path": "assets/characters/sword_master/regular_animations",
+  "mode": "sword_master",
+  "animations": {
+    "attack1": {
+      "type": "simple",
+      "key": "attack1",
+      "file": "assets/characters/sword_master/regular_animations/attack1.png",
+      "category": "attack",
+      "loops": false,
+      "frames": {
+        "sheetWidth": 900,
+        "sheetHeight": 37,
+        "frameWidth": 90,
+        "frameHeight": 37,
+        "frameCount": 10,
+        "anchorX": 12
+      },
+      "originalName": "attack1"
+    },
+    "attack2": {
+      "type": "simple",
+      "key": "attack2",
+      "file": "assets/characters/sword_master/regular_animations/attack2.png",
+      "category": "attack",
+      "loops": false,
+      "frames": {
+        "sheetWidth": 630,
+        "sheetHeight": 37,
+        "frameWidth": 90,
+        "frameHeight": 37,
+        "frameCount": 7,
+        "anchorX": 22
+      },
+      "originalName": "attack2"
+    },
+    "attack3": {
+      "type": "simple",
+      "key": "attack3",
+      "file": "assets/characters/sword_master/regular_animations/attack3.png",
+      "category": "attack",
+      "loops": false,
+      "frames": {
+        "sheetWidth": 450,
+        "sheetHeight": 37,
+        "frameWidth": 90,
+        "frameHeight": 37,
+        "frameCount": 5,
+        "anchorX": 16
+      },
+      "originalName": "attack3"
+    },
+    "attack4": {
+      "type": "simple",
+      "key": "attack4",
+      "file": "assets/characters/sword_master/regular_animations/attack4.png",
+      "category": "attack",
+      "loops": false,
+      "frames": {
+        "sheetWidth": 450,
+        "sheetHeight": 37,
+        "frameWidth": 90,
+        "frameHeight": 37,
+        "frameCount": 5,
+        "anchorX": 9
+      },
+      "originalName": "attack4"
+    },
+    "attack5": {
+      "type": "simple",
+      "key": "attack5",
+      "file": "assets/characters/sword_master/regular_animations/attack5.png",
+      "category": "attack",
+      "loops": false,
+      "frames": {
+        "sheetWidth": 546,
+        "sheetHeight": 37,
+        "frameWidth": 91,
+        "frameHeight": 37,
+        "frameCount": 6,
+        "anchorX": 33
+      },
+      "originalName": "attack5"
+    },
+    "attack6": {
+      "type": "simple",
+      "key": "attack6",
+      "file": "assets/characters/sword_master/regular_animations/attack6.png",
+      "category": "attack",
+      "loops": false,
+      "frames": {
+        "sheetWidth": 2340,
+        "sheetHeight": 37,
+        "frameWidth": 90,
+        "frameHeight": 37,
+        "frameCount": 26
+      },
+      "originalName": "attack6",
+      "stages": {
+        "vanish": {
+          "startFrame": 1,
+          "endFrame": 6
+        },
+        "appear": {
+          "startFrame": 7,
+          "endFrame": 26
+        }
+      }
+    },
+    "block": {
+      "type": "simple",
+      "key": "block",
+      "file": "assets/characters/sword_master/regular_animations/block.png",
+      "category": "state",
+      "loops": true,
+      "frames": {
+        "sheetWidth": 540,
+        "sheetHeight": 37,
+        "frameWidth": 90,
+        "frameHeight": 37,
+        "frameCount": 6
+      },
+      "originalName": "block"
+    },
+    "dash": {
+      "type": "simple",
+      "key": "dash",
+      "file": "assets/characters/sword_master/regular_animations/dash.png",
+      "category": "movement",
+      "loops": false,
+      "frames": {
+        "sheetWidth": 540,
+        "sheetHeight": 37,
+        "frameWidth": 90,
+        "frameHeight": 37,
+        "frameCount": 6,
+        "anchorX": 15
+      },
+      "originalName": "dash"
+    },
+    "death": {
+      "type": "simple",
+      "key": "death",
+      "file": "assets/characters/sword_master/regular_animations/death.png",
+      "category": "state",
+      "loops": false,
+      "frames": {
+        "sheetWidth": 540,
+        "sheetHeight": 37,
+        "frameWidth": 90,
+        "frameHeight": 37,
+        "frameCount": 6
+      },
+      "originalName": "death"
+    },
+    "fall1": {
+      "type": "simple",
+      "key": "fall1",
+      "file": "assets/characters/sword_master/regular_animations/fall1.png",
+      "category": "movement",
+      "loops": false,
+      "frames": {
+        "sheetWidth": 630,
+        "sheetHeight": 37,
+        "frameWidth": 90,
+        "frameHeight": 37,
+        "frameCount": 7
+      },
+      "originalName": "fall1"
+    },
+    "ledge_slide": {
+      "type": "simple",
+      "key": "ledge_slide",
+      "file": "assets/characters/sword_master/regular_animations/ledge_slide.png",
+      "category": "movement",
+      "loops": false,
+      "frames": {
+        "sheetWidth": 810,
+        "sheetHeight": 37,
+        "frameWidth": 90,
+        "frameHeight": 37,
+        "frameCount": 9,
+        "anchorX": 38
+      },
+      "originalName": "ledge_slide"
+    },
+    "idle": {
+      "type": "simple",
+      "key": "idle",
+      "file": "assets/characters/sword_master/regular_animations/idle.png",
+      "category": "movement",
+      "loops": true,
+      "frames": {
+        "sheetWidth": 810,
+        "sheetHeight": 37,
+        "frameWidth": 90,
+        "frameHeight": 37,
+        "frameCount": 9
+      },
+      "originalName": "idle"
+    },
+    "jog": {
+      "type": "simple",
+      "key": "jog",
+      "file": "assets/characters/sword_master/regular_animations/jog.png",
+      "category": "movement",
+      "loops": true,
+      "frames": {
+        "sheetWidth": 720,
+        "sheetHeight": 37,
+        "frameWidth": 90,
+        "frameHeight": 37,
+        "frameCount": 8
+      },
+      "originalName": "jog"
+    },
+    "ledge_climb": {
+      "type": "simple",
+      "key": "ledge_climb",
+      "file": "assets/characters/sword_master/regular_animations/ledge_climb.png",
+      "category": "traversal",
+      "loops": false,
+      "frames": {
+        "sheetWidth": 384,
+        "sheetHeight": 62,
+        "frameWidth": 48,
+        "frameHeight": 62,
+        "frameCount": 8,
+        "anchorX": 28,
+        "anchorY": 34
+      },
+      "originalName": "ledge_climb"
+    },
+    "roll": {
+      "type": "simple",
+      "key": "roll",
+      "file": "assets/characters/sword_master/regular_animations/roll.png",
+      "category": "movement",
+      "loops": false,
+      "frames": {
+        "sheetWidth": 450,
+        "sheetHeight": 37,
+        "frameWidth": 90,
+        "frameHeight": 37,
+        "frameCount": 5
+      },
+      "originalName": "roll"
+    },
+    "run": {
+      "type": "simple",
+      "key": "run",
+      "file": "assets/characters/sword_master/regular_animations/run.png",
+      "category": "movement",
+      "loops": true,
+      "frames": {
+        "sheetWidth": 720,
+        "sheetHeight": 37,
+        "frameWidth": 90,
+        "frameHeight": 37,
+        "frameCount": 8
+      },
+      "originalName": "run"
+    },
+    "sprint": {
+      "type": "simple",
+      "key": "sprint",
+      "file": "assets/characters/sword_master/regular_animations/sprint.png",
+      "category": "movement",
+      "loops": true,
+      "frames": {
+        "sheetWidth": 720,
+        "sheetHeight": 37,
+        "frameWidth": 90,
+        "frameHeight": 37,
+        "frameCount": 8
+      },
+      "originalName": "sprint"
+    },
+    "take_hit": {
+      "type": "simple",
+      "key": "take_hit",
+      "file": "assets/characters/sword_master/regular_animations/take_hit.png",
+      "category": "state",
+      "loops": false,
+      "frames": {
+        "sheetWidth": 180,
+        "sheetHeight": 37,
+        "frameWidth": 90,
+        "frameHeight": 37,
+        "frameCount": 2
+      },
+      "originalName": "take_hit"
+    }
+  }
+}
