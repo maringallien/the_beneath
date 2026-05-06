@@ -1,9 +1,9 @@
 import Phaser from 'phaser';
-import { CURRENT_LEVEL_IDENTIFIER, SCENE_KEYS } from '../constants';
+import { SCENE_KEYS } from '../constants';
 import { ldtkRaw } from '../ldtk/ldtkData';
-import { getLevel, parseLdtkProject } from '../ldtk/parseLdtk';
+import { parseLdtkProject } from '../ldtk/parseLdtk';
 import {
-  collectTilesetsForLevel,
+  collectTilesetsForAllLevels,
   preloadTilesets,
 } from '../level/TilesetRegistry';
 import {
@@ -20,9 +20,11 @@ export class PreloadScene extends Phaser.Scene {
     this.createLoadingBar();
     preloadAllCharacters(this);
 
+    // Load every level's tilesets up front: GameScene renders all levels in
+    // the same world so the player can walk between them, so partial loading
+    // would leave gaps when the player crosses a level boundary.
     const project = parseLdtkProject(ldtkRaw);
-    const level = getLevel(project, CURRENT_LEVEL_IDENTIFIER);
-    const tilesets = collectTilesetsForLevel(project, level);
+    const tilesets = collectTilesetsForAllLevels(project);
     preloadTilesets(this, tilesets);
   }
 

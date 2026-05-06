@@ -283,6 +283,23 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.playLogical('idle');
   }
 
+  getCurrentMode(): CharacterModeId {
+    return this.currentMode;
+  }
+
+  // Programmatic mode swap, used by HMR snapshot/restore. Bypasses the wheel
+  // cooldown and the body-bottom snap that tryAdvanceMode does — callers
+  // restoring after a teardown have already set the player's position
+  // explicitly, so re-snapping here would just stomp on it.
+  setCurrentMode(mode: CharacterModeId): void {
+    if (mode === this.currentMode) return;
+    this.currentMode = mode;
+    if (mode !== 'sword_master') {
+      this.magicMode = false;
+    }
+    this.applyModeChangeAnimation();
+  }
+
   update(): void {
     const rightDown = this.scene.input.activePointer.rightButtonDown();
     const rightJustPressed = rightDown && !this.wasRightDown;
@@ -939,7 +956,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.body.setOffset(bodyOffsetX, bodyOffsetY);
   }
 
-  private setFacing(faceLeft: boolean): void {
+  setFacing(faceLeft: boolean): void {
     if (this.flipX === faceLeft) return;
     this.setFlipX(faceLeft);
     const currentAnim = this.anims.currentAnim;

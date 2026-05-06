@@ -9,10 +9,14 @@ const EMPTY_TILE_INDEX = -1;
 // fight Tilemap's grid-locked, one-tile-per-cell constraints when LDtk auto-
 // rules emit off-grid or stacked decorations. Caller passes a tileset texture
 // key purely to satisfy the Tilemap API — the layer is never drawn.
+// `worldOffsetX/Y` shifts the layer to its level's world position, so multiple
+// per-level collision tilemaps coexist in the same scene without overlap.
 export function buildIntGridCollision(
   scene: Phaser.Scene,
   intGrid: IntGridData,
   tilesetTextureKey: string,
+  worldOffsetX = 0,
+  worldOffsetY = 0,
 ): Phaser.Tilemaps.TilemapLayer {
   const { csv, cWid, cHei, gridSize } = intGrid;
 
@@ -46,7 +50,7 @@ export function buildIntGridCollision(
     );
   }
 
-  const layer = map.createLayer(0, tileset, 0, 0);
+  const layer = map.createLayer(0, tileset, worldOffsetX, worldOffsetY);
   if (!layer) {
     throw new Error('buildIntGridCollision: failed to create collision layer');
   }

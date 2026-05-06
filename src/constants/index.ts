@@ -56,5 +56,6 @@ export const SCENE_KEYS = {
 export const CURRENT_LEVEL_IDENTIFIER = 'Level_3';
 
 // Render depth for the player and other dynamic entities. Tile layers occupy
-// depth 0..N (back→front) per LevelRenderer; this sits above all of them.
+// depth 0..N (back→front) using their LDtk layer position; this sits above
+// all of them.
 export const ENTITY_DEPTH = 100;
