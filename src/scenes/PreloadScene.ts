@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { preloadAll as preloadAllSounds } from '../audio';
 import { SCENE_KEYS } from '../constants';
 import { ldtkRaw } from '../ldtk/ldtkData';
 import { parseLdtkProject } from '../ldtk/parseLdtk';
@@ -22,6 +23,7 @@ export class PreloadScene extends Phaser.Scene {
     this.createLoadingBar();
     preloadAllCharacters(this);
     preloadAllEntities(this);
+    preloadAllSounds(this);
 
     // Load every level's tilesets up front: GameScene renders all levels in
     // the same world so the player can walk between them, so partial loading

@@ -19,7 +19,13 @@
         "anchorX": 45,
         "anchorY": 52
       },
-      "originalName": "attack1"
+      "originalName": "attack1",
+      "stages": {
+        "strike": {
+          "startFrame": 3,
+          "endFrame": 5
+        }
+      }
     },
     "attack2": {
       "type": "simple",
@@ -36,7 +42,13 @@
         "anchorX": 37,
         "anchorY": 34
       },
-      "originalName": "attack2"
+      "originalName": "attack2",
+      "stages": {
+        "strike": {
+          "startFrame": 2,
+          "endFrame": 3
+        }
+      }
     },
     "attack3": {
       "type": "simple",
@@ -54,7 +66,17 @@
         "anchorY": 90,
         "displayScale": 0.55
       },
-      "originalName": "attack3"
+      "originalName": "attack3",
+      "stages": {
+        "cancel": {
+          "startFrame": 4,
+          "endFrame": 6
+        },
+        "strike": {
+          "startFrame": 2,
+          "endFrame": 4
+        }
+      }
     },
     "attack4": {
       "type": "simple",
@@ -72,7 +94,17 @@
         "anchorY": 89,
         "displayScale": 0.5
       },
-      "originalName": "attack4"
+      "originalName": "attack4",
+      "stages": {
+        "cancel": {
+          "startFrame": 3,
+          "endFrame": 4
+        },
+        "strike": {
+          "startFrame": 2,
+          "endFrame": 3
+        }
+      }
     },
     "attack5": {
       "type": "simple",
@@ -90,7 +122,13 @@
         "anchorY": 65,
         "displayScale": 0.75
       },
-      "originalName": "attack5"
+      "originalName": "attack5",
+      "stages": {
+        "strike": {
+          "startFrame": 2,
+          "endFrame": 4
+        }
+      }
     }
   }
 }

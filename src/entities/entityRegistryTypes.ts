@@ -22,6 +22,16 @@ export interface AnimatedEntityAnimConfig {
   // Frame-pixel row (1-based from top of frame) where the body's bottom
   // edge sits. Defaults to frameHeight (body bottom = frame bottom).
   readonly anchorY?: number;
+  // Frame-pixel row used for spawn position alignment with the LDtk pivot.
+  // When set, the spawn logic shifts the sprite so this row lands at the
+  // LDtk pivot Y (regardless of pivotY). Lets you align the visible
+  // center of a non-floor-anchored entity with its LDtk placement — e.g.
+  // a center-pivoted (0.5, 0.5) boss whose visible figure sits in the
+  // bottom half of an oversized frame. When omitted, the spawn logic
+  // uses anchorY for floor-anchored entities (pivotY=1) and centers the
+  // frame for others (pre-spawnAnchorY behavior). Only consulted on the
+  // default animation; animation swaps don't reposition the sprite.
+  readonly spawnAnchorY?: number;
   // Visual-only scale applied to the rendered sprite. Default 1. Same
   // semantics as FrameData.displayScale on the player registries.
   readonly displayScale?: number;
@@ -35,11 +45,29 @@ export interface AnimatedEntityPhysicsBodyConfig {
 // Melee strategies stamp a transient hitbox at this offset on the configured
 // attackFrame. Offset is in source pixels; the strategy mirrors X based on
 // the entity's facing direction at fire time.
+//
+// `frame` is melee-only: when set, this hitbox fires on that specific frame
+// of the attack animation instead of the attack's default `frame`. Lets a
+// single attack stamp multiple rects at different points in the swing (e.g.,
+// a two-strike slam where one sword lands on frame 17 and the other on
+// frame 21). Each hitbox fires at most once per attack cycle, so a player
+// straddling several rects on the same frame still only eats one damage
+// tick. Defaults to the attack's `frame` when omitted.
 export interface AnimatedEntityHitboxConfig {
   readonly offsetX: number;
   readonly offsetY: number;
   readonly width: number;
   readonly height: number;
+  readonly frame?: number;
+  // When true, the hitbox geometry above is ignored at fire time and the
+  // strategy stamps a rect at the entity's live physics body position+size
+  // (this.body.x/y/width/height). Use for "swing lands on the boss body"
+  // attacks (e.g. The_heart_hoarder attack2's body-slam) so the hitbox
+  // tracks the body across animations regardless of frame anchor/scale.
+  // offsetX/Y/width/height are still required by the schema (parser keeps
+  // them mandatory to avoid two parsing modes) but unused at runtime when
+  // matchBody is set — author them as 0.
+  readonly matchBody?: boolean;
 }
 
 // Per-character attack tuning. Animation keys reference keys in this entity's
@@ -57,16 +85,66 @@ export interface AnimatedEntityHitboxConfig {
 //   - 'heal': self-cast on a chosen frame, restores HP up to max. Selected
 //     by the AI pool only when current HP is below healThreshold (default
 //     0.5), so bosses use it when wounded instead of as their opener.
+//   - 'dive': commits to a straight-line lunge toward the player at attack
+//     entry. The body velocity is set once (distance / animation duration)
+//     so the entity reaches the player at the end of the animation; damage
+//     applies on body-overlap during the dive. Used for evil_crow and other
+//     airborne lungers. Honors `minRange` so a crow won't dive when already
+//     adjacent (the body would barely move and the animation would look
+//     wrong) — falls back to loiter for closer distances.
+//   - 'aoe': plays the boss's wind-up animation; on the configured frame
+//     spawns a separate VFX sprite (configured via `vfxAnimation`) at the
+//     player's current position. The VFX is a one-shot sprite that
+//     damages the player on body-overlap once, then destroys itself on
+//     animation complete. Position snapshot at spawn gives the player a
+//     dodge window during the VFX's wind-down. Honors `minRange` so the
+//     boss saves the heavy attack for when the player is out of melee
+//     range (typical boss-design pattern).
+//   - 'teleport': two- or three-phase blink-strike. Plays `disappearAnimation`
+//     at the current position; on completion, repositions the body to
+//     (player.x, ground + targetOffsetY). With `appearAnimation` unset (two-
+//     phase), plays `animation` directly at the destination — the animation
+//     IS both the visual reappear and the damage clip. With `appearAnimation`
+//     set (three-phase), plays that visual-only reappear clip first, then
+//     plays `animation` (the strike with the damage frame). Damage applies on
+//     melee-style hitbox(es) stamped on the configured `frame` of `animation`
+//     (single-area) or per-hitbox `frame` overrides on `hitboxes` (multi-area,
+//     e.g. teleport-into-slam with body + side hits on different frames).
+//     Honors `minRange` so the boss reserves the teleport for when the player
+//     is at a distance instead of using it as a stutter-step. Gravity is
+//     suppressed for the duration of the attack so the appear pose doesn't
+//     fall during the strike; restored when the attack ends, on hurt-interrupt,
+//     or on death.
 export interface AnimatedEntityAttackConfig {
-  readonly type: 'melee' | 'ranged' | 'magic' | 'contact' | 'heal';
-  // Animation key. Required for melee/ranged/magic/heal; optional for contact
-  // (which has no swing animation — the enemy walks into the player while
-  // playing its default walk/idle).
+  readonly type:
+    | 'melee'
+    | 'ranged'
+    | 'magic'
+    | 'contact'
+    | 'heal'
+    | 'dive'
+    | 'aoe'
+    | 'teleport';
+  // Animation key. Required for melee/ranged/magic/heal/dive; optional for
+  // contact (which has no swing animation — the enemy walks into the
+  // player while playing its default walk/idle).
   readonly animation?: string;
   // Frame index (0-based, must be < animations[animation].frameCount) at
   // which damage / projectile spawn / self-heal applies. Required for
-  // animated attacks; ignored for contact.
+  // melee/ranged/magic/heal; ignored for contact and dive (dive damages
+  // on overlap throughout, not on a single frame). For AoE: exactly one of
+  // `frame` (single-fire) or `damageFrames` (multi-fire) must be set.
   readonly frame?: number;
+  // 'aoe'-only: list of frame indices, each of which fires its own damage
+  // rect once per swing. Use for attacks whose visible animation strikes
+  // multiple times — e.g. a two-stomp combo where the body slams on frame 2
+  // and the follow-through slams again on frame 9. Each frame fires
+  // independently and stamps a fresh rect at the player's current position,
+  // so a player who held still for the first hit can still dodge the second.
+  // Mutually exclusive with `frame`. Frames must be in 0..frameCount-1 and
+  // unique. Order doesn't matter (frames fire in ascending animation order
+  // regardless of array order).
+  readonly damageFrames?: ReadonlyArray<number>;
   // Damage to the player. Required for non-heal types.
   readonly damage?: number;
   // HP restored on a heal-type attack's frame. Required when type === 'heal'.
@@ -75,22 +153,159 @@ export interface AnimatedEntityAttackConfig {
   // 0.5 — boss heals when bloodied, not as an opener. Heal-only field.
   readonly healThreshold?: number;
   // World-pixel distance within which the entity initiates the attack.
-  // Required for melee/ranged/magic (the entity must close to attack);
+  // Required for melee/ranged/magic/dive (the entity must close to attack);
   // unused by contact (handled via body overlap) and heal (self-cast).
   readonly range?: number;
+  // World-pixel distance below which the attack will NOT initiate. Used by
+  // 'dive' to prevent point-blank dives that look like a stutter — the
+  // entity loiters instead and waits to be far enough to commit. Must be
+  // < range when set. Other types ignore this field.
+  readonly minRange?: number;
   readonly cooldownMs: number;
+  // Per-attack lockout. When set, this specific attack becomes ineligible
+  // for `recastCooldownMs` after it fires (independent of the global
+  // post-attack `cooldownMs` recover window). Lets bosses keep meleeing
+  // while a signature heavy attack is on its own longer timer — set on
+  // attack3 for Shadow_of_storms so it's a rare burst, not a spammed
+  // pick. If unset, `cooldownMs` alone gates re-firing via the global
+  // recover state.
+  readonly recastCooldownMs?: number;
+  // Relative probability when the AI picks from multiple eligible attacks in
+  // `attackPool`. Default 1 (uniform). Higher values mean this entry is
+  // chosen more often; e.g., weight 3 vs 1 makes this attack ~3× as likely
+  // as the other. Has no effect when only one attack is eligible.
+  readonly weight?: number;
   readonly aggressive: boolean;
   // Optional chase fields. If chaseRange is set, the entity moves toward
   // the player when within that range. Absent = stationary attacker.
   readonly chaseRange?: number;
   readonly moveSpeed?: number;
   readonly walkAnimation?: string;
-  // Melee-only: transient hitbox geometry.
-  readonly hitbox?: AnimatedEntityHitboxConfig;
+  // Melee/teleport: transient hitbox geometry stamped on the damage frame.
+  // Use `hitbox` for a single strike area, or `hitboxes` for multi-area
+  // attacks (e.g., a slam that damages the body plus two sword tips). The
+  // validator accepts either form in JSON and normalizes to `hitboxes`
+  // internally, so strategy code reads the array uniformly. Exactly one
+  // of the two must be set when the attack delivers damage via overlapRect.
+  readonly hitboxes?: ReadonlyArray<AnimatedEntityHitboxConfig>;
   // Ranged/magic-only: projectile animation keys + speed.
   readonly projectileAnimIdle?: string;
   readonly projectileAnimExplode?: string;
   readonly projectileSpeed?: number;
+  // Ranged/magic-only: world-pixel offset from the entity sprite center where
+  // the projectile spawns. X is mirrored based on facing (positive = front);
+  // Y is not flipped (positive = down). Defaults to (0, 0) — sprite center.
+  // Use this for tall sprites whose visible cast point (arm tip, weapon
+  // muzzle) sits far from the sprite center, e.g. The_tarnished_widow
+  // whose 188x90 sprite has a 48x45 body anchored at the sprite bottom,
+  // so the sprite center sits high above her head.
+  readonly projectileOriginX?: number;
+  readonly projectileOriginY?: number;
+  // 'aoe'-only: animation key (within this entity's `animations` map)
+  // played by the VFX sprite that spawns at the player's snapshot
+  // position on the damage frame. Must be one-shot. When omitted, the
+  // AoE is sprite-less — damage is delivered via a one-shot rect overlap
+  // at the snapshot position (still respects vfxDelayMs for the dodge
+  // window). Use sprite-less for spells whose impact is conveyed by the
+  // caster's own animation/sound, not a separate hit visual.
+  readonly vfxAnimation?: string;
+  // 'aoe'-only: if true, the damage-frame VFX (and its damage payload) is
+  // suppressed when the player isn't grounded. The boss's wind-up animation
+  // still plays — the player simply rewards a well-timed jump with zero
+  // damage. Set on Shadow_of_storms attack3 so the ground-impact VFX never
+  // pops in mid-air. Default false; other AoE attacks fire regardless of
+  // the player's vertical state.
+  readonly requireGroundedTarget?: boolean;
+  // 'aoe'-only: when set together with requireGroundedTarget, refines the
+  // binary "any airborne = dodge" check into a vertical-clearance threshold.
+  // Computed at the damage frame as (nearest solid tile below player) -
+  // player.body.bottom. Only clearances >= this value dodge the strike;
+  // small hops still get hit. Designed for AoEs where a flick of the jump
+  // button shouldn't be enough — the player has to actually leap. No-op
+  // without requireGroundedTarget. Default undefined (binary behavior).
+  readonly minAirborneDodgeClearancePx?: number;
+  // 'aoe'-only: if true, the VFX spawn point is projected straight down from
+  // the player's snapshotted position to the first solid tile beneath them.
+  // Lets ground-impact strikes (orb_mage attack1, Shadow_of_storms attack3)
+  // visually land on the floor even when the player is mid-jump, instead of
+  // popping into the air at the player's body bottom. Paired with vfxDelayMs
+  // it gives the player a real dodge window: jump → boss snapshots position →
+  // VFX lands on the ground under the snapshot a moment later. Default false.
+  readonly groundProjectVfx?: boolean;
+  // 'aoe'-only: if true, the strike is suppressed when there's a solid tile
+  // directly above the player at the damage frame — used for arrow-volley
+  // style attacks (Archer_bandit) where the projectile rains from above and
+  // shouldn't hit a player standing in a tunnel or under a ceiling. The
+  // wind-up animation still plays; the player is rewarded for sheltering.
+  // Default false; other AoE attacks fire regardless of overhead geometry.
+  readonly requireOpenSky?: boolean;
+  // 'aoe'-only: delay in milliseconds between the damage-frame trigger and
+  // the VFX sprite actually spawning. Player position is still snapshotted
+  // at the damage frame, so the delay is the dodge window. Default 0 (VFX
+  // spawns immediately). Used for arrow-volley style attacks where arrows
+  // visibly travel through the air before landing.
+  readonly vfxDelayMs?: number;
+  // 'aoe'-only: sound id (from soundRegistry) played in sync with the VFX.
+  // Without vfxSoundLeadMs, fires at the spawn moment. With lead, fires
+  // earlier so the sound's audible peak aligns with the VFX appearing
+  // (e.g. arrows whistling/landing — impacts cluster on the first few VFX
+  // frames). Cleaner than wiring a frame trigger on the wind-up animation
+  // when there's a delay between the two.
+  readonly vfxSoundId?: string;
+  // 'aoe'-only: how many milliseconds before VFX spawn to start the
+  // vfxSoundId clip. Capped at vfxDelayMs (can't fire before the trigger).
+  // Use to align the sound's audible peak with the VFX onset for sounds
+  // whose impacts are front-loaded (the audio "ends" when the visual
+  // appears). Default 0 — sound fires at the moment of VFX spawn.
+  readonly vfxSoundLeadMs?: number;
+  // 'aoe'-only: damage-source tag passed through to Player.hurt(). Drives
+  // the player's hurt-sound variant (e.g. arrow-impact grunt vs melee
+  // grunt). Use 'projectile' for arrow-rain / ranged AoEs and 'melee' (or
+  // omit) for ground-strike / shockwave AoEs. Default omitted — falls back
+  // to the melee grunt.
+  readonly hurtSource?: 'melee' | 'projectile';
+  // 'aoe'-only (sprite-less path): half-width in source pixels of the
+  // damage rect stamped at the snapshotted strike point. Total rect width
+  // = damageHalfWidth * 2. Defaults to the sprite-less constant (24 px →
+  // 48 px wide rect). Set to tighten or widen the horizontal dodge window
+  // per attack — e.g. The_heart_hoarder's attack3 uses a narrower rect so
+  // a sidestep actually dodges the strike. No-op when vfxAnimation is set
+  // (VFX path uses sprite-on-player overlap instead of overlapRect).
+  readonly damageHalfWidth?: number;
+  // 'aoe'-only (sprite-less path): half-height in source pixels of the
+  // damage rect. Total rect height = damageHalfHeight * 2, anchored at the
+  // player's feet (rect extends upward from the snapshotted body.bottom).
+  // Defaults to the sprite-less constant (32 px → 64 px tall rect).
+  // Same vfxAnimation-gated semantics as damageHalfWidth.
+  readonly damageHalfHeight?: number;
+  // 'teleport'-only: wind-up animation key played at the entity's pre-teleport
+  // position. Must be one-shot.
+  readonly disappearAnimation?: string;
+  // 'teleport'-only: optional visual reappear clip played at the destination
+  // between the disappear clip and the damage-bearing `animation`. When set,
+  // the teleport becomes three-phase: disappear → appear (visual only, no
+  // damage frame) → strike (`animation`). Must be one-shot. Use when the
+  // damage animation (e.g. a long attack1) lacks a dedicated reappear pose
+  // at frame 0 — without an appearAnimation the boss snaps directly into
+  // the strike pose, which feels abrupt when the damage frame happens many
+  // frames later. If unset, the two-phase legacy behavior is preserved
+  // (animation IS both the reappear and strike clip — used by entities like
+  // The_tarnished_widow whose teleport_appear carries the damage frame itself).
+  readonly appearAnimation?: string;
+  // 'teleport'-only: vertical pixel offset from the ground beneath the player
+  // at the appear destination. The body's bottom is ground-projected (walks
+  // down from the player to the first solid tile) and this offset is applied
+  // on top: 0 = standing on the ground, negative = above (boss drops from
+  // above for a falling-strike framing), positive = below. Default -80 (about
+  // 5 tiles above the floor).
+  readonly targetOffsetY?: number;
+  // 'teleport'-only, three-phase only: when true, the appear (reappear-visual)
+  // clip lands ELEVATED by one body-height above the strike target — used by
+  // slam-style strikes whose frame 0 shows the boss raised in the air so the
+  // body falls into the strike target during the appear clip. Default false:
+  // the boss reappears at ground level (correct for ground-stance follow-ups
+  // like attack2/attack3).
+  readonly appearElevated?: boolean;
 }
 
 // Per-character combat parameters. Presence of a behavior block is the one
@@ -103,6 +318,34 @@ export interface AnimatedEntityBehaviorConfig {
   // take_hit sheet, in which case the entity flickers via i-frame logic
   // without an animation swap.
   readonly hurtAnimation?: string;
+  // Sound id (from soundRegistry) played when the entity takes a non-lethal
+  // hit. Decoupled from `hurtAnimation` so entities without a take_hit sheet
+  // (e.g. the bandits) can still vocalize on hit. Suppressed on the killing
+  // blow so the death sound isn't doubled up with a hurt grunt.
+  readonly hurtSoundId?: string;
+  // Sound id (from soundRegistry) played once the first time the player
+  // crosses inside encounterRadius. Used for boss-encounter stingers. Fires
+  // exactly once per Enemy instance — a respawn after death gets a fresh
+  // sting, but re-aggro within the same instance does not. Decoupled from
+  // chase/aggro so non-chasing bosses (immovable) still trigger it.
+  readonly encounterSoundId?: string;
+  // Optional pixel distance at which the encounter trigger fires. Defaults
+  // to 300px when omitted — large enough to feel like "stepping into the
+  // arena" rather than "right next to the boss". Ignored when both
+  // encounterSoundId and engageDelayMs are unset. Also ignored for arena-
+  // bound bosses (stayInSpawnLevel=true) — those use the spawn-level rect
+  // as the engagement zone instead, which works for airborne bosses where
+  // 2D distance never drops below a small radius due to vertical separation.
+  readonly encounterRadius?: number;
+  // Optional delay (ms) between the player crossing encounterRadius and the
+  // boss beginning to attack/chase. During the delay the boss stays in its
+  // idle pose, giving the player time to actually enter the arena before
+  // the boss commits (e.g. The_heart_hoarder: without a delay it teleports
+  // onto the player the moment the level loads). Triggered by the same
+  // encounterRadius check that fires encounterSoundId, so set encounterRadius
+  // alongside this when the default 300 px isn't right. Ignored when 0/unset
+  // — the boss engages immediately on first sight (legacy behavior).
+  readonly engageDelayMs?: number;
   // Animation played on death. Defaults to 'death' (when an animation with
   // that key exists). Validator confirms the key resolves to a real anim.
   readonly deathAnimation?: string;
@@ -110,6 +353,18 @@ export interface AnimatedEntityBehaviorConfig {
   // body.immovable in physics so the player can't push it either. Use for
   // anchored enemies like The_hive that must stay at their LDtk position.
   readonly immovable?: boolean;
+  // If true, chase/loiter/patrol velocity updates only drive X; Y is forced
+  // to 0. Use for gravity-off bosses that should glide along a horizontal
+  // line and only change elevation through attack-driven repositioning
+  // (e.g. The_heart_hoarder's teleport attack1). Has no effect on
+  // gravity-on bodies — those already gate Y via the gravity check.
+  readonly horizontalMovementOnly?: boolean;
+  // If true, the entity captures the LDtk level rect it spawned in and
+  // clamps body position + teleport destinations to stay inside it. Use for
+  // arena-bound bosses that should not chase the player out of their fight
+  // (e.g. The_heart_hoarder confined to Level_15). No-op for entities
+  // spawned in inter-level whitespace where the rect lookup returns null.
+  readonly stayInSpawnLevel?: boolean;
   // Single-attack shorthand. For enemies with one combat behavior. Mutually
   // exclusive with attackPool in practice — if both are set, attackPool wins
   // and attack is ignored (validator warns at boot).
@@ -120,6 +375,66 @@ export interface AnimatedEntityBehaviorConfig {
   // independently on body overlap). Empty array is invalid; use the single
   // `attack` field instead.
   readonly attackPool?: ReadonlyArray<AnimatedEntityAttackConfig>;
+  // If true, the floating combat health bar is suppressed entirely for this
+  // entity. Use for swarm minions whose individual HP doesn't matter (Wasps),
+  // anchored set-pieces with no meaningful HP feedback (The_hive), or bosses
+  // that should get a different UI treatment later. Other enemies show the
+  // bar automatically once the player damages them. Default omitted (= bar
+  // appears on first player hit).
+  readonly hideHealthBar?: boolean;
+  // Per-entity vertical nudge for the floating HP bar, in source pixels.
+  // Positive = move the bar HIGHER above the body; negative = move it lower.
+  // Default 0. Use for entities whose visible top sits well above body.top
+  // (oversized frames with the body anchored low — e.g. The_heart_hoarder)
+  // where the default 6 px gap above body.top reads as "inside the sprite"
+  // rather than "above its head".
+  readonly healthBarOffsetY?: number;
+  // When the player fires a projectile within `triggerRangePx`, the entity
+  // immediately interrupts whatever it's doing and fires one of its own
+  // `type: 'teleport'` attacks from the attackPool — closing the gap and
+  // forcing the player into melee. Bypasses the chosen attack's
+  // recastCooldownMs so the boss can always react; this block's `cooldownMs`
+  // is the only throttle on back-to-back reactions. No-op if attackPool has
+  // no teleport entries. Omit to disable.
+  readonly dodgeOnProjectile?: {
+    // Pixel radius around the entity; only projectiles spawned within this
+    // distance trigger the reaction. Sized to "saw it coming," not infinite —
+    // a shot from the far side of the arena shouldn't pull the boss across
+    // the room.
+    readonly triggerRangePx: number;
+    // Minimum ms between projectile-triggered teleports. Prevents the boss
+    // from teleport-locking itself when the player spam-fires.
+    readonly cooldownMs: number;
+  };
+}
+
+// Per-entity trap parameters. Presence of this block is the signal the
+// EntityFactory uses to spawn a Trap (vs plain AnimatedEntity for pure
+// decoration). Mutually exclusive with `behavior` in practice — traps are
+// stationary damage sources without health or AI.
+export interface AnimatedEntityTrapConfig {
+  // Damage dealt to the player on body overlap. Player's invuln window
+  // (PLAYER_INVULN_MS) gates re-ticks so a player sitting on a trap takes
+  // damage at the invuln cadence, not per-frame.
+  readonly damage: number;
+  // Optional animation key (within this entity's `animations` map) played
+  // when the player makes direct ground-contact with the trap (steps on
+  // it from above). Used by the bear trap to switch from the armed loop
+  // (`bear_trap_animation1`) to the snap animation (`bear_trap_animation2`).
+  readonly directContactAnimation?: string;
+  // Optional virtual damage zone for ejector traps. When set, the ejector's
+  // trigger condition and overhead damage check use this rect (centered on
+  // the body, shifted by offsetX/offsetY) instead of the physics body. Lets
+  // the body stay tight around the visible device — so bullets and sword
+  // swings stop right at the device sprite — while the shock area (the
+  // actual hazard) reaches further out to catch the player. Width/height
+  // in source pixels; offsets relative to the body center.
+  readonly damageZone?: {
+    readonly width: number;
+    readonly height: number;
+    readonly offsetX: number;
+    readonly offsetY: number;
+  };
 }
 
 export interface AnimatedEntityConfig {
@@ -143,6 +458,11 @@ export interface AnimatedEntityConfig {
   // EntityFactory uses to instantiate Enemy vs AnimatedEntity. Absence ==
   // pure-decoration entity (chests, ambient animals, traps).
   readonly behavior?: AnimatedEntityBehaviorConfig;
+  // Optional trap block. Presence of this field makes the entity a Trap —
+  // overlap-based damage source with no health/AI. The X-aligned "directly
+  // above/under" semantics fall out of Arcade's bounding-box overlap when
+  // the trap's physicsBody is sized to match its visible damage zone.
+  readonly trap?: AnimatedEntityTrapConfig;
 }
 
 export type EntityRegistry = Readonly<Record<string, AnimatedEntityConfig>>;

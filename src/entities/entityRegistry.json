@@ -2,29 +2,30 @@
   "Archer_bandit_spawn": {
     "defaultAnimation": "idle",
     "physicsBody": {
-      "width": 43,
-      "height": 48
+      "width": 15,
+      "height": 17
     },
-    "gravity": false,
+    "gravity": true,
     "behavior": {
       "health": 25,
+      "hurtSoundId": "bandit_hurt",
       "attack": {
-        "type": "melee",
+        "type": "aoe",
         "animation": "attack",
-        "frame": 10,
+        "vfxAnimation": "ranged",
+        "frame": 18,
         "damage": 10,
-        "range": 100,
+        "range": 80,
         "cooldownMs": 2500,
         "aggressive": true,
-        "hitbox": {
-          "offsetX": 40,
-          "offsetY": 0,
-          "width": 50,
-          "height": 40
-        },
-        "chaseRange": 220,
-        "moveSpeed": 60,
-        "walkAnimation": "run"
+        "chaseRange": 120,
+        "moveSpeed": 49,
+        "walkAnimation": "run",
+        "requireOpenSky": true,
+        "vfxDelayMs": 500,
+        "vfxSoundId": "arrow_volley_impact",
+        "vfxSoundLeadMs": 450,
+        "hurtSource": "projectile"
       }
     },
     "animations": {
@@ -33,7 +34,9 @@
         "frameWidth": 85,
         "frameHeight": 112,
         "frameCount": 19,
-        "loops": false
+        "loops": false,
+        "anchorX": 35,
+        "anchorY": 112
       },
       "death": {
         "file": "DarkSpriteLib/characters/archer_bandit/death.png",
@@ -47,21 +50,27 @@
         "frameWidth": 85,
         "frameHeight": 112,
         "frameCount": 8,
-        "loops": true
+        "loops": true,
+        "anchorX": 35,
+        "anchorY": 112
       },
       "ranged": {
         "file": "DarkSpriteLib/characters/archer_bandit/ranged.png",
-        "frameWidth": 296,
+        "frameWidth": 74,
         "frameHeight": 111,
-        "frameCount": 2,
-        "loops": false
+        "frameCount": 8,
+        "loops": false,
+        "anchorX": 37,
+        "anchorY": 111
       },
       "run": {
         "file": "DarkSpriteLib/characters/archer_bandit/run.png",
         "frameWidth": 85,
         "frameHeight": 112,
         "frameCount": 8,
-        "loops": true
+        "loops": true,
+        "anchorX": 35,
+        "anchorY": 112
       }
     }
   },
@@ -71,7 +80,7 @@
       "width": 46,
       "height": 10
     },
-    "gravity": false,
+    "gravity": true,
     "behavior": {
       "health": 15,
       "hurtAnimation": "take_hit",
@@ -89,7 +98,7 @@
           "width": 30,
           "height": 20
         },
-        "chaseRange": 220,
+        "chaseRange": 80,
         "moveSpeed": 70,
         "walkAnimation": "run"
       }
@@ -100,21 +109,27 @@
         "frameWidth": 91,
         "frameHeight": 19,
         "frameCount": 4,
-        "loops": false
+        "loops": false,
+        "anchorX": 19,
+        "anchorY": 19
       },
       "attack2": {
         "file": "DarkSpriteLib/characters/assassin/attack2.png",
         "frameWidth": 91,
         "frameHeight": 19,
         "frameCount": 5,
-        "loops": false
+        "loops": false,
+        "anchorX": 15,
+        "anchorY": 19
       },
       "attack3": {
         "file": "DarkSpriteLib/characters/assassin/attack3.png",
         "frameWidth": 91,
         "frameHeight": 19,
         "frameCount": 5,
-        "loops": false
+        "loops": false,
+        "anchorX": 62,
+        "anchorY": 19
       },
       "attack4": {
         "file": "DarkSpriteLib/characters/assassin/attack4.png",
@@ -128,49 +143,63 @@
         "frameWidth": 91,
         "frameHeight": 19,
         "frameCount": 8,
-        "loops": false
+        "loops": false,
+        "anchorX": 15,
+        "anchorY": 19
       },
       "fall": {
         "file": "DarkSpriteLib/characters/assassin/fall.png",
         "frameWidth": 91,
         "frameHeight": 19,
         "frameCount": 4,
-        "loops": false
+        "loops": false,
+        "anchorX": 16,
+        "anchorY": 19
       },
       "idle": {
         "file": "DarkSpriteLib/characters/assassin/idle.png",
         "frameWidth": 91,
         "frameHeight": 19,
         "frameCount": 9,
-        "loops": true
+        "loops": true,
+        "anchorX": 16,
+        "anchorY": 19
       },
       "jump": {
         "file": "DarkSpriteLib/characters/assassin/jump.png",
         "frameWidth": 91,
         "frameHeight": 19,
         "frameCount": 4,
-        "loops": false
+        "loops": false,
+        "anchorX": 16,
+        "anchorY": 19
       },
       "land": {
         "file": "DarkSpriteLib/characters/assassin/land.png",
         "frameWidth": 91,
         "frameHeight": 19,
         "frameCount": 4,
-        "loops": false
+        "loops": false,
+        "anchorX": 17,
+        "anchorY": 19
       },
       "run": {
         "file": "DarkSpriteLib/characters/assassin/run.png",
         "frameWidth": 91,
         "frameHeight": 19,
         "frameCount": 8,
-        "loops": true
+        "loops": true,
+        "anchorX": 16,
+        "anchorY": 19
       },
       "take_hit": {
         "file": "DarkSpriteLib/characters/assassin/take_hit.png",
         "frameWidth": 91,
         "frameHeight": 19,
         "frameCount": 2,
-        "loops": false
+        "loops": false,
+        "anchorX": 16,
+        "anchorY": 19
       }
     }
   },
@@ -181,13 +210,26 @@
       "height": 19
     },
     "gravity": false,
+    "trap": {
+      "damage": 10,
+      "directContactAnimation": "bear_trap_animation2"
+    },
     "animations": {
       "bear_trap_animation1": {
         "file": "DarkSpriteLib/general/objects/animated_objects/traps/bear_trap_animation1.png",
         "frameWidth": 32,
         "frameHeight": 38,
         "frameCount": 7,
-        "loops": true
+        "loops": true,
+        "anchorX": 17,
+        "anchorY": 38
+      },
+      "bear_trap_animation2": {
+        "file": "DarkSpriteLib/general/objects/animated_objects/traps/bear_trap_animation2.png",
+        "frameWidth": 32,
+        "frameHeight": 38,
+        "frameCount": 7,
+        "loops": false
       }
     }
   },
@@ -197,25 +239,27 @@
       "width": 48,
       "height": 21
     },
-    "gravity": false,
+    "gravity": true,
     "behavior": {
       "health": 25,
       "hurtAnimation": "take_hit",
-      "immovable": true,
       "attack": {
         "type": "melee",
         "animation": "attack1",
         "frame": 3,
         "damage": 10,
-        "range": 50,
+        "range": 100,
         "cooldownMs": 1500,
-        "aggressive": false,
+        "aggressive": true,
         "hitbox": {
           "offsetX": 30,
           "offsetY": 0,
-          "width": 30,
+          "width": 80,
           "height": 25
-        }
+        },
+        "chaseRange": 120,
+        "moveSpeed": 60,
+        "walkAnimation": "walk"
       }
     },
     "animations": {
@@ -224,42 +268,54 @@
         "frameWidth": 110,
         "frameHeight": 42,
         "frameCount": 6,
-        "loops": false
+        "loops": false,
+        "anchorX": 37,
+        "anchorY": 42
       },
       "attack2": {
         "file": "DarkSpriteLib/characters/caged_shocker/attack2.png",
         "frameWidth": 110,
         "frameHeight": 42,
         "frameCount": 10,
-        "loops": false
+        "loops": false,
+        "anchorX": 34,
+        "anchorY": 42
       },
       "death": {
         "file": "DarkSpriteLib/characters/caged_shocker/death.png",
         "frameWidth": 110,
         "frameHeight": 42,
         "frameCount": 12,
-        "loops": false
+        "loops": false,
+        "anchorX": 42,
+        "anchorY": 42
       },
       "idle": {
         "file": "DarkSpriteLib/characters/caged_shocker/idle.png",
         "frameWidth": 110,
         "frameHeight": 42,
         "frameCount": 24,
-        "loops": true
+        "loops": true,
+        "anchorX": 33,
+        "anchorY": 42
       },
       "take_hit": {
         "file": "DarkSpriteLib/characters/caged_shocker/take_hit.png",
         "frameWidth": 110,
         "frameHeight": 42,
         "frameCount": 2,
-        "loops": false
+        "loops": false,
+        "anchorX": 34,
+        "anchorY": 42
       },
       "walk": {
         "file": "DarkSpriteLib/characters/caged_shocker/walk.png",
         "frameWidth": 110,
         "frameHeight": 42,
         "frameCount": 12,
-        "loops": true
+        "loops": true,
+        "anchorX": 33,
+        "anchorY": 42
       }
     }
   },
@@ -269,11 +325,10 @@
       "width": 22,
       "height": 10
     },
-    "gravity": false,
+    "gravity": true,
     "behavior": {
       "health": 15,
       "hurtAnimation": "take_hit",
-      "immovable": true,
       "attack": {
         "type": "melee",
         "animation": "attack",
@@ -281,7 +336,10 @@
         "damage": 8,
         "range": 40,
         "cooldownMs": 1200,
-        "aggressive": false,
+        "aggressive": true,
+        "chaseRange": 140,
+        "moveSpeed": 44,
+        "walkAnimation": "walk",
         "hitbox": {
           "offsetX": 15,
           "offsetY": 0,
@@ -358,7 +416,9 @@
         "frameWidth": 43,
         "frameHeight": 29,
         "frameCount": 55,
-        "loops": true
+        "loops": true,
+        "anchorX": 18,
+        "anchorY": 29
       }
     }
   },
@@ -399,28 +459,29 @@
   "Dagger_bandit_spawn": {
     "defaultAnimation": "idle",
     "physicsBody": {
-      "width": 48,
-      "height": 39
+      "width": 13,
+      "height": 15
     },
     "gravity": true,
     "behavior": {
       "health": 20,
+      "hurtSoundId": "bandit_hurt",
       "attack": {
         "type": "melee",
         "animation": "attack1",
         "frame": 3,
         "damage": 10,
-        "range": 50,
+        "range": 28,
         "cooldownMs": 1500,
         "aggressive": true,
         "hitbox": {
-          "offsetX": 30,
-          "offsetY": 0,
-          "width": 30,
-          "height": 30
+          "offsetX": 14,
+          "offsetY": 22,
+          "width": 22,
+          "height": 22
         },
-        "chaseRange": 220,
-        "moveSpeed": 70,
+        "chaseRange": 80,
+        "moveSpeed": 56,
         "walkAnimation": "run"
       }
     },
@@ -430,49 +491,63 @@
         "frameWidth": 128,
         "frameHeight": 78,
         "frameCount": 7,
-        "loops": false
+        "loops": false,
+        "anchorX": 44,
+        "anchorY": 74
       },
       "attack2": {
         "file": "DarkSpriteLib/characters/dagger_bandit/attack2.png",
         "frameWidth": 128,
         "frameHeight": 78,
         "frameCount": 20,
-        "loops": false
+        "loops": false,
+        "anchorX": 43,
+        "anchorY": 73
       },
       "death": {
         "file": "DarkSpriteLib/characters/dagger_bandit/death.png",
         "frameWidth": 128,
         "frameHeight": 78,
         "frameCount": 16,
-        "loops": false
+        "loops": false,
+        "anchorX": 34,
+        "anchorY": 74
       },
       "fall": {
         "file": "DarkSpriteLib/characters/dagger_bandit/fall.png",
         "frameWidth": 128,
         "frameHeight": 78,
         "frameCount": 1,
-        "loops": false
+        "loops": false,
+        "anchorX": 41,
+        "anchorY": 72
       },
       "idle": {
         "file": "DarkSpriteLib/characters/dagger_bandit/idle.png",
         "frameWidth": 128,
         "frameHeight": 78,
         "frameCount": 8,
-        "loops": true
+        "loops": true,
+        "anchorX": 42,
+        "anchorY": 72
       },
       "jump": {
         "file": "DarkSpriteLib/characters/dagger_bandit/jump.png",
         "frameWidth": 128,
         "frameHeight": 78,
         "frameCount": 1,
-        "loops": false
+        "loops": false,
+        "anchorX": 42,
+        "anchorY": 72
       },
       "run": {
         "file": "DarkSpriteLib/characters/dagger_bandit/run.png",
         "frameWidth": 128,
         "frameHeight": 78,
         "frameCount": 8,
-        "loops": true
+        "loops": true,
+        "anchorX": 42,
+        "anchorY": 73
       }
     }
   },
@@ -482,9 +557,10 @@
       "width": 48,
       "height": 16
     },
-    "gravity": false,
+    "gravity": true,
     "behavior": {
       "health": 40,
+      "hurtSoundId": "dark_warden_hurt",
       "attack": {
         "type": "melee",
         "animation": "attack",
@@ -499,7 +575,7 @@
           "width": 40,
           "height": 20
         },
-        "chaseRange": 220,
+        "chaseRange": 80,
         "moveSpeed": 60,
         "walkAnimation": "walk"
       }
@@ -510,28 +586,36 @@
         "frameWidth": 97,
         "frameHeight": 32,
         "frameCount": 16,
-        "loops": false
+        "loops": false,
+        "anchorX": 25,
+        "anchorY": 31
       },
       "death": {
         "file": "DarkSpriteLib/characters/the_dark_warden/death.png",
         "frameWidth": 97,
         "frameHeight": 32,
         "frameCount": 16,
-        "loops": false
+        "loops": false,
+        "anchorX": 25,
+        "anchorY": 31
       },
       "idle": {
         "file": "DarkSpriteLib/characters/the_dark_warden/idle.png",
         "frameWidth": 97,
         "frameHeight": 32,
-        "frameCount": 16,
-        "loops": true
+        "frameCount": 12,
+        "loops": true,
+        "anchorX": 25,
+        "anchorY": 31
       },
       "walk": {
         "file": "DarkSpriteLib/characters/the_dark_warden/walk.png",
         "frameWidth": 97,
         "frameHeight": 32,
         "frameCount": 16,
-        "loops": true
+        "loops": true,
+        "anchorX": 26,
+        "anchorY": 32
       }
     }
   },
@@ -596,7 +680,7 @@
           "width": 20,
           "height": 17
         },
-        "chaseRange": 220,
+        "chaseRange": 80,
         "moveSpeed": 80,
         "walkAnimation": "run"
       }
@@ -757,7 +841,7 @@
         "frameWidth": 41,
         "frameHeight": 48,
         "frameCount": 15,
-        "loops": true
+        "loops": false
       }
     }
   },
@@ -809,20 +893,14 @@
     "behavior": {
       "health": 15,
       "attack": {
-        "type": "melee",
+        "type": "dive",
         "animation": "attack2",
-        "frame": 2,
         "damage": 8,
-        "range": 40,
+        "range": 50,
+        "minRange": 38,
         "cooldownMs": 1300,
         "aggressive": true,
-        "hitbox": {
-          "offsetX": 20,
-          "offsetY": 0,
-          "width": 25,
-          "height": 20
-        },
-        "chaseRange": 220,
+        "chaseRange": 70,
         "moveSpeed": 70,
         "walkAnimation": "walk1"
       }
@@ -833,56 +911,72 @@
         "frameWidth": 42,
         "frameHeight": 36,
         "frameCount": 3,
-        "loops": false
+        "loops": false,
+        "anchorX": 21,
+        "anchorY": 25
       },
       "trans_dive": {
         "file": "DarkSpriteLib/characters/evil_crow/trans_dive.png",
         "frameWidth": 42,
         "frameHeight": 36,
         "frameCount": 2,
-        "loops": false
+        "loops": false,
+        "anchorX": 20,
+        "anchorY": 24
       },
       "attack1": {
         "file": "DarkSpriteLib/characters/evil_crow/attack1.png",
         "frameWidth": 42,
         "frameHeight": 36,
         "frameCount": 18,
-        "loops": false
+        "loops": false,
+        "anchorX": 21,
+        "anchorY": 23
       },
       "attack2": {
         "file": "DarkSpriteLib/characters/evil_crow/attack2.png",
         "frameWidth": 42,
         "frameHeight": 36,
         "frameCount": 4,
-        "loops": false
+        "loops": false,
+        "anchorX": 19,
+        "anchorY": 23
       },
       "death": {
         "file": "DarkSpriteLib/characters/evil_crow/death.png",
         "frameWidth": 42,
         "frameHeight": 36,
         "frameCount": 22,
-        "loops": false
+        "loops": false,
+        "anchorX": 21,
+        "anchorY": 26
       },
       "idle": {
         "file": "DarkSpriteLib/characters/evil_crow/idle.png",
         "frameWidth": 42,
         "frameHeight": 36,
         "frameCount": 8,
-        "loops": true
+        "loops": true,
+        "anchorX": 21,
+        "anchorY": 26
       },
       "land": {
         "file": "DarkSpriteLib/characters/evil_crow/land.png",
         "frameWidth": 42,
         "frameHeight": 36,
         "frameCount": 4,
-        "loops": false
+        "loops": false,
+        "anchorX": 21,
+        "anchorY": 25
       },
       "walk1": {
         "file": "DarkSpriteLib/characters/evil_crow/walk1.png",
         "frameWidth": 42,
         "frameHeight": 36,
         "frameCount": 6,
-        "loops": true
+        "loops": true,
+        "anchorX": 20,
+        "anchorY": 23
       }
     }
   },
@@ -892,7 +986,7 @@
       "width": 47,
       "height": 32
     },
-    "gravity": false,
+    "gravity": true,
     "behavior": {
       "health": 25,
       "hurtAnimation": "take_hit",
@@ -910,7 +1004,7 @@
           "width": 40,
           "height": 35
         },
-        "chaseRange": 220,
+        "chaseRange": 80,
         "moveSpeed": 60,
         "walkAnimation": "walk"
       }
@@ -1001,10 +1095,10 @@
   "Ghoul_spawn": {
     "defaultAnimation": "idle",
     "physicsBody": {
-      "width": 31,
-      "height": 17
+      "width": 14,
+      "height": 22
     },
-    "gravity": false,
+    "gravity": true,
     "behavior": {
       "health": 20,
       "hurtAnimation": "take_hit",
@@ -1013,7 +1107,7 @@
         "animation": "attack",
         "frame": 3,
         "damage": 10,
-        "range": 45,
+        "range": 40,
         "cooldownMs": 1500,
         "aggressive": true,
         "hitbox": {
@@ -1022,7 +1116,7 @@
           "width": 30,
           "height": 20
         },
-        "chaseRange": 220,
+        "chaseRange": 80,
         "moveSpeed": 60,
         "walkAnimation": "walk"
       }
@@ -1184,7 +1278,7 @@
       "width": 48,
       "height": 27
     },
-    "gravity": false,
+    "gravity": true,
     "animations": {
       "idle": {
         "file": "DarkSpriteLib/characters/mushroom_merchant/idle.png",
@@ -1198,31 +1292,42 @@
   "Orb_mage_spawn": {
     "defaultAnimation": "idle",
     "physicsBody": {
-      "width": 48,
-      "height": 26
+      "width": 20,
+      "height": 35
     },
-    "gravity": false,
+    "gravity": true,
     "behavior": {
-      "health": 25,
+      "health": 60,
       "hurtAnimation": "take_hit",
-      "attack": {
-        "type": "melee",
-        "animation": "attack1",
-        "frame": 6,
-        "damage": 12,
-        "range": 60,
-        "cooldownMs": 1800,
-        "aggressive": true,
-        "hitbox": {
-          "offsetX": 35,
-          "offsetY": 0,
-          "width": 40,
-          "height": 30
+      "attackPool": [
+        {
+          "type": "aoe",
+          "animation": "attack2",
+          "frame": 8,
+          "damage": 10,
+          "range": 90,
+          "cooldownMs": 1800,
+          "aggressive": true,
+          "chaseRange": 110,
+          "moveSpeed": 55,
+          "walkAnimation": "walk",
+          "requireGroundedTarget": true,
+          "minAirborneDodgeClearancePx": 24
         },
-        "chaseRange": 240,
-        "moveSpeed": 55,
-        "walkAnimation": "walk"
-      }
+        {
+          "type": "aoe",
+          "animation": "attack1",
+          "vfxAnimation": "attack1_vfx",
+          "frame": 6,
+          "damage": 16,
+          "range": 220,
+          "cooldownMs": 2200,
+          "recastCooldownMs": 15000,
+          "aggressive": true,
+          "groundProjectVfx": true,
+          "vfxDelayMs": 450
+        }
+      ]
     },
     "animations": {
       "attack1": {
@@ -1230,56 +1335,73 @@
         "frameWidth": 178,
         "frameHeight": 51,
         "frameCount": 13,
-        "loops": false
+        "loops": false,
+        "anchorX": 27,
+        "anchorY": 51
       },
       "attack1_vfx": {
         "file": "DarkSpriteLib/characters/orb_mage/attack1_vfx.png",
         "frameWidth": 178,
         "frameHeight": 51,
         "frameCount": 6,
-        "loops": false
+        "loops": false,
+        "anchorX": 81,
+        "anchorY": 51,
+        "displayScale": 2.1
       },
       "attack2": {
         "file": "DarkSpriteLib/characters/orb_mage/attack2.png",
         "frameWidth": 178,
         "frameHeight": 51,
         "frameCount": 16,
-        "loops": false
+        "loops": false,
+        "anchorX": 30,
+        "anchorY": 51
       },
       "buff": {
         "file": "DarkSpriteLib/characters/orb_mage/buff.png",
         "frameWidth": 178,
         "frameHeight": 51,
         "frameCount": 14,
-        "loops": false
+        "loops": false,
+        "anchorX": 28,
+        "anchorY": 51
       },
       "death": {
         "file": "DarkSpriteLib/characters/orb_mage/death.png",
         "frameWidth": 178,
         "frameHeight": 51,
         "frameCount": 7,
-        "loops": false
+        "loops": false,
+        "anchorX": 28,
+        "anchorY": 51
       },
       "idle": {
         "file": "DarkSpriteLib/characters/orb_mage/idle.png",
         "frameWidth": 178,
         "frameHeight": 51,
         "frameCount": 3,
-        "loops": true
+        "loops": true,
+        "anchorX": 34,
+        "anchorY": 50
       },
       "take_hit": {
         "file": "DarkSpriteLib/characters/orb_mage/take_hit.png",
         "frameWidth": 178,
         "frameHeight": 51,
         "frameCount": 3,
-        "loops": false
+        "loops": false,
+        "anchorX": 27,
+        "anchorY": 51
       },
       "walk": {
         "file": "DarkSpriteLib/characters/orb_mage/walk.png",
         "frameWidth": 178,
         "frameHeight": 51,
         "frameCount": 8,
-        "loops": true
+        "loops": true,
+        "anchorX": 34,
+        "anchorY": 49
       }
     }
   },
@@ -1330,57 +1452,61 @@
       "width": 8,
       "height": 10
     },
-    "gravity": false,
+    "gravity": true,
     "animations": {
       "down": {
         "file": "DarkSpriteLib/the_beneath/objects/animated_objects/save/down.png",
         "frameWidth": 16,
         "frameHeight": 19,
         "frameCount": 4,
-        "loops": true
+        "loops": false,
+        "anchorY": 18
       },
       "idle": {
         "file": "DarkSpriteLib/the_beneath/objects/animated_objects/save/idle.png",
         "frameWidth": 16,
         "frameHeight": 19,
         "frameCount": 4,
-        "loops": true
+        "loops": true,
+        "anchorY": 18
       },
       "start_up": {
         "file": "DarkSpriteLib/the_beneath/objects/animated_objects/save/start_up.png",
         "frameWidth": 16,
         "frameHeight": 19,
         "frameCount": 7,
-        "loops": true
+        "loops": false,
+        "anchorY": 18
       }
     }
   },
   "Shadow_of_storms_spawn": {
     "defaultAnimation": "idle",
     "physicsBody": {
-      "width": 48,
-      "height": 40
+      "width": 20,
+      "height": 30
     },
     "gravity": true,
     "behavior": {
       "health": 50,
       "hurtAnimation": "take_hit",
+      "encounterSoundId": "boss_encounter",
       "attackPool": [
         {
           "type": "melee",
           "animation": "attack1",
           "frame": 6,
           "damage": 15,
-          "range": 70,
+          "range": 80,
           "cooldownMs": 2000,
           "aggressive": true,
           "hitbox": {
             "offsetX": 40,
-            "offsetY": 0,
+            "offsetY": 20,
             "width": 50,
             "height": 40
           },
-          "chaseRange": 280,
+          "chaseRange": 100,
           "moveSpeed": 80,
           "walkAnimation": "run"
         },
@@ -1394,40 +1520,24 @@
           "aggressive": true,
           "hitbox": {
             "offsetX": 40,
-            "offsetY": 0,
+            "offsetY": 22,
             "width": 60,
             "height": 45
           }
         },
         {
-          "type": "melee",
+          "type": "aoe",
           "animation": "attack3",
+          "vfxAnimation": "attack3_vfx",
           "frame": 9,
-          "damage": 20,
-          "range": 90,
-          "cooldownMs": 2800,
-          "aggressive": true,
-          "hitbox": {
-            "offsetX": 45,
-            "offsetY": 0,
-            "width": 65,
-            "height": 50
-          }
-        },
-        {
-          "type": "melee",
-          "animation": "attack4",
-          "frame": 11,
           "damage": 25,
-          "range": 80,
-          "cooldownMs": 3500,
+          "range": 200,
+          "minRange": 85,
+          "cooldownMs": 3000,
+          "recastCooldownMs": 18000,
           "aggressive": true,
-          "hitbox": {
-            "offsetX": 40,
-            "offsetY": 0,
-            "width": 60,
-            "height": 55
-          }
+          "groundProjectVfx": true,
+          "vfxDelayMs": 450
         },
         {
           "type": "heal",
@@ -1446,87 +1556,109 @@
         "frameWidth": 238,
         "frameHeight": 80,
         "frameCount": 9,
-        "loops": false
+        "loops": false,
+        "anchorX": 91,
+        "anchorY": 76
       },
       "attack2": {
         "file": "DarkSpriteLib/characters/shadow_of_storms/attack2.png",
         "frameWidth": 238,
         "frameHeight": 80,
         "frameCount": 13,
-        "loops": false
+        "loops": false,
+        "anchorX": 97,
+        "anchorY": 78
       },
       "attack3": {
         "file": "DarkSpriteLib/characters/shadow_of_storms/attack3.png",
         "frameWidth": 238,
         "frameHeight": 80,
         "frameCount": 14,
-        "loops": false
+        "loops": false,
+        "anchorX": 98,
+        "anchorY": 76
       },
       "attack3_vfx": {
         "file": "DarkSpriteLib/characters/shadow_of_storms/attack3_vfx.png",
         "frameWidth": 50,
         "frameHeight": 51,
         "frameCount": 7,
-        "loops": false
-      },
-      "attack4": {
-        "file": "DarkSpriteLib/characters/shadow_of_storms/attack4.png",
-        "frameWidth": 238,
-        "frameHeight": 80,
-        "frameCount": 18,
-        "loops": false
+        "loops": false,
+        "anchorX": 23,
+        "anchorY": 46,
+        "displayScale": 1.6
       },
       "buff": {
         "file": "DarkSpriteLib/characters/shadow_of_storms/buff.png",
         "frameWidth": 238,
         "frameHeight": 80,
         "frameCount": 18,
-        "loops": false
+        "loops": false,
+        "anchorX": 97,
+        "anchorY": 75
       },
       "death": {
         "file": "DarkSpriteLib/characters/shadow_of_storms/death.png",
         "frameWidth": 238,
         "frameHeight": 80,
         "frameCount": 10,
-        "loops": false
+        "loops": false,
+        "anchorX": 90,
+        "anchorY": 77
       },
       "idle": {
         "file": "DarkSpriteLib/characters/shadow_of_storms/idle.png",
         "frameWidth": 238,
         "frameHeight": 80,
         "frameCount": 12,
-        "loops": true
+        "loops": true,
+        "anchorX": 95,
+        "anchorY": 75
       },
       "run": {
         "file": "DarkSpriteLib/characters/shadow_of_storms/run.png",
         "frameWidth": 238,
         "frameHeight": 80,
         "frameCount": 8,
-        "loops": true
+        "loops": true,
+        "anchorX": 96,
+        "anchorY": 74
       },
       "take_hit": {
         "file": "DarkSpriteLib/characters/shadow_of_storms/take_hit.png",
         "frameWidth": 238,
         "frameHeight": 80,
         "frameCount": 2,
-        "loops": false
+        "loops": false,
+        "anchorX": 89,
+        "anchorY": 77
       }
     }
   },
   "Shocker_ejector_spawn": {
     "defaultAnimation": "shokcer_ejector",
     "physicsBody": {
-      "width": 32,
-      "height": 32
+      "width": 8,
+      "height": 6
     },
     "gravity": false,
+    "trap": {
+      "damage": 10,
+      "damageZone": {
+        "width": 32,
+        "height": 16,
+        "offsetX": 0,
+        "offsetY": -5
+      }
+    },
     "animations": {
       "shokcer_ejector": {
         "file": "DarkSpriteLib/general/objects/animated_objects/traps/shokcer_ejector.png",
         "frameWidth": 64,
         "frameHeight": 64,
         "frameCount": 20,
-        "loops": true
+        "loops": true,
+        "anchorY": 48
       }
     }
   },
@@ -1537,6 +1669,9 @@
       "height": 17
     },
     "gravity": false,
+    "trap": {
+      "damage": 10
+    },
     "animations": {
       "smoke_flame_ejector_red": {
         "file": "DarkSpriteLib/general/objects/animated_objects/traps/smoke_flame_ejector_red.png",
@@ -1584,10 +1719,13 @@
   "Spike_ejector_spawn": {
     "defaultAnimation": "spike_ejector",
     "physicsBody": {
-      "width": 8,
+      "width": 4,
       "height": 32
     },
     "gravity": false,
+    "trap": {
+      "damage": 10
+    },
     "animations": {
       "spike_ejector": {
         "file": "DarkSpriteLib/general/objects/animated_objects/traps/spike_ejector.png",
@@ -1605,6 +1743,9 @@
       "height": 8
     },
     "gravity": false,
+    "trap": {
+      "damage": 10
+    },
     "animations": {
       "spikes": {
         "file": "DarkSpriteLib/general/objects/animated_objects/traps/spikes.png",
@@ -1621,7 +1762,7 @@
       "width": 23,
       "height": 16
     },
-    "gravity": false,
+    "gravity": true,
     "behavior": {
       "health": 15,
       "hurtAnimation": "take_hit",
@@ -1632,7 +1773,10 @@
         "damage": 8,
         "range": 120,
         "cooldownMs": 1800,
-        "aggressive": false,
+        "aggressive": true,
+        "chaseRange": 180,
+        "moveSpeed": 40,
+        "walkAnimation": "walk",
         "projectileAnimIdle": "projectile_idle",
         "projectileAnimExplode": "projectile_explode",
         "projectileSpeed": 250
@@ -1697,6 +1841,9 @@
       "height": 48
     },
     "gravity": false,
+    "trap": {
+      "damage": 15
+    },
     "animations": {
       "swaying_sword_animation1": {
         "file": "DarkSpriteLib/general/objects/animated_objects/traps/swaying_sword_animation1.png",
@@ -1704,6 +1851,27 @@
         "frameHeight": 106,
         "frameCount": 27,
         "loops": true
+      },
+      "swaying_sword_animation2": {
+        "file": "DarkSpriteLib/general/objects/animated_objects/traps/swaying_sword_animation2.png",
+        "frameWidth": 35,
+        "frameHeight": 106,
+        "frameCount": 5,
+        "loops": false
+      },
+      "swaying_sword_animation3": {
+        "file": "DarkSpriteLib/general/objects/animated_objects/traps/swaying_sword_animation3.png",
+        "frameWidth": 35,
+        "frameHeight": 106,
+        "frameCount": 1,
+        "loops": false
+      },
+      "swaying_sword_animation4": {
+        "file": "DarkSpriteLib/general/objects/animated_objects/traps/swaying_sword_animation4.png",
+        "frameWidth": 35,
+        "frameHeight": 106,
+        "frameCount": 1,
+        "loops": false
       }
     }
   },
@@ -1714,6 +1882,9 @@
       "height": 16
     },
     "gravity": false,
+    "trap": {
+      "damage": 10
+    },
     "animations": {
       "sword_slicer": {
         "file": "DarkSpriteLib/general/objects/animated_objects/traps/sword_slicer.png",
@@ -1747,7 +1918,7 @@
       "width": 15,
       "height": 15
     },
-    "gravity": false,
+    "gravity": true,
     "behavior": {
       "health": 100,
       "hurtAnimation": "take_hit",
@@ -1765,7 +1936,7 @@
           "width": 30,
           "height": 20
         },
-        "chaseRange": 300,
+        "chaseRange": 105,
         "moveSpeed": 90,
         "walkAnimation": "run"
       }
@@ -1885,9 +2056,278 @@
     },
     "gravity": false,
     "behavior": {
-      "health": 100,
+      "health": 200,
       "hurtAnimation": "take_hit",
-      "immovable": true
+      "encounterSoundId": "boss_encounter",
+      "engageDelayMs": 3000,
+      "horizontalMovementOnly": true,
+      "stayInSpawnLevel": true,
+      "healthBarOffsetY": 10,
+      "dodgeOnProjectile": {
+        "triggerRangePx": 600,
+        "cooldownMs": 800
+      },
+      "attackPool": [
+        {
+          "type": "teleport",
+          "disappearAnimation": "teleport_disappear",
+          "appearAnimation": "teleport_appear",
+          "animation": "attack2",
+          "frame": 2,
+          "damage": 18,
+          "range": 600,
+          "cooldownMs": 4000,
+          "recastCooldownMs": 8000,
+          "weight": 3,
+          "aggressive": true,
+          "chaseRange": 500,
+          "moveSpeed": 60,
+          "walkAnimation": "walk",
+          "targetOffsetY": 0,
+          "hitboxes": [
+            {
+              "offsetX": 0,
+              "offsetY": 0,
+              "width": 0,
+              "height": 0,
+              "matchBody": true,
+              "frame": 2
+            },
+            {
+              "offsetX": 0,
+              "offsetY": 0,
+              "width": 0,
+              "height": 0,
+              "matchBody": true,
+              "frame": 9
+            },
+            {
+              "offsetX": 7,
+              "offsetY": 43,
+              "width": 30,
+              "height": 20,
+              "frame": 2
+            },
+            {
+              "offsetX": 8,
+              "offsetY": 35,
+              "width": 30,
+              "height": 20,
+              "frame": 9
+            }
+          ]
+        },
+        {
+          "type": "aoe",
+          "animation": "attack3",
+          "frame": 3,
+          "damage": 12,
+          "range": 100,
+          "minRange": 80,
+          "cooldownMs": 1200,
+          "weight": 2,
+          "aggressive": true,
+          "damageHalfWidth": 13
+        },
+        {
+          "type": "melee",
+          "animation": "attack2",
+          "frame": 2,
+          "damage": 12,
+          "range": 80,
+          "cooldownMs": 2500,
+          "weight": 2,
+          "aggressive": true,
+          "hitboxes": [
+            {
+              "offsetX": 0,
+              "offsetY": 0,
+              "width": 0,
+              "height": 0,
+              "matchBody": true,
+              "frame": 2
+            },
+            {
+              "offsetX": 0,
+              "offsetY": 0,
+              "width": 0,
+              "height": 0,
+              "matchBody": true,
+              "frame": 9
+            },
+            {
+              "offsetX": 7,
+              "offsetY": 43,
+              "width": 30,
+              "height": 20,
+              "frame": 2
+            },
+            {
+              "offsetX": 8,
+              "offsetY": 35,
+              "width": 30,
+              "height": 20,
+              "frame": 9
+            }
+          ]
+        },
+        {
+          "type": "teleport",
+          "disappearAnimation": "teleport_disappear",
+          "appearAnimation": "teleport_appear",
+          "animation": "attack3",
+          "frame": 3,
+          "damage": 22,
+          "range": 600,
+          "cooldownMs": 3500,
+          "recastCooldownMs": 7000,
+          "weight": 3,
+          "aggressive": true,
+          "targetOffsetY": 0,
+          "hitboxes": [
+            {
+              "offsetX": -111,
+              "offsetY": 39,
+              "width": 82,
+              "height": 23,
+              "frame": 3
+            },
+            {
+              "offsetX": 30,
+              "offsetY": 39,
+              "width": 79,
+              "height": 23,
+              "frame": 3
+            },
+            {
+              "offsetX": -81,
+              "offsetY": 52,
+              "width": 55,
+              "height": 10,
+              "frame": 1
+            },
+            {
+              "offsetX": 28,
+              "offsetY": 53,
+              "width": 61,
+              "height": 12,
+              "frame": 1
+            }
+          ]
+        },
+        {
+          "type": "melee",
+          "animation": "attack3",
+          "frame": 1,
+          "damage": 10,
+          "range": 60,
+          "cooldownMs": 2000,
+          "aggressive": true,
+          "hitbox": {
+            "offsetX": -81,
+            "offsetY": 52,
+            "width": 55,
+            "height": 10
+          }
+        },
+        {
+          "type": "melee",
+          "animation": "attack3",
+          "frame": 1,
+          "damage": 10,
+          "range": 60,
+          "cooldownMs": 2000,
+          "aggressive": true,
+          "hitbox": {
+            "offsetX": 28,
+            "offsetY": 53,
+            "width": 61,
+            "height": 12
+          }
+        },
+        {
+          "type": "melee",
+          "animation": "attack3",
+          "frame": 3,
+          "damage": 10,
+          "range": 60,
+          "cooldownMs": 2000,
+          "aggressive": true,
+          "hitbox": {
+            "offsetX": -111,
+            "offsetY": 39,
+            "width": 82,
+            "height": 23
+          }
+        },
+        {
+          "type": "melee",
+          "animation": "attack3",
+          "frame": 3,
+          "damage": 10,
+          "range": 60,
+          "cooldownMs": 2000,
+          "aggressive": true,
+          "hitbox": {
+            "offsetX": 30,
+            "offsetY": 39,
+            "width": 79,
+            "height": 23
+          }
+        },
+        {
+          "type": "teleport",
+          "disappearAnimation": "teleport_disappear",
+          "appearAnimation": "teleport_appear",
+          "animation": "attack1",
+          "frame": 6,
+          "damage": 22,
+          "range": 600,
+          "cooldownMs": 4000,
+          "recastCooldownMs": 7000,
+          "weight": 3,
+          "aggressive": true,
+          "targetOffsetY": 0,
+          "appearElevated": true,
+          "hitboxes": [
+            {
+              "offsetX": -17,
+              "offsetY": 41,
+              "width": 33,
+              "height": 39,
+              "frame": 6
+            },
+            {
+              "offsetX": 73,
+              "offsetY": 50,
+              "width": 30,
+              "height": 20,
+              "frame": 17
+            },
+            {
+              "offsetX": -105,
+              "offsetY": 51,
+              "width": 30,
+              "height": 20,
+              "frame": 17
+            },
+            {
+              "offsetX": -120,
+              "offsetY": 51,
+              "width": 30,
+              "height": 20,
+              "frame": 21
+            },
+            {
+              "offsetX": 91,
+              "offsetY": 51,
+              "width": 30,
+              "height": 20,
+              "frame": 21
+            }
+          ]
+        }
+      ]
     },
     "animations": {
       "teleport_disappear": {
@@ -1918,6 +2358,27 @@
         "frameCount": 4,
         "loops": false
       },
+      "attack1": {
+        "file": "DarkSpriteLib/characters/the_heart_hoarder/attack1.png",
+        "frameWidth": 246,
+        "frameHeight": 121,
+        "frameCount": 33,
+        "loops": false
+      },
+      "attack2": {
+        "file": "DarkSpriteLib/characters/the_heart_hoarder/attack2.png",
+        "frameWidth": 222,
+        "frameHeight": 119,
+        "frameCount": 16,
+        "loops": false
+      },
+      "attack3": {
+        "file": "DarkSpriteLib/characters/the_heart_hoarder/attack3.png",
+        "frameWidth": 222,
+        "frameHeight": 119,
+        "frameCount": 9,
+        "loops": false
+      },
       "attack1_return_normal": {
         "file": "DarkSpriteLib/characters/the_heart_hoarder/attack1_return_normal.png",
         "frameWidth": 222,
@@ -1937,7 +2398,8 @@
         "frameWidth": 222,
         "frameHeight": 119,
         "frameCount": 9,
-        "loops": true
+        "loops": true,
+        "spawnAnchorY": 89
       },
       "take_hit": {
         "file": "DarkSpriteLib/characters/the_heart_hoarder/take_hit.png",
@@ -1965,8 +2427,8 @@
   "The_hive_spawn": {
     "defaultAnimation": "idle",
     "physicsBody": {
-      "width": 24,
-      "height": 14
+      "width": 31,
+      "height": 25
     },
     "gravity": false,
     "behavior": {
@@ -1979,14 +2441,18 @@
         "frameWidth": 78,
         "frameHeight": 43,
         "frameCount": 11,
-        "loops": false
+        "loops": false,
+        "anchorX": 35,
+        "anchorY": 27
       },
       "idle": {
         "file": "DarkSpriteLib/characters/the_hive/idle.png",
         "frameWidth": 78,
         "frameHeight": 43,
         "frameCount": 9,
-        "loops": true
+        "loops": true,
+        "anchorX": 35,
+        "anchorY": 26
       }
     }
   },
@@ -1996,41 +2462,78 @@
       "width": 48,
       "height": 45
     },
-    "gravity": false,
+    "gravity": true,
     "behavior": {
-      "health": 80,
-      "attack": {
-        "type": "melee",
-        "animation": "attack",
-        "frame": 9,
-        "damage": 15,
-        "range": 70,
-        "cooldownMs": 2200,
-        "aggressive": true,
-        "hitbox": {
-          "offsetX": 40,
-          "offsetY": 0,
-          "width": 50,
-          "height": 45
+      "health": 128,
+      "encounterSoundId": "widow_whistle_1",
+      "attackPool": [
+        {
+          "type": "melee",
+          "animation": "attack",
+          "frame": 4,
+          "damage": 15,
+          "range": 70,
+          "cooldownMs": 2200,
+          "aggressive": true,
+          "hitbox": {
+            "offsetX": 18,
+            "offsetY": 18,
+            "width": 30,
+            "height": 38
+          },
+          "chaseRange": 260,
+          "moveSpeed": 110,
+          "walkAnimation": "walk"
         },
-        "chaseRange": 280,
-        "moveSpeed": 70,
-        "walkAnimation": "walk"
-      }
+        {
+          "type": "ranged",
+          "animation": "ranged",
+          "frame": 5,
+          "damage": 10,
+          "range": 240,
+          "minRange": 160,
+          "cooldownMs": 3500,
+          "aggressive": true,
+          "projectileAnimIdle": "projectile_idle",
+          "projectileAnimExplode": "projectile_explode",
+          "projectileSpeed": 250,
+          "projectileOriginX": 85,
+          "projectileOriginY": 22
+        },
+        {
+          "type": "teleport",
+          "disappearAnimation": "teleport_disappear",
+          "animation": "teleport_appear",
+          "frame": 2,
+          "damage": 20,
+          "range": 260,
+          "minRange": 150,
+          "cooldownMs": 4000,
+          "recastCooldownMs": 12000,
+          "aggressive": true,
+          "targetOffsetY": 0,
+          "hitbox": {
+            "offsetX": -30,
+            "offsetY": 35,
+            "width": 60,
+            "height": 95
+          }
+        }
+      ]
     },
     "animations": {
       "teleport_disappear": {
         "file": "DarkSpriteLib/characters/the_tarnished_widow/teleport_disappear.png",
         "frameWidth": 188,
         "frameHeight": 90,
-        "frameCount": 18,
+        "frameCount": 16,
         "loops": false
       },
       "teleport_appear": {
         "file": "DarkSpriteLib/characters/the_tarnished_widow/teleport_appear.png",
         "frameWidth": 188,
         "frameHeight": 90,
-        "frameCount": 18,
+        "frameCount": 10,
         "loops": false
       },
       "attack": {
@@ -2044,36 +2547,50 @@
         "file": "DarkSpriteLib/characters/the_tarnished_widow/buff.png",
         "frameWidth": 188,
         "frameHeight": 90,
-        "frameCount": 18,
+        "frameCount": 14,
         "loops": false
       },
       "death": {
         "file": "DarkSpriteLib/characters/the_tarnished_widow/death.png",
         "frameWidth": 188,
         "frameHeight": 90,
-        "frameCount": 18,
+        "frameCount": 13,
         "loops": false
       },
       "idle": {
         "file": "DarkSpriteLib/characters/the_tarnished_widow/idle.png",
         "frameWidth": 188,
         "frameHeight": 90,
-        "frameCount": 18,
+        "frameCount": 9,
         "loops": true
       },
       "ranged": {
         "file": "DarkSpriteLib/characters/the_tarnished_widow/ranged.png",
         "frameWidth": 188,
         "frameHeight": 90,
-        "frameCount": 18,
+        "frameCount": 16,
         "loops": false
       },
       "walk": {
         "file": "DarkSpriteLib/characters/the_tarnished_widow/walk.png",
         "frameWidth": 188,
         "frameHeight": 90,
-        "frameCount": 18,
+        "frameCount": 11,
         "loops": true
+      },
+      "projectile_idle": {
+        "file": "DarkSpriteLib/characters/spitter/projectile_idle.png",
+        "frameWidth": 13,
+        "frameHeight": 13,
+        "frameCount": 4,
+        "loops": true
+      },
+      "projectile_explode": {
+        "file": "DarkSpriteLib/characters/spitter/projectile_explode.png",
+        "frameWidth": 13,
+        "frameHeight": 13,
+        "frameCount": 7,
+        "loops": false
       }
     }
   },
@@ -2092,7 +2609,7 @@
         "damage": 4,
         "cooldownMs": 600,
         "aggressive": true,
-        "chaseRange": 220,
+        "chaseRange": 50,
         "moveSpeed": 80,
         "walkAnimation": "walk"
       }

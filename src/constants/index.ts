@@ -46,8 +46,11 @@ export const WHEEL_COOLDOWN_MS = 150;
 export const PROJECTILE_GUN1_SPEED = 600;
 export const PROJECTILE_GUN2_SPEED = 480;
 // Lifetime ceiling so projectiles can't accumulate if they slip past world
-// bounds or never collide with anything.
-export const PROJECTILE_MAX_LIFETIME_MS = 2500;
+// bounds or never collide with anything. Generous (15s × 600 px/s ≈ 9000
+// px of travel) so distant enemies are still hittable — the previous
+// 2.5s cap silently capped effective range at ≈ 1500 px and made bullets
+// appear to "pass through" enemies that sat just past the timeout.
+export const PROJECTILE_MAX_LIFETIME_MS = 15000;
 // Distance from gun pivot (grip) to muzzle along the barrel axis. The barrel
 // extends along the gun's local +X, so this offset rotates with the aim angle
 // to place the projectile spawn at the visible muzzle for any firing
@@ -61,9 +64,10 @@ export const PROJECTILE_BARREL_LENGTH_PX = 24;
 // at which the player can re-fire.
 export const GUNSLINGER_GUN1_FIRE_RATE_MULTIPLIER = 1.3;
 
-// Damage dealt by a player projectile (both gun1 and gun2 use the same value
-// for now; per-mode damage can split out later if balance demands it).
-export const PLAYER_PROJECTILE_DAMAGE = 10;
+// Damage dealt by a player projectile. Gun2 (charged shot) hits 40% harder
+// than gun1 (rapid fire) to compensate for its slower fire rate.
+export const PROJECTILE_GUN1_DAMAGE = 10;
+export const PROJECTILE_GUN2_DAMAGE = 15;
 // Sword melee damage per swing. Melee is close-range, so the per-hit value
 // is higher than a single projectile to compensate for the increased risk.
 export const SWORD_ATTACK_DAMAGE = 15;
@@ -83,8 +87,10 @@ export const PLAYER_MAX_HEALTH = 100;
 export const RESPAWN_DELAY_MS = 1500;
 // Invulnerability window after taking a hit, in ms. Long enough to prevent
 // multi-hit stunlock from a single enemy attack frame but short enough that
-// the player can be punished by repeated attacks.
-export const PLAYER_INVULN_MS = 700;
+// multi-strike combos (e.g. The_heart_hoarder attack2's frame-2 + frame-9
+// slams, ~583 ms apart at 12 fps) land both hits and the player can be
+// punished by repeated attacks.
+export const PLAYER_INVULN_MS = 500;
 // Knockback velocity applied on hurt. X is scaled by direction (away from
 // the source); Y is always negative (upward pop) for a satisfying feel.
 export const PLAYER_HURT_KNOCKBACK_X = 180;
@@ -113,9 +119,37 @@ export const SCENE_KEYS = {
 
 // LDtk level identifier rendered by GameScene. The PreloadScene must inspect
 // the same identifier when picking which tilesets to load — keep them aligned.
-export const CURRENT_LEVEL_IDENTIFIER = 'Level_3';
+export const CURRENT_LEVEL_IDENTIFIER = 'Level_5';
 
 // Render depth for the player and other dynamic entities. Tile layers occupy
 // depth 0..N (back→front) using their LDtk layer position; this sits above
 // all of them.
 export const ENTITY_DEPTH = 100;
+// Player renders one step above other entities so decoration sprites
+// (Tech_shop_spawn, Mushroom_merchant, etc.) never occlude the player when
+// they overlap. Without this the player and entities tie at ENTITY_DEPTH and
+// Phaser falls back to display-list insertion order, which depends on LDtk
+// entity processing order and put the shop in front.
+export const PLAYER_DEPTH = ENTITY_DEPTH + 1;
+
+// Time window (ms) an enemy stays "in combat" after its last player-dealt
+// damage. Once the window lapses, HP snaps back to behavior.health (max) and
+// the floating health bar hides. Trap/fall damage does not refresh the timer.
+export const ENEMY_COMBAT_TIMEOUT_MS = 20_000;
+// Floating health-bar visuals. Width sized so the bar reads cleanly above
+// small bandit-sized bodies (~16-32 px wide) and doesn't overpower tall boss
+// frames; height kept thin so the bar feels like UI overlay rather than part
+// of the sprite. Source pixels — camera zoom scales the final visible size.
+export const ENEMY_HEALTH_BAR_WIDTH_PX = 24;
+export const ENEMY_HEALTH_BAR_HEIGHT_PX = 3;
+// Gap (source px) between body.top and the bar's bottom edge. Just enough to
+// keep the bar clear of the sprite outline.
+export const ENEMY_HEALTH_BAR_OFFSET_Y_PX = 6;
+export const ENEMY_HEALTH_BAR_FG_COLOR = 0xff3333;
+export const ENEMY_HEALTH_BAR_BG_COLOR = 0x000000;
+export const ENEMY_HEALTH_BAR_BG_ALPHA = 0.7;
+export const ENEMY_HEALTH_BAR_OUTLINE_COLOR = 0x000000;
+// Sits above the player so a player jumping in front of an enemy still leaves
+// the bar legible. Tile layers stop at ENTITY_DEPTH, so this is always on top
+// of world geometry too.
+export const ENEMY_HEALTH_BAR_DEPTH = ENTITY_DEPTH + 2;

@@ -1,10 +1,13 @@
 import type {
   LdtkAutoLayerTile,
   LdtkEntityInstance,
+  LdtkFieldInstance,
   LdtkLayerType,
   LdtkLevel,
+  LdtkPointValue,
   LdtkProject,
   LdtkTilesetDef,
+  LoiterPathPoint,
 } from './types';
 
 export function parseLdtkProject(rawJson: string): LdtkProject {
@@ -181,7 +184,59 @@ export function getEntities(level: LdtkLevel): LdtkEntityInstance[] {
   const out: LdtkEntityInstance[] = [];
   for (const li of level.layerInstances) {
     if (!li.entityInstances) continue;
-    out.push(...li.entityInstances);
+    for (const inst of li.entityInstances) {
+      // Resolve the optional "loiterPath" Point-Array field to world-space px
+      // here so downstream code (EntityFactory, Enemy) doesn't need access to
+      // the owning level/layer to convert cell coords. Cell coords sit on the
+      // entity's own layer, so the layer's gridSize is the right divisor.
+      inst.loiterPath = resolveLoiterPath(inst, level, li.__gridSize);
+      out.push(inst);
+    }
   }
   return out;
+}
+
+// Reads the "loiterPath" Point-Array field (if authored) and converts its
+// cell coords to world-space px. Returns null when the field is absent,
+// not an array, or empty — callers treat null as "no path, use default
+// loiter behavior". Single-Point and non-array values are intentionally
+// ignored: a one-waypoint path isn't a path, and silently falling back
+// keeps the runtime tolerant of partial authoring.
+function resolveLoiterPath(
+  instance: LdtkEntityInstance,
+  level: LdtkLevel,
+  gridSize: number,
+): ReadonlyArray<LoiterPathPoint> | null {
+  const fields = instance.fieldInstances;
+  if (!fields || fields.length === 0) return null;
+  const field = fields.find(
+    (f): f is LdtkFieldInstance =>
+      typeof f === 'object' &&
+      f !== null &&
+      (f as LdtkFieldInstance).__identifier === 'loiterPath',
+  );
+  if (!field) return null;
+  // LDtk's __type for an array-of-Point field is the literal "Array<Point>".
+  // Bail on any other shape so a misconfigured field (e.g. single Point or
+  // Int) doesn't crash — it just disables the patrol.
+  if (field.__type !== 'Array<Point>') return null;
+  const raw = field.__value;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+
+  const points: LoiterPathPoint[] = [];
+  for (const item of raw) {
+    if (item == null || typeof item !== 'object') continue;
+    const p = item as Partial<LdtkPointValue>;
+    if (typeof p.cx !== 'number' || typeof p.cy !== 'number') continue;
+    // Cell-center anchoring: places the waypoint at the middle of the cell
+    // the user clicked, which matches what the LDtk editor visually renders.
+    // worldX/worldY on the level shifts level-local coords into the world
+    // frame the renderer uses.
+    points.push({
+      x: level.worldX + (p.cx + 0.5) * gridSize,
+      y: level.worldY + (p.cy + 0.5) * gridSize,
+    });
+  }
+  if (points.length === 0) return null;
+  return points;
 }

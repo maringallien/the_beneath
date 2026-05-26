@@ -11,6 +11,7 @@ export interface ProjectileSpawnOptions {
   mode: GunslingerProjectileMode;
   velocityX: number;
   velocityY: number;
+  damage: number;
 }
 
 export class Projectile extends Phaser.Physics.Arcade.Sprite {
@@ -19,6 +20,7 @@ export class Projectile extends Phaser.Physics.Arcade.Sprite {
   private exploded = false;
   private lifetimeTimer: Phaser.Time.TimerEvent | null = null;
   private readonly mode: GunslingerProjectileMode;
+  private readonly damage: number;
   private readonly worldBoundsHandler: (
     body: Phaser.Physics.Arcade.Body,
   ) => void;
@@ -33,6 +35,7 @@ export class Projectile extends Phaser.Physics.Arcade.Sprite {
     }
     super(scene, options.x, options.y, idleKey);
     this.mode = options.mode;
+    this.damage = options.damage;
 
     scene.add.existing(this);
     scene.physics.add.existing(this);
@@ -81,6 +84,10 @@ export class Projectile extends Phaser.Physics.Arcade.Sprite {
 
   hasExploded(): boolean {
     return this.exploded;
+  }
+
+  getDamage(): number {
+    return this.damage;
   }
 
   onImpact(): void {

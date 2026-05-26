@@ -2,7 +2,13 @@ import {
   ENTITY_LISTING_MODE_PREFIX,
   type AnimationListing,
 } from '../../src/sprites/characterLoader';
-import type { AnimationEdit, ResizerState } from './state';
+import {
+  parseNewAttackEditKey,
+  type AnimationEdit,
+  type BodyEdit,
+  type HitboxEdit,
+  type ResizerState,
+} from './state';
 
 const SAVE_ENDPOINT = '/__anim-resizer/save';
 
@@ -23,6 +29,29 @@ const REGISTRY_BY_MODE: Record<string, string> = {
 // merge into the per-identifier shape (out[identifier].animations[animKey]).
 const ENTITY_REGISTRY_NAME = 'entityRegistry';
 
+// Per-hitbox patch entry as sent over the wire. The server uses
+// (attackIndex, hitboxIndex) to address the right slot inside the entity's
+// behavior.attack(Pool) and merges `patch` over the authored hitbox.
+export interface HitboxPatchEntry {
+  readonly attackIndex: number;
+  readonly hitboxIndex: number;
+  readonly patch: HitboxEdit;
+}
+
+// Brand-new attack entry sent to the server. The server validates and
+// appends to behavior.attackPool with the listed defaults applied
+// (damage=10, range=60, cooldownMs=2000, aggressive=true, type='melee').
+export interface NewAttackPayload {
+  readonly animation: string;
+  readonly frame: number;
+  readonly hitbox: {
+    readonly offsetX: number;
+    readonly offsetY: number;
+    readonly width: number;
+    readonly height: number;
+  };
+}
+
 interface RegistryPayload {
   readonly registry: string;
   readonly animations: Record<string, AnimationEdit>;
@@ -33,6 +62,16 @@ interface RegistryPayload {
   // inside entityRegistry.json the animations belong to. Player payloads
   // omit this because each player registry is its own file.
   readonly identifier?: string;
+  // Per-entity physicsBody edit. Optional and only set for entity payloads
+  // when the user changed the body dimensions; merges into
+  // entityRegistry.json[identifier].physicsBody on save.
+  readonly physicsBody?: BodyEdit;
+  // Per-hitbox edits scoped to this identifier. Only set on entity-registry
+  // payloads. Each entry merges over
+  // entityRegistry.json[identifier].behavior.attack(Pool)[attackIndex].hitbox(es).
+  readonly attackHitboxes?: ReadonlyArray<HitboxPatchEntry>;
+  // Brand-new attacks to append to behavior.attackPool. Entity-only.
+  readonly newAttacks?: ReadonlyArray<NewAttackPayload>;
 }
 
 export interface SaveResult {
@@ -63,29 +102,35 @@ export function buildPayloads(
       animations: Record<string, AnimationEdit>;
       original: unknown;
       identifier?: string;
+      physicsBody?: BodyEdit;
+      attackHitboxes?: HitboxPatchEntry[];
+      newAttacks?: NewAttackPayload[];
     }
   >();
+  const ensureEntityBucket = (identifier: string) => {
+    const bucketKey = `${ENTITY_REGISTRY_NAME}:${identifier}`;
+    let bucket = grouped.get(bucketKey);
+    if (!bucket) {
+      bucket = {
+        registry: ENTITY_REGISTRY_NAME,
+        animations: {},
+        // Entity payloads merge into the canonical entityRegistry.json on
+        // the server, so the per-identifier original is not needed for the
+        // endpoint path.
+        original: null,
+        identifier,
+      };
+      grouped.set(bucketKey, bucket);
+    }
+    return bucket;
+  };
+
   for (const [fullKey, edit] of state.edits) {
     const listing = listingByKey.get(fullKey);
     if (!listing) continue;
     if (listing.isEntity && listing.entityIdentifier) {
-      const bucketKey = `${ENTITY_REGISTRY_NAME}:${listing.entityIdentifier}`;
-      const bucket = grouped.get(bucketKey);
-      if (bucket) {
-        bucket.animations[listing.anim.key] = edit;
-      } else {
-        grouped.set(bucketKey, {
-          registry: ENTITY_REGISTRY_NAME,
-          animations: { [listing.anim.key]: edit },
-          // Entity payloads merge into the canonical entityRegistry.json on
-          // the server, so the per-identifier original is not needed for the
-          // endpoint path. Download-fallback handling (mergeForDownload)
-          // also doesn't reach for this because entity edits live inside one
-          // file the server alone knows how to read/write atomically.
-          original: null,
-          identifier: listing.entityIdentifier,
-        });
-      }
+      const bucket = ensureEntityBucket(listing.entityIdentifier);
+      bucket.animations[listing.anim.key] = edit;
       continue;
     }
     const mode = listing.registry.mode ?? 'sword_master';
@@ -103,11 +148,60 @@ export function buildPayloads(
       });
     }
   }
+
+  // Body edits join the matching entity bucket — creating one if no
+  // per-animation edit exists for that identifier yet.
+  for (const [identifier, bodyEdit] of state.bodyEdits) {
+    const bucket = ensureEntityBucket(identifier);
+    bucket.physicsBody = bodyEdit;
+  }
+
+  // Hitbox edits: parse the composite key `${identifier}:${attackIndex}:${hitboxIndex}`
+  // and route to the matching entity bucket. Edits with malformed keys are
+  // skipped silently — the only writer is patchAttackEdit which always uses
+  // the canonical format. Use lastIndexOf(':') so identifiers containing
+  // colons (none currently, but defensive) still parse.
+  for (const [key, hbEdit] of state.attackEdits) {
+    // Skip new-attack edits whose key shape doesn't match the hitbox-edit
+    // composite format. parseNewAttackEditKey returns non-null on those.
+    if (parseNewAttackEditKey(key) !== null) continue;
+    const parts = key.split(':');
+    if (parts.length !== 3) continue;
+    const identifier = parts[0];
+    const attackIndex = Number(parts[1]);
+    const hitboxIndex = Number(parts[2]);
+    if (!identifier || !Number.isInteger(attackIndex) || !Number.isInteger(hitboxIndex)) continue;
+    const bucket = ensureEntityBucket(identifier);
+    if (!bucket.attackHitboxes) bucket.attackHitboxes = [];
+    bucket.attackHitboxes.push({ attackIndex, hitboxIndex, patch: hbEdit });
+  }
+
+  // Brand-new attacks: append per-identifier.
+  for (const [key, newAttack] of state.newAttackEdits) {
+    const parsed = parseNewAttackEditKey(key);
+    if (!parsed) continue;
+    const bucket = ensureEntityBucket(parsed.identifier);
+    if (!bucket.newAttacks) bucket.newAttacks = [];
+    bucket.newAttacks.push({
+      animation: newAttack.animation,
+      frame: newAttack.frame,
+      hitbox: {
+        offsetX: newAttack.offsetX,
+        offsetY: newAttack.offsetY,
+        width: newAttack.width,
+        height: newAttack.height,
+      },
+    });
+  }
+
   return Array.from(grouped.values(), (value) => ({
     registry: value.registry,
     animations: value.animations,
     originalRaw: value.original,
     ...(value.identifier !== undefined ? { identifier: value.identifier } : {}),
+    ...(value.physicsBody !== undefined ? { physicsBody: value.physicsBody } : {}),
+    ...(value.attackHitboxes !== undefined ? { attackHitboxes: value.attackHitboxes } : {}),
+    ...(value.newAttacks !== undefined ? { newAttacks: value.newAttacks } : {}),
   }));
 }
 
@@ -121,6 +215,15 @@ async function postOne(payload: RegistryPayload): Promise<{ ok: boolean; message
         animations: payload.animations,
         ...(payload.identifier !== undefined
           ? { identifier: payload.identifier }
+          : {}),
+        ...(payload.physicsBody !== undefined
+          ? { physicsBody: payload.physicsBody }
+          : {}),
+        ...(payload.attackHitboxes !== undefined
+          ? { attackHitboxes: payload.attackHitboxes }
+          : {}),
+        ...(payload.newAttacks !== undefined
+          ? { newAttacks: payload.newAttacks }
           : {}),
       }),
     });

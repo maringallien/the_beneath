@@ -1,0 +1,567 @@
+{
+  "triggers": {
+    "sword_master_attack4": [
+      {
+        "name": "swing_whoosh",
+        "soundId": "chop_air_2",
+        "frameIndex": 1
+      }
+    ],
+    "sword_master_attack2": [
+      {
+        "name": "swing_woosh2",
+        "soundId": "chop_air_1",
+        "frameIndex": 1
+      }
+    ],
+    "sword_master_attack3": [
+      {
+        "name": "attack3_woosh",
+        "soundId": "chop_air_3",
+        "frameIndex": 1
+      }
+    ],
+    "sword_master_attack5": [
+      {
+        "name": "attack5_woosh",
+        "soundId": "chop_air_4",
+        "frameIndex": 1
+      }
+    ],
+    "sword_master_attack6": [
+      {
+        "name": "attack6_woosh",
+        "soundId": "chop_air_4",
+        "frameIndex": 12
+      },
+      {
+        "name": "attack6_land",
+        "soundId": "player_jump_land",
+        "frameIndex": 22
+      },
+      {
+        "name": "teleport_appear",
+        "soundId": "teleport_appear",
+        "frameIndex": 7
+      },
+      {
+        "name": "teleport_disappear",
+        "soundId": "teleport_disappear",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 416.6666666666667
+      }
+    ],
+    "sword_master_attack1": [
+      {
+        "name": "attack1_swoosh",
+        "soundId": "sword_swing",
+        "frameIndex": 2
+      }
+    ],
+    "sword_master_magic_attack1": [
+      {
+        "name": "magic_attack1_swoosh",
+        "soundId": "sword_swing",
+        "frameIndex": 2
+      },
+      {
+        "name": "magic_attack1_choppy",
+        "soundId": "whoosh_choppy_1",
+        "frameIndex": 1
+      }
+    ],
+    "sword_master_magic_attack3": [
+      {
+        "name": "magic_attack3_woosh",
+        "soundId": "chop_air_1",
+        "frameIndex": 1
+      },
+      {
+        "name": "magic_attack3_choppy",
+        "soundId": "whoosh_choppy_3",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 83.33333333333333
+      }
+    ],
+    "sword_master_magic_attack4": [
+      {
+        "name": "magic_attack4_woosh",
+        "soundId": "chop_air_3",
+        "frameIndex": 1
+      },
+      {
+        "name": "magic_attack4_choppy",
+        "soundId": "whoosh_choppy_2",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 166.66666666666666
+      }
+    ],
+    "sword_master_magic_attack2": [
+      {
+        "name": "magic_attack2_chopppy",
+        "soundId": "whoosh_choppy_2",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 166.66666666666666
+      },
+      {
+        "name": "magic_attack2_woosh",
+        "soundId": "chop_air_2",
+        "frameIndex": 1
+      }
+    ],
+    "sword_master_magic_attack5": [
+      {
+        "name": "magic_attack5_fire",
+        "soundId": "whoosh_dark_fire",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 583.3333333333334
+      },
+      {
+        "name": "magic_attack5_woosh",
+        "soundId": "chop_air_4",
+        "frameIndex": 1
+      }
+    ],
+    "gun1_overlay_attack1": [
+      {
+        "name": "gun1_shot",
+        "soundId": "gun1_electric_blast",
+        "frameIndex": 2
+      },
+      {
+        "name": "gun1_shell_drop",
+        "soundId": "gun_shell_drop",
+        "frameIndex": 3
+      }
+    ],
+    "gun2_overlay_attack1": [
+      {
+        "name": "gun2_shell_drop",
+        "soundId": "gun_shell_drop",
+        "frameIndex": 6
+      },
+      {
+        "name": "gun2_shot",
+        "soundId": "gun2_laser_shot",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 416.6666666666667
+      }
+    ],
+    "entity_Shadow_of_storms_spawn_attack3": [
+      {
+        "name": "attack3_thunder",
+        "soundId": "thunder_clap_heavy",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Shadow_of_storms_spawn_attack1": [
+      {
+        "name": "attack2_bolt",
+        "soundId": "electric_magic_bolt",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 83.33333333333333
+      }
+    ],
+    "entity_Shadow_of_storms_spawn_attack2": [
+      {
+        "name": "attack2_magic_bolt",
+        "soundId": "electric_magic_bolt",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 416.6666666666667
+      },
+      {
+        "name": "attack2_zap",
+        "soundId": "electric_zap_lingering",
+        "frameIndex": 6
+      }
+    ],
+    "entity_Shadow_of_storms_spawn_take_hit": [
+      {
+        "name": "shadow_of_storms_hurt",
+        "soundId": "shadow_of_storms_hurt",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Shadow_of_storms_spawn_death": [
+      {
+        "name": "shadow_of_storms_death",
+        "soundId": "shadow_of_storms_death",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Evil_crow_spawn_death": [
+      {
+        "name": "crow_death_blast",
+        "soundId": "crow_death_blast",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Ghoul_spawn_take_hit": [
+      {
+        "name": "ghoul_hurt",
+        "soundId": "ghoul_hurt",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Spitter_spawn_take_hit": [
+      {
+        "name": "spitter_hurt",
+        "soundId": "spitter_hurt",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Ghoul_spawn_attack": [
+      {
+        "name": "ghoul_attack",
+        "soundId": "ghoul_attack",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Spitter_spawn_attack": [
+      {
+        "name": "spitter_attack",
+        "soundId": "spitter_attack",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Bear_trap_spawn_bear_trap_animation2": [
+      {
+        "name": "bear_trap_snap",
+        "soundId": "bear_trap_snap",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Spike_ejector_spawn_spike_ejector": [
+      {
+        "name": "spike_ejector_stab",
+        "soundId": "spike_ejector_stab",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Swaying_sword_spawn_swaying_sword_animation3": [
+      {
+        "name": "swaying_sword_fall_whoosh",
+        "soundId": "swaying_sword_whoosh",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Swaying_sword_spawn_swaying_sword_animation4": [
+      {
+        "name": "swaying_sword_blade_impact",
+        "soundId": "swaying_sword_impact",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 333
+      }
+    ],
+    "entity_Dagger_bandit_spawn_attack1": [
+      {
+        "name": "dagger_bandit_attack1_slash",
+        "soundId": "dagger_bandit_slash",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Dagger_bandit_spawn_attack2": [
+      {
+        "name": "dagger_bandit_attack2_slash",
+        "soundId": "dagger_bandit_slash",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Archer_bandit_spawn_death": [
+      {
+        "name": "archer_bandit_death_voice",
+        "soundId": "bandit_death",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Dagger_bandit_spawn_death": [
+      {
+        "name": "dagger_bandit_death_voice",
+        "soundId": "bandit_death",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Ghoul_spawn_death": [
+      {
+        "name": "ghoul_death_splash",
+        "soundId": "ghoul_spitter_death",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Spitter_spawn_death": [
+      {
+        "name": "spitter_death_splash",
+        "soundId": "ghoul_spitter_death",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Dark_warden_spawn_attack": [
+      {
+        "name": "dark_warden_attack_fireball",
+        "soundId": "dark_warden_attack_fireball",
+        "frameIndex": 1
+      },
+      {
+        "name": "dark_warden_attack_flame_swoosh",
+        "soundId": "dark_warden_attack_flame_swoosh",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Orb_mage_spawn_attack1_vfx": [
+      {
+        "name": "orb_mage_attack1_vfx_fire_impact",
+        "soundId": "orb_mage_attack1_vfx_fire_impact",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 83.33333333333333
+      },
+      {
+        "name": "orb_mage_attack1_vfx_electric_blast",
+        "soundId": "orb_mage_attack1_vfx_electric_blast",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 250
+      }
+    ],
+    "entity_Orb_mage_spawn_attack2": [
+      {
+        "name": "orb_mage_attack2_fireball",
+        "soundId": "orb_mage_attack2_fireball",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Orb_mage_spawn_buff": [
+      {
+        "name": "orb_mage_buff_cast",
+        "soundId": "orb_mage_buff_cast",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Orb_mage_spawn_take_hit": [
+      {
+        "name": "orb_mage_hurt_grunt",
+        "soundId": "orb_mage_hurt_grunt",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Orb_mage_spawn_death": [
+      {
+        "name": "orb_mage_death_squelch",
+        "soundId": "orb_mage_death_squelch",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Caged_shocker_spawn_attack1": [
+      {
+        "name": "caged_shocker_attack1_swing",
+        "soundId": "caged_shocker_attack1_swing",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Caged_shocker_spawn_attack2": [
+      {
+        "name": "caged_shocker_attack2_swing",
+        "soundId": "caged_shocker_attack2_swing",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Caged_shocker_spawn_take_hit": [
+      {
+        "name": "caged_shocker_hurt_scream",
+        "soundId": "caged_shocker_hurt_scream",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Caged_shocker_spawn_death": [
+      {
+        "name": "caged_shocker_death_scream",
+        "soundId": "caged_shocker_death_scream",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Caged_spider_spawn_death": [
+      {
+        "name": "caged_spider_death_squeak",
+        "soundId": "caged_spider_death_squeak",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Dark_warden_spawn_death": [
+      {
+        "name": "dark_warden_death_vanish",
+        "soundId": "dark_warden_death_vanish",
+        "frameIndex": 1
+      },
+      {
+        "name": "dark_warden_death_whistle",
+        "soundId": "dark_warden_death_whistle",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Shocker_ejector_spawn_shokcer_ejector": [
+      {
+        "name": "shocker_ejector_zap1",
+        "soundId": "shocker_ejector_zap",
+        "frameIndex": 5
+      },
+      {
+        "name": "shocker_ejector_zap2",
+        "soundId": "shocker_ejector_zap",
+        "frameIndex": 12
+      }
+    ],
+    "entity_The_tarnished_widow_spawn_death": [
+      {
+        "name": "widow_death_blast",
+        "soundId": "widow_death_blast",
+        "frameIndex": 1
+      },
+      {
+        "name": "widow_death_whistle",
+        "soundId": "widow_whistle_2",
+        "frameIndex": 1
+      }
+    ],
+    "entity_The_tarnished_widow_spawn_walk": [
+      {
+        "name": "widow_walk_step1",
+        "soundId": "widow_walk_stone_smash",
+        "frameIndex": 3,
+        "repeatPerLoop": true
+      },
+      {
+        "name": "widow_walk_step2",
+        "soundId": "widow_walk_stone_smash",
+        "frameIndex": 8,
+        "repeatPerLoop": true
+      }
+    ],
+    "entity_The_tarnished_widow_spawn_buff": [
+      {
+        "name": "widow_buff_power_up",
+        "soundId": "widow_buff_power_up",
+        "frameIndex": 1
+      },
+      {
+        "name": "widow_buff_steam_hiss",
+        "soundId": "widow_buff_steam_hiss",
+        "frameIndex": 1
+      }
+    ],
+    "entity_The_tarnished_widow_spawn_attack": [
+      {
+        "name": "widow_attack1_smash",
+        "soundId": "widow_attack1_smash",
+        "frameIndex": 4
+      }
+    ],
+    "entity_The_tarnished_widow_spawn_ranged": [
+      {
+        "name": "widow_ranged_squelch",
+        "soundId": "widow_ranged_squelch",
+        "frameIndex": 5
+      }
+    ],
+    "entity_The_tarnished_widow_spawn_teleport_appear": [
+      {
+        "name": "widow_teleport_appear_crack",
+        "soundId": "widow_teleport_appear_crack",
+        "frameIndex": 1
+      }
+    ],
+    "entity_The_tarnished_widow_spawn_teleport_disappear": [
+      {
+        "name": "widow_teleport_disappear_step",
+        "soundId": "widow_teleport_disappear_step",
+        "frameIndex": 1
+      },
+      {
+        "name": "widow_teleport_disappear_transform",
+        "soundId": "widow_teleport_disappear_transform",
+        "frameIndex": 1
+      }
+    ],
+    "entity_The_heart_hoarder_spawn_take_hit": [
+      {
+        "name": "heart_hoarder_hurt",
+        "soundId": "orb_mage_hurt_grunt",
+        "frameIndex": 1
+      }
+    ],
+    "entity_The_heart_hoarder_spawn_death": [
+      {
+        "name": "heart_hoarder_death_rocks",
+        "soundId": "heart_hoarder_death_rocks",
+        "frameIndex": 1
+      }
+    ],
+    "entity_The_heart_hoarder_spawn_attack1": [
+      {
+        "name": "attack1_earthquake",
+        "soundId": "heart_hoarder_attack1_earthquake",
+        "frameIndex": 6
+      },
+      {
+        "name": "attack1_wood_whoosh",
+        "soundId": "heart_hoarder_attack1_wood_whoosh",
+        "frameIndex": 6
+      },
+      {
+        "name": "attack1_punch1",
+        "soundId": "heart_hoarder_attack1_punch",
+        "frameIndex": 17
+      },
+      {
+        "name": "attack1_punch2",
+        "soundId": "heart_hoarder_attack1_punch",
+        "frameIndex": 21
+      }
+    ],
+    "entity_The_heart_hoarder_spawn_attack2": [
+      {
+        "name": "attack2_chop1",
+        "soundId": "heart_hoarder_attack2_chop1",
+        "frameIndex": 2
+      },
+      {
+        "name": "attack2_chop2",
+        "soundId": "heart_hoarder_attack2_chop2",
+        "frameIndex": 9
+      }
+    ],
+    "entity_The_heart_hoarder_spawn_attack3": [
+      {
+        "name": "attack3_chop1",
+        "soundId": "heart_hoarder_attack3_chop1",
+        "frameIndex": 1
+      },
+      {
+        "name": "attack3_chop2",
+        "soundId": "heart_hoarder_attack3_chop2",
+        "frameIndex": 3
+      },
+      {
+        "name": "attack3_stone_whoosh1",
+        "soundId": "heart_hoarder_attack3_stone_whoosh",
+        "frameIndex": 1
+      },
+      {
+        "name": "attack3_stone_whoosh2",
+        "soundId": "heart_hoarder_attack3_stone_whoosh",
+        "frameIndex": 3
+      }
+    ],
+    "entity_The_heart_hoarder_spawn_teleport_disappear": [
+      {
+        "name": "heart_hoarder_teleport_disappear",
+        "soundId": "heart_hoarder_teleport_disappear",
+        "frameIndex": 1
+      }
+    ],
+    "entity_The_heart_hoarder_spawn_teleport_appear": [
+      {
+        "name": "heart_hoarder_teleport_appear",
+        "soundId": "heart_hoarder_teleport_appear",
+        "frameIndex": 1
+      }
+    ]
+  }
+}

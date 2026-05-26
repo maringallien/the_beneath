@@ -1,11 +1,22 @@
 import Phaser from 'phaser';
 import {
+  clearEntitySounds,
+  playOneShot,
+  registerEnemyWalkSound,
+  registerEntityPeriodicSound,
+  registerEntitySound,
+  registerEntitySoundSequence,
+  registerMovingEntitySound,
+  setLevelAmbience,
+  updateEntitySounds,
+} from '../audio';
+import {
   CAMERA_MAX_VERTICAL_LAG_PX,
   CAMERA_VERTICAL_OFFSET_PX,
   CAMERA_ZOOM,
   CURRENT_LEVEL_IDENTIFIER,
   ENTITY_DEPTH,
-  PLAYER_PROJECTILE_DAMAGE,
+  PLAYER_DEPTH,
   RESPAWN_DELAY_MS,
   SCENE_KEYS,
 } from '../constants';
@@ -16,14 +27,21 @@ import {
 } from '../entities/EnemyProjectile';
 import {
   destroyEntities,
+  pivotCenter,
   spawnEntities,
   type SpawnedEntities,
 } from '../entities/EntityFactory';
+import { Door } from '../entities/Door';
 import { PLAYER_DIED_EVENT, Player } from '../entities/Player';
 import {
   Projectile,
   type ProjectileSpawnOptions,
 } from '../entities/Projectile';
+import {
+  Trap,
+  TRAP_DAMAGE_FRAME_EVENT,
+  type TrapDamageSide,
+} from '../entities/Trap';
 import { ldtkRaw } from '../ldtk/ldtkData';
 import {
   getEntities,
@@ -47,6 +65,9 @@ import {
 import type { CharacterModeId } from '../sprites/characterTypes';
 
 interface LevelSlot {
+  // LDtk identifier ("Level_0", "Level_3", ...). Used by SoundManager to
+  // pick per-level ambience when the player crosses into a slot.
+  identifier: string;
   worldX: number;
   worldY: number;
   pxWid: number;
@@ -74,6 +95,19 @@ interface PlayerSnapshot {
 // otherwise mark the destination level invisible until the camera catches up.
 const LEVEL_VISIBILITY_PADDING_PX = 512;
 
+// LDtk identifiers excluded from getNearestEnemy. Wasps swarm and feel
+// arbitrary as teleport targets; the_hive is a stationary spawner the
+// player shouldn't dive-bomb directly.
+const TELEPORT_TARGET_BLOCKLIST: ReadonlySet<string> = new Set([
+  'Wasp_spawn',
+  'The_hive_spawn',
+]);
+
+// World-grid tile size in pixels. Used by updateTraps for the spike-ejector's
+// "player on the same tile as me" check. Matches the tile spacing assumed by
+// isLineBlocked's sample stride and the project's LDtk collision grid.
+const TILE_SIZE_PX = 16;
+
 export class GameScene extends Phaser.Scene {
   private player!: Player;
   // One collision tilemap per level (positioned at the level's worldX/Y).
@@ -100,6 +134,15 @@ export class GameScene extends Phaser.Scene {
   // collider/overlap wiring stays per-faction: enemy projectiles damage the
   // player and pass through other enemies; player projectiles do the inverse.
   private enemyProjectiles!: Phaser.GameObjects.Group;
+  // Passive damage sources (spikes, swords, ejectors). Plain group: the
+  // overlap fires `onPlayerHitsTrap` and Player.hurt's own invuln window
+  // gates re-ticks — no per-trap state needed in the group.
+  private traps!: Phaser.GameObjects.Group;
+  // Decoration entities that need terrain collisions (currently Save and
+  // Mushroom_merchant — both opt into gravity so they settle on the floor
+  // rather than floating at the LDtk pivot point). Plain group; the
+  // collider is wired against every collision layer in buildWorld.
+  private staticEntities!: Phaser.GameObjects.Group;
   // Tracks the entities returned by spawnEntities so HMR teardown can destroy
   // them in one call. Player is held separately on this.player for ergonomic
   // access; both reference the same instance.
@@ -117,6 +160,10 @@ export class GameScene extends Phaser.Scene {
   // Last value rendered to healthText. Per-frame setText would re-rasterize
   // the texture unnecessarily; only update when the value actually changes.
   private lastRenderedHealth = -1;
+  // Last LDtk level identifier we applied ambience for. Cached on the scene
+  // instance (cleared on scene.restart) so updateAmbience can skip the rect
+  // test on frames where the player hasn't moved between levels.
+  private lastAmbienceLevelId: string | null = null;
 
   constructor() {
     super({ key: SCENE_KEYS.GAME });
@@ -125,6 +172,11 @@ export class GameScene extends Phaser.Scene {
   create(): void {
     this.buildWorld(parseLdtkProject(ldtkRaw));
     this.setupHud();
+    // Drive ambience from whichever level the player spawned in. State lives
+    // in the SoundManager module so this survives scene.restart() (respawn)
+    // without resetting tracks. Non-override levels resolve to the global
+    // ambience set; override levels (Level_0/6/17/19) crossfade to their own.
+    setLevelAmbience(this, this.getCurrentLevelId());
     this.hotReloadUnsub = subscribeLdtkUpdate(this.onLdtkChange);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.onSceneShutdown, this);
   }
@@ -156,9 +208,154 @@ export class GameScene extends Phaser.Scene {
   update(): void {
     this.player.update();
     this.updateEnemies();
+    this.updateDoors();
+    this.updateTraps();
     this.updateHud();
     this.clampCameraLag();
     this.cullOffscreenLevels();
+    this.updateAmbience();
+    updateEntitySounds(this.player.x, this.player.y);
+  }
+
+  // Per-frame proximity tick for ejector traps. Trigger condition depends on
+  // the trap's ejector kind:
+  //   - 'overhead' (smoke/flame): player body horizontally overlaps the trap
+  //     body and the player's body center sits above the trap's center —
+  //     i.e., in the column directly over the ejector. Center comparison
+  //     (not bottom ≤ top) makes the check fire when the player walks across
+  //     the trap at the same floor level too, not just when jumping clean
+  //     over it.
+  //   - 'attached-ground' (spike ejector): player is grounded AND their foot
+  //     tile is the exact tile directly beneath the trap's body — i.e.,
+  //     they're standing on the ground tile the trap is mounted to.
+  // Non-ejector traps return null from getEjectorKind() and are skipped.
+  private updateTraps(): void {
+    if (!this.spawned) return;
+    const pb = this.player.body;
+    const grounded = pb.blocked.down || pb.touching.down;
+    const playerFootTileX = Math.floor(pb.center.x / TILE_SIZE_PX);
+    const playerFootTileY = Math.floor((pb.bottom + 1) / TILE_SIZE_PX);
+    const playerLevelId = this.getCurrentLevelId();
+    for (const trap of this.spawned.traps) {
+      // Traps can be destroyed mid-play by a sword swing or projectile
+      // (onProjectileHitsTrap / applySwordHits). spawned.traps is never
+      // pruned, so the reference lingers — skip destroyed instances here
+      // before touching .body or calling methods that would .play() on a
+      // dead sprite (which throws and stalls the scene update loop).
+      if (!trap.active) continue;
+      // Swaying-sword fires on a different trigger semantic (player passes
+      // UNDER the ceiling-hung blade) and runs its own state machine, so it
+      // lives outside the ejector branch. tickSwayingSwordFall is a no-op
+      // when not in 'falling', so calling it unconditionally is cheap.
+      const swayingState = trap.getSwayingSwordState();
+      if (swayingState !== null) {
+        // Spent swords (snapped/falling/embedded) stay that way for as long
+        // as the player is in the trap's level — the embedded blade is a
+        // permanent visual reminder. Once the player crosses into a different
+        // level the trap re-arms off-screen so a returning player meets a
+        // fresh sword. Null playerLevelId (mid-jump between levels) holds
+        // the current state to avoid resetting on inter-level seams.
+        if (swayingState !== 'idle' && playerLevelId !== null) {
+          const trapLevelId = this.findLevelIdAt(
+            trap.getSpawnX(),
+            trap.getSpawnY(),
+          );
+          if (trapLevelId !== null && trapLevelId !== playerLevelId) {
+            trap.resetSwayingSword();
+          }
+        }
+        if (trap.getSwayingSwordState() === 'idle') {
+          const tb = trap.body;
+          const xOverlap = pb.right > tb.left && pb.left < tb.right;
+          // Trigger zone is "anywhere directly under the sword" — player's
+          // top edge must sit below the trap's body so we don't fire when
+          // the player is alongside or above (e.g. on an upper platform).
+          if (xOverlap && pb.top > tb.bottom) {
+            trap.triggerSwayingSword();
+          }
+        }
+        // Probe the tile immediately below the blade's body. Going through
+        // the tilemap directly avoids spurious embeds when the falling blade
+        // brushes a flying enemy (their body could nudge `touching.down`).
+        const tb = trap.body;
+        const onSolidTerrain = this.isTileSolidAt(tb.center.x, tb.bottom + 1);
+        trap.tickSwayingSwordFall(onSolidTerrain);
+        continue;
+      }
+      const kind = trap.getEjectorKind();
+      if (kind === null) continue;
+      const tb = trap.body;
+      let active = false;
+      if (kind === 'overhead') {
+        // Prefer the configured damage zone over the physics body so the
+        // trigger area can extend further than the tight bullet/sword
+        // hitbox (shocker has a small body but a large shock column).
+        const zone = trap.getDamageZoneBounds();
+        if (zone !== null) {
+          const xOverlap = pb.right > zone.left && pb.left < zone.right;
+          active = xOverlap && pb.center.y < zone.centerY;
+        } else {
+          const xOverlap = pb.right > tb.left && pb.left < tb.right;
+          active = xOverlap && pb.center.y < tb.center.y;
+        }
+      } else {
+        const trapTileX = Math.floor(tb.center.x / TILE_SIZE_PX);
+        const trapTileY = Math.floor((tb.bottom + 1) / TILE_SIZE_PX);
+        active =
+          grounded &&
+          playerFootTileX === trapTileX &&
+          playerFootTileY === trapTileY;
+      }
+      trap.setTriggered(active);
+    }
+  }
+
+  // Per-frame proximity tick for every spawned door. Cheap (no instanceof,
+  // no group iteration) because `spawned.doors` is a pre-filtered array
+  // populated once at buildWorld time.
+  private updateDoors(): void {
+    if (!this.spawned) return;
+    for (const door of this.spawned.doors) {
+      door.update(this.player.x, this.player.y);
+    }
+  }
+
+  // Re-applies the level ambience set whenever the player crosses into a new
+  // LDtk level. SoundManager.setLevelAmbience is idempotent, so calling
+  // with an unchanged id is cheap — but we cache the last-applied id to skip
+  // the rect test on most frames. `null` (player between levels mid-jump)
+  // is held over from the last known id so we don't crossfade in and out
+  // repeatedly along the seam between adjacent levels.
+  private updateAmbience(): void {
+    const levelId = this.getCurrentLevelId();
+    if (levelId === null) return;
+    if (levelId === this.lastAmbienceLevelId) return;
+    this.lastAmbienceLevelId = levelId;
+    setLevelAmbience(this, levelId);
+  }
+
+  // Returns the LDtk identifier of the level whose rect contains the player's
+  // current world position, or null if the player is between levels (mid-jump
+  // across a seam).
+  private getCurrentLevelId(): string | null {
+    return this.findLevelIdAt(this.player.x, this.player.y);
+  }
+
+  // Returns the LDtk identifier of the level whose rect contains (x, y), or
+  // null if the point lies in inter-level whitespace. Iteration order matches
+  // build order; LDtk levels do not overlap so the first hit is unambiguous.
+  private findLevelIdAt(x: number, y: number): string | null {
+    for (const slot of this.levelSlots) {
+      if (
+        x >= slot.worldX &&
+        x < slot.worldX + slot.pxWid &&
+        y >= slot.worldY &&
+        y < slot.worldY + slot.pxHei
+      ) {
+        return slot.identifier;
+      }
+    }
+    return null;
   }
 
   // Per-frame AI tick for every spawned enemy. Group.getChildren() returns
@@ -248,6 +445,48 @@ export class GameScene extends Phaser.Scene {
     return false;
   }
 
+  // Returns the world-space rect of the LDtk level containing (x, y), or
+  // null if the point lies in inter-level whitespace. Used by arena-bound
+  // bosses (e.g. The_heart_hoarder) to capture their spawn level at
+  // construction so the AI can clamp movement/teleport destinations to the
+  // arena instead of chasing the player into adjacent levels. Shares its
+  // hit-test with findLevelIdAt — LDtk levels do not overlap so the first
+  // containing slot is unambiguous.
+  getLevelBoundsAt(
+    x: number,
+    y: number,
+  ): { worldX: number; worldY: number; pxWid: number; pxHei: number } | null {
+    for (const slot of this.levelSlots) {
+      if (
+        x >= slot.worldX &&
+        x < slot.worldX + slot.pxWid &&
+        y >= slot.worldY &&
+        y < slot.worldY + slot.pxHei
+      ) {
+        return {
+          worldX: slot.worldX,
+          worldY: slot.worldY,
+          pxWid: slot.pxWid,
+          pxHei: slot.pxHei,
+        };
+      }
+    }
+    return null;
+  }
+
+  // Raw IntGrid value at the given world coords (1=ground, 2=bridge, ...).
+  // Returns 0 for empty cells, out-of-bounds, or non-tile positions. Used by
+  // Player to drive surface-specific sounds (e.g. pebble footsteps gated on
+  // value 1). Same per-call cost shape as isTileSolidAt — bounded by the one
+  // layer that contains the sample point.
+  getIntGridValueAt(x: number, y: number): number {
+    for (const layer of this.collisionLayers) {
+      const tile = layer.getTileAtWorldXY(x, y);
+      if (tile) return tile.index;
+    }
+    return 0;
+  }
+
   // Coarse line-of-sight test: samples points along the segment (x1,y1)→(x2,y2)
   // and returns true if any sample lands on a solid collision tile. Sample
   // spacing is one tile (16 px in this project) so a 1-tile wall directly on
@@ -256,6 +495,44 @@ export class GameScene extends Phaser.Scene {
   // possible when the line clips a floor/ceiling tile (e.g. enemy on a ledge
   // above the player); chase will reject the path even though a curved walk
   // could close the gap. Acceptable for the current AI model.
+  // Returns the body-center position of the nearest live enemy to (x, y),
+  // or null if none exist. Used by the sword_master teleport attack to drop
+  // the player above their nearest target on the 'appear' frame. Body center
+  // (not sprite center) is the reliable reference because tall sprites
+  // anchored at frame-bottom (e.g. The_tarnished_widow: 188×90 sprite with
+  // 48×45 body anchored at frame bottom) have their sprite.y sitting at
+  // body.top — placing the player relative to sprite.y leaves the slash
+  // hitbox entirely above the body. body.center.y normalizes across all
+  // enemy sizes/anchors. Dead enemies (mid-death-anim corpses still in the
+  // group) are filtered so the move homes in on something actually fightable.
+  // Wasps and the_hive are also skipped — wasps are swarm minions where
+  // homing onto a single one feels arbitrary, and the_hive is a stationary
+  // spawner the player isn't meant to dive-bomb directly.
+  getNearestEnemy(x: number, y: number): { x: number; y: number } | null {
+    if (!this.enemies) return null;
+    let nearestX = 0;
+    let nearestY = 0;
+    let nearestDistSq = Infinity;
+    let found = false;
+    for (const obj of this.enemies.getChildren()) {
+      if (!(obj instanceof Enemy)) continue;
+      if (obj.isDead()) continue;
+      if (TELEPORT_TARGET_BLOCKLIST.has(obj.getIdentifier())) continue;
+      const targetX = obj.body.center.x;
+      const targetY = obj.body.center.y;
+      const dx = targetX - x;
+      const dy = targetY - y;
+      const distSq = dx * dx + dy * dy;
+      if (distSq < nearestDistSq) {
+        nearestDistSq = distSq;
+        nearestX = targetX;
+        nearestY = targetY;
+        found = true;
+      }
+    }
+    return found ? { x: nearestX, y: nearestY } : null;
+  }
+
   isLineBlocked(x1: number, y1: number, x2: number, y2: number): boolean {
     const dx = x2 - x1;
     const dy = y2 - y1;
@@ -279,6 +556,16 @@ export class GameScene extends Phaser.Scene {
     const projectile = new Projectile(this, options);
     projectile.setDepth(ENTITY_DEPTH);
     this.projectiles.add(projectile);
+    // Notify every live Enemy so any with behavior.dodgeOnProjectile can
+    // react. Enemy itself filters by range, cooldown, and current state, so
+    // this is a cheap broadcast — no per-enemy hit-test here.
+    if (this.enemies) {
+      for (const obj of this.enemies.getChildren()) {
+        if (obj instanceof Enemy) {
+          obj.notifyPlayerProjectileFired(projectile.x, projectile.y);
+        }
+      }
+    }
   }
 
   // Structural entry point used by Enemy.fireProjectileAttack — kept here
@@ -324,6 +611,7 @@ export class GameScene extends Phaser.Scene {
     for (const lvl of project.levels) {
       const rendered = renderLevel(this, project, lvl);
       this.levelSlots.push({
+        identifier: lvl.identifier,
         worldX: lvl.worldX,
         worldY: lvl.worldY,
         pxWid: lvl.pxWid,
@@ -347,15 +635,54 @@ export class GameScene extends Phaser.Scene {
     this.projectiles = this.add.group();
     this.enemies = this.add.group();
     this.enemyProjectiles = this.add.group();
+    this.traps = this.add.group();
+    this.staticEntities = this.add.group();
 
     // Spawn entities from every level so enemies/items in other levels exist
     // when the player walks into them. The player factory only fires for the
-    // single Sword_master_spawn entity (currently in Level_3).
+    // single Sword_master_spawn entity (currently in CURRENT_LEVEL_IDENTIFIER).
     const allEntities = project.levels.flatMap(getEntities);
+    // Audio-anchor pass: decoration entities (House2/House6/etc.) bound to
+    // a spatial sound in soundRegistry get a per-instance looping audio
+    // source at their world position. This is independent of spawnEntities
+    // because the bound entities have no factory — they're rendered as
+    // static tiles by LevelRenderer, but still emit sound.
+    for (const instance of allEntities) {
+      const { x, y } = pivotCenter(instance);
+      registerEntitySound(this, instance.__identifier, instance.iid, x, y);
+    }
     const spawned = spawnEntities(this, allEntities);
     for (const enemy of spawned.enemies) {
       enemy.setDepth(ENTITY_DEPTH);
       this.enemies.add(enemy);
+      // Moving creatures (wasps, evil crows, spark bugs) carry their own
+      // spatial loops and periodic-call schedulers. The bindings live in
+      // soundRegistry.json keyed by LDtk identifier; the manager no-ops
+      // for unbound enemies, so a single call covers every enemy class.
+      registerMovingEntitySound(this, enemy.getIdentifier(), enemy);
+      registerEnemyWalkSound(this, enemy.getIdentifier(), enemy);
+      registerEntityPeriodicSound(this, enemy.getIdentifier(), enemy);
+      registerEntitySoundSequence(this, enemy.getIdentifier(), enemy);
+    }
+    for (const trap of spawned.traps) {
+      trap.setDepth(ENTITY_DEPTH);
+      this.traps.add(trap);
+      // Snap and ejector traps emit TRAP_DAMAGE_FRAME at the midpoint of
+      // their damaging animation; GameScene re-checks current overlap then
+      // and applies damage to anything still in the danger zone. The
+      // listener is bound on the trap sprite, so Phaser's auto-destroy
+      // pass tears it down with the sprite — no manual cleanup needed.
+      if (trap.hasDeferredDamage()) {
+        trap.on(TRAP_DAMAGE_FRAME_EVENT, this.onTrapDamageFrame, this);
+      }
+    }
+    // Decoration entities that have gravity:true in the registry (Save,
+    // Mushroom_merchant) need a terrain collider so they settle on the
+    // floor rather than falling forever. Other AnimatedEntity instances
+    // with gravity:false get added too — the collider is a no-op for
+    // bodies whose physics aren't moving, so the wiring stays uniform.
+    for (const other of spawned.others) {
+      this.staticEntities.add(other);
     }
     const spawnLevel = getLevel(project, CURRENT_LEVEL_IDENTIFIER);
     if (!spawned.player) {
@@ -365,7 +692,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.spawned = spawned;
     this.player = spawned.player;
-    this.player.setDepth(ENTITY_DEPTH);
+    this.player.setDepth(PLAYER_DEPTH);
 
     for (const layer of this.collisionLayers) {
       this.colliders.push(this.physics.add.collider(this.player, layer));
@@ -379,10 +706,22 @@ export class GameScene extends Phaser.Scene {
         ),
       );
       // Enemies collide with terrain so gravity-enabled enemies (e.g. dogs)
-      // rest on platforms instead of tunnelling. Stationary gravity-off
-      // entities are unaffected by this collider in practice (their velocity
-      // is zero), so wiring it unconditionally keeps the setup uniform.
+      // rest on platforms instead of tunnelling, and airborne enemies
+      // (crows, wasps) can't phase through walls or the ground. Airborne
+      // chase is already gated on line-of-sight in Enemy.update(), so the
+      // body won't be commanded into a wall during pursuit; loiter targets
+      // refresh on a short timer, so any momentary push against terrain
+      // resolves itself.
       this.colliders.push(this.physics.add.collider(this.enemies, layer));
+      // Static decoration entities (Save, Mushroom_merchant) also collide so
+      // any registry entry with gravity:true settles on the floor rather
+      // than floating at its LDtk pivot point.
+      this.colliders.push(this.physics.add.collider(this.staticEntities, layer));
+      // Traps collide with terrain so the swaying sword, which flips its body
+      // to gravity-on when triggered, stops on the floor instead of falling
+      // through. Stationary traps (gravity:false) have no velocity, so this
+      // collider is a no-op for them and the wiring stays uniform.
+      this.colliders.push(this.physics.add.collider(this.traps, layer));
       // Enemy projectiles explode on terrain — same treatment as the player's.
       this.colliders.push(
         this.physics.add.collider(
@@ -390,6 +729,22 @@ export class GameScene extends Phaser.Scene {
           layer,
           this.onEnemyProjectilePlatformImpact,
           undefined,
+          this,
+        ),
+      );
+    }
+
+    // Closed doors act as walls. The process callback skips collision while
+    // the door is open so the player walks through; otherwise Phaser's
+    // default solid-collision response kicks in and the immovable door
+    // pushes the player back.
+    if (spawned.doors.length > 0) {
+      this.colliders.push(
+        this.physics.add.collider(
+          this.player,
+          spawned.doors as Door[],
+          undefined,
+          (_player, door) => !(door as Door).isPassable(),
           this,
         ),
       );
@@ -407,12 +762,50 @@ export class GameScene extends Phaser.Scene {
         this,
       ),
     );
+    // Player projectiles destroy traps on contact. One-shot kill — traps
+    // have no HP — and the projectile explodes against the trap just like
+    // it would against terrain. Gives the player a way to neutralise
+    // hazards from a safe distance.
+    this.colliders.push(
+      this.physics.add.overlap(
+        this.projectiles,
+        this.traps,
+        this.onProjectileHitsTrap,
+        undefined,
+        this,
+      ),
+    );
     // Enemy projectiles damage the player.
     this.colliders.push(
       this.physics.add.overlap(
         this.enemyProjectiles,
         this.player,
         this.onEnemyProjectileHitsPlayer,
+        undefined,
+        this,
+      ),
+    );
+    // Traps damage the player on body overlap. Bounding-box overlap implements
+    // "directly above/under" naturally: a player approaching from the side
+    // doesn't take damage until they actually step into the trap's hitbox.
+    this.colliders.push(
+      this.physics.add.overlap(
+        this.player,
+        this.traps,
+        this.onPlayerHitsTrap,
+        undefined,
+        this,
+      ),
+    );
+    // Enemies are vulnerable to the same traps as the player. Reuses the
+    // "directly above" gate so enemies walking past a side-mounted trap
+    // don't bleed health; per-enemy hurt-state acts as the natural
+    // re-tick cooldown so a trap doesn't drain an enemy per-frame.
+    this.colliders.push(
+      this.physics.add.overlap(
+        this.enemies,
+        this.traps,
+        this.onEnemyHitsTrap,
         undefined,
         this,
       ),
@@ -465,6 +858,13 @@ export class GameScene extends Phaser.Scene {
   private tearDownWorld(): void {
     this.cameras.main.stopFollow();
 
+    // Entity-anchored audio is bound to LDtk entity instances that are
+    // about to be re-derived from a freshly parsed project (HMR path) or
+    // rebuilt for the same scene on restart. Drop the existing anchors
+    // first so the next buildWorld doesn't double-register and cause the
+    // world to get progressively louder on each reload.
+    clearEntitySounds();
+
     for (const collider of this.colliders) {
       collider.destroy();
     }
@@ -503,6 +903,20 @@ export class GameScene extends Phaser.Scene {
       // throws on the second call). Then destroy() disposes the empty group.
       this.enemies.clear(false, false);
       this.enemies.destroy();
+    }
+
+    if (this.traps) {
+      // Same teardown shape as `enemies` — destroyEntities below disposes the
+      // children, so just empty the group and dispose the shell here.
+      this.traps.clear(false, false);
+      this.traps.destroy();
+    }
+
+    if (this.staticEntities) {
+      // Same teardown shape as `traps` — children are disposed by
+      // destroyEntities below, so just empty + drop the group shell.
+      this.staticEntities.clear(false, false);
+      this.staticEntities.destroy();
     }
 
     if (this.spawned) {
@@ -634,8 +1048,27 @@ export class GameScene extends Phaser.Scene {
   private onProjectilePlatformImpact: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback =
     (projectile) => {
       if (projectile instanceof Projectile) {
+        playOneShot(this, 'bullet_impact_rock');
         projectile.onImpact();
       }
+    };
+
+  // Overlap order follows registration: (projectile, trap). The hasExploded
+  // and active guards prevent re-firing — overlap callbacks can be queued
+  // from a previous tick after the projectile's body was disabled in
+  // onImpact, or after the trap was destroyed by an earlier shot in the
+  // same tick. Trap.destroy() auto-removes the sprite from the traps group
+  // and tears down its listeners (rearm timer, anim events, damage-frame
+  // subscription) via the DESTROY hook set up in the Trap constructor.
+  private onProjectileHitsTrap: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback =
+    (projectileObj, trapObj) => {
+      if (!(projectileObj instanceof Projectile)) return;
+      if (!(trapObj instanceof Trap)) return;
+      if (projectileObj.hasExploded()) return;
+      if (!trapObj.active) return;
+      playOneShot(this, 'bullet_impact_rock');
+      trapObj.destroy();
+      projectileObj.onImpact();
     };
 
   // Order of the (object1, object2) params follows the overlap registration:
@@ -649,8 +1082,13 @@ export class GameScene extends Phaser.Scene {
       // overlap is queued from before the body was disabled in the same tick.
       if (projectileObj.hasExploded()) return;
       if (enemyObj.isDead()) return;
+      // Bullets pass through cleanly during a teleport blink (disappear /
+      // appear phases): no damage, no impact effect, projectile keeps
+      // flying. The boss visually isn't there during the blink.
+      if (enemyObj.isInTeleportBlink()) return;
+      playOneShot(this, 'bullet_impact_flesh');
       enemyObj.takeDamage(
-        PLAYER_PROJECTILE_DAMAGE,
+        projectileObj.getDamage(),
         projectileObj.x,
         projectileObj.y,
       );
@@ -680,7 +1118,196 @@ export class GameScene extends Phaser.Scene {
         projectileObj.getDamage(),
         projectileObj.x,
         projectileObj.y,
+        { source: 'projectile' },
       );
       projectileObj.onImpact();
     };
+
+  // Overlap order follows the registration: (player, trap). Player.hurt's own
+  // invuln window prevents per-frame ticking, so this fires once per invuln
+  // cycle while the player stays in the trap. No need to disable or destroy
+  // the trap — re-overlap after invuln expires is the intended re-hit.
+  //
+  // Traps only fire when the victim is "above" the trap: the victim's body
+  // center must sit above the trap's body center. That excludes side-to-side
+  // overlaps (walking past a wall-mounted trap at the same elevation) while
+  // still catching the natural "step on spikes / drop onto bear trap" cases.
+  //
+  // Snap traps (`hasDirectContactAnimation`, e.g. the bear trap) trigger
+  // when the player is grounded inside the trap's column. The damage
+  // itself is deferred to the snap animation's midpoint (see
+  // onTrapDamageFrame), so jumping off the trap before the midpoint
+  // escapes the bite even though the snap visibly fires. The trap has to
+  // be re-armed (isArmed) — a spent snap trap is visually closed and
+  // inert until the re-arm timer fires inside Trap. The center-above
+  // check filters out under-trap brushes; "grounded" makes sure the
+  // player has actually landed on the surface rather than just clipping.
+  //
+  // Ejector traps (smoke/flame) also delegate damage to the midpoint
+  // event — overlap here is a no-op for them; the trap's setPlayerAbove
+  // (driven by updateTraps) is what gets the ejection cycle running, and
+  // the midpoint event then decides whether to hurt the player.
+  private onPlayerHitsTrap: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback =
+    (playerObj, trapObj) => {
+      if (!(playerObj instanceof Player)) return;
+      if (!(trapObj instanceof Trap)) return;
+      if (playerObj.isDead()) return;
+
+      // Falling sword: inverts the usual "victim above trap" gate. The blade
+      // is falling onto the player, so any body overlap is a hit. Other
+      // swaying-sword states (idle, snapping, embedded) are inert — the
+      // string-snap and the embedded blade don't damage, only the fall does.
+      if (trapObj.isFallingSword()) {
+        playerObj.hurt(trapObj.getDamage(), trapObj.x, trapObj.y);
+        return;
+      }
+      if (trapObj.getSwayingSwordState() !== null) return;
+
+      if (playerObj.body.center.y >= trapObj.body.center.y) return;
+
+      if (trapObj.hasDirectContactAnimation()) {
+        if (!trapObj.isArmed()) return;
+        const groundedOnTrap =
+          playerObj.body.blocked.down || playerObj.body.touching.down;
+        if (!groundedOnTrap) return;
+        trapObj.triggerDirectContact();
+        return;
+      }
+
+      if (trapObj.hasDeferredDamage()) return;
+
+      playerObj.hurt(trapObj.getDamage(), trapObj.x, trapObj.y);
+    };
+
+  // Mirror of onPlayerHitsTrap for enemies. Enemy.takeDamage doesn't have a
+  // built-in invuln window like Player.hurt does, so use the enemy's own
+  // 'hurt' state as the re-tick gate: an enemy already in 'hurt' has just
+  // been hit and shouldn't take another tick this frame. The hurt state
+  // expires in HURT_DURATION_MS (250 ms by default), which is the natural
+  // re-tick cadence for an enemy standing on spikes.
+  //
+  // Snap traps apply the same "fully landed" gate to enemies as to the
+  // player, so a bear trap can catch a chasing dog or ghoul but only when
+  // they actually step on it.
+  private onEnemyHitsTrap: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback =
+    (enemyObj, trapObj) => {
+      if (!(enemyObj instanceof Enemy)) return;
+      if (!(trapObj instanceof Trap)) return;
+      if (enemyObj.isDead()) return;
+      if (enemyObj.getState() === 'hurt') return;
+
+      // Same inverted-gate handling as the player path — a falling sword
+      // damages whatever is below it on contact. Other swaying-sword states
+      // are inert for enemies too. sourceIsPlayer:false so a trap-only kill
+      // doesn't reveal the floating HP bar — combat is meant to track the
+      // player's engagement, not collateral environmental hits.
+      if (trapObj.isFallingSword()) {
+        enemyObj.takeDamage(trapObj.getDamage(), trapObj.x, trapObj.y, {
+          sourceIsPlayer: false,
+        });
+        return;
+      }
+      if (trapObj.getSwayingSwordState() !== null) return;
+
+      if (enemyObj.body.center.y >= trapObj.body.center.y) return;
+
+      if (trapObj.hasDirectContactAnimation()) {
+        if (!trapObj.isArmed()) return;
+        const groundedOnTrap =
+          enemyObj.body.blocked.down || enemyObj.body.touching.down;
+        if (!groundedOnTrap) return;
+        trapObj.triggerDirectContact();
+        return;
+      }
+
+      if (trapObj.hasDeferredDamage()) return;
+
+      enemyObj.takeDamage(trapObj.getDamage(), trapObj.x, trapObj.y, {
+        sourceIsPlayer: false,
+      });
+    };
+
+  // Fired by Trap at the midpoint of its damaging animation. Re-checks
+  // current body overlap with the trap so a victim who has been knocked
+  // out of the danger zone (or has jumped off) takes nothing — that's
+  // the whole point of deferring damage: the trap telegraphs the hit
+  // and the victim can react. Both player and enemies are checked so
+  // a single midpoint can damage either or both.
+  private onTrapDamageFrame = (trap: Trap, side?: TrapDamageSide): void => {
+    const damage = trap.getDamage();
+    if (
+      !this.player.isDead() &&
+      this.isInTrapDamageZone(this.player, trap) &&
+      this.matchesTrapSide(this.player, trap, side)
+    ) {
+      this.player.hurt(damage, trap.x, trap.y);
+    }
+    for (const child of this.enemies.getChildren()) {
+      if (!(child instanceof Enemy)) continue;
+      if (child.isDead()) continue;
+      if (child.getState() === 'hurt') continue;
+      if (!this.isInTrapDamageZone(child, trap)) continue;
+      if (!this.matchesTrapSide(child, trap, side)) continue;
+      // sourceIsPlayer:false — trap damage is environmental and should not
+      // flip the enemy into combat (i.e., shouldn't reveal the HP bar). The
+      // player engaging combat with traps as the only hit doesn't track.
+      child.takeDamage(damage, trap.x, trap.y, { sourceIsPlayer: false });
+    }
+  };
+
+  // Directional gate for traps that fire one side at a time (e.g. shocker).
+  // No-op when `side` is omitted — non-directional traps already gate damage
+  // by zone alone. 'left' means the trap's left-side hit; the victim must be
+  // to the left of the trap (victim center.x < trap center.x) to be hurt.
+  private matchesTrapSide(
+    victim: Phaser.Physics.Arcade.Sprite,
+    trap: Trap,
+    side: TrapDamageSide | undefined,
+  ): boolean {
+    if (!side) return true;
+    const vCenterX = (victim.body as Phaser.Physics.Arcade.Body).center.x;
+    const tCenterX = trap.body.center.x;
+    return side === 'left' ? vCenterX < tCenterX : vCenterX > tCenterX;
+  }
+
+  // Per-kind danger-zone check at the damage-frame instant. Bear-trap snap
+  // and overhead ejector both fire from above the body — victim must be
+  // overlapping the body AND with its center above the trap's center.
+  // Attached-ground ejector (spike) fires from the floor under the trap —
+  // victim must be grounded on the trap's anchor tile (same tile-equality
+  // condition that triggers the cycle in updateTraps), since the player
+  // standing on that tile has center.y at or below the trap's center.
+  private isInTrapDamageZone(
+    victim: Phaser.Physics.Arcade.Sprite,
+    trap: Trap,
+  ): boolean {
+    const vb = victim.body as Phaser.Physics.Arcade.Body;
+    const tb = trap.body;
+    if (trap.getEjectorKind() === 'attached-ground') {
+      const grounded = vb.blocked.down || vb.touching.down;
+      if (!grounded) return false;
+      const trapTileX = Math.floor(tb.center.x / TILE_SIZE_PX);
+      const trapTileY = Math.floor((tb.bottom + 1) / TILE_SIZE_PX);
+      const victimTileX = Math.floor(vb.center.x / TILE_SIZE_PX);
+      const victimTileY = Math.floor((vb.bottom + 1) / TILE_SIZE_PX);
+      return trapTileX === victimTileX && trapTileY === victimTileY;
+    }
+    // Overhead (snap + ejector). Prefer the configured damage zone so the
+    // hazard area can be larger than the physics body — the body stays
+    // tight for bullet/sword hits while the shock column still reaches
+    // the player who's standing nearby.
+    const zone = trap.getDamageZoneBounds();
+    if (zone !== null) {
+      if (vb.center.y >= zone.centerY) return false;
+      return (
+        vb.right > zone.left &&
+        vb.left < zone.right &&
+        vb.bottom > zone.top &&
+        vb.top < zone.bottom
+      );
+    }
+    return (
+      vb.center.y < tb.center.y && this.physics.world.overlap(victim, trap)
+    );
+  }
 }

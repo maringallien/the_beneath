@@ -1,0 +1,813 @@
+{
+  "sounds": {
+    "cave_drips_flowing": {
+      "path": "assets/audio/ambience/cave_drips_flowing.ogg",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.5
+    },
+    "cave_drips_echo": {
+      "path": "assets/audio/ambience/cave_drips_echo.ogg",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.4
+    },
+    "cave_wind_howling": {
+      "path": "assets/audio/ambience/cave_wind_howling.ogg",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.5
+    },
+    "cave_stone_falling": {
+      "path": "assets/audio/ambience/cave_stone_falling.ogg",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.5
+    },
+    "turbine_subby": {
+      "path": "assets/audio/ambience/turbine_subby.ogg",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.5
+    },
+    "factory_hum_industrial": {
+      "path": "assets/audio/ambience/factory_hum_industrial.ogg",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.5
+    },
+    "fan_window": {
+      "path": "assets/audio/entity/fan_window.ogg",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.48,
+      "spatial": { "minRadius": 64, "maxRadius": 320 }
+    },
+    "hvac_aircon": {
+      "path": "assets/audio/entity/hvac_aircon.ogg",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.6,
+      "spatial": { "minRadius": 64, "maxRadius": 320 }
+    },
+    "light_bulb_buzz": {
+      "path": "assets/audio/entity/light_bulb_buzz.ogg",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.5,
+      "spatial": { "minRadius": 32, "maxRadius": 220 }
+    },
+    "insect_wings_flap": {
+      "path": "assets/audio/entity/insect_wings_flap.ogg",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.36,
+      "spatial": { "minRadius": 32, "maxRadius": 180 }
+    },
+    "fluorescent_buzz": {
+      "path": "assets/audio/entity/fluorescent_buzz.ogg",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.66,
+      "spatial": { "minRadius": 48, "maxRadius": 260 }
+    },
+    "door_slam": {
+      "path": "assets/audio/sfx/door_slam.ogg",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "player_cloth_movement": {
+      "path": "assets/audio/player/player_cloth_movement.ogg",
+      "category": "sfx",
+      "loop": true,
+      "defaultVolume": 0.4
+    },
+    "player_footsteps_pebbles": {
+      "path": "assets/audio/player/player_footsteps_pebbles.ogg",
+      "category": "sfx",
+      "loop": true,
+      "defaultVolume": 0.45
+    },
+    "player_footsteps_metal_stairs": {
+      "path": "assets/audio/player/player_footsteps_metal_stairs.ogg",
+      "category": "sfx",
+      "loop": true,
+      "defaultVolume": 0.36,
+      "rate": 1.5
+    },
+    "player_jump_land": {
+      "path": "assets/audio/player/player_jump_land.ogg",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.27
+    },
+    "player_hurt_grunt": {
+      "path": "assets/audio/player/player_hurt_grunt.ogg",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "sword_swing": {
+      "path": "assets/audio/sfx/sword_swing.ogg",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "slash_impact_1": {
+      "path": "assets/audio/sfx/slash_impact_1.ogg",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "slash_impact_2": {
+      "path": "assets/audio/sfx/slash_impact_2.ogg",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "slash_impact_3": {
+      "path": "assets/audio/sfx/slash_impact_3.ogg",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "whoosh_choppy_1": {
+      "path": "assets/audio/sfx/whoosh_choppy_1.ogg",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.84
+    },
+    "whoosh_choppy_2": {
+      "path": "assets/audio/sfx/whoosh_choppy_2.ogg",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.84
+    },
+    "whoosh_choppy_3": {
+      "path": "assets/audio/sfx/whoosh_choppy_3.ogg",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.84
+    },
+    "whoosh_choppy_4": {
+      "path": "assets/audio/sfx/whoosh_choppy_4.ogg",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "whoosh_dark_fire": {
+      "path": "assets/audio/sfx/whoosh_dark_fire.ogg",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "chop_air_1": {
+      "path": "assets/audio/sfx/chop_air_1.ogg",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "chop_air_2": {
+      "path": "assets/audio/sfx/chop_air_2.ogg",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "chop_air_3": {
+      "path": "assets/audio/sfx/chop_air_3.ogg",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "chop_air_4": {
+      "path": "assets/audio/sfx/chop_air_4.ogg",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "gun1_electric_blast": {
+      "path": "assets/audio/sfx/gun1_electric_blast.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.4
+    },
+    "thunder_clap_heavy": {
+      "path": "assets/audio/sfx/thunder_clap_heavy.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "heal_spell_cast": {
+      "path": "assets/audio/sfx/heal_spell_cast.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "electric_magic_bolt": {
+      "path": "assets/audio/sfx/electric_magic_bolt.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "electric_zap_lingering": {
+      "path": "assets/audio/sfx/electric_zap_lingering.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "gun2_laser_shot": {
+      "path": "assets/audio/sfx/gun2_laser_shot.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 1.0
+    },
+    "gun_shell_drop": {
+      "path": "assets/audio/sfx/gun_shell_drop.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.5
+    },
+    "sword_slash_impact_1": {
+      "path": "assets/audio/sfx/sword_slash_impact_1.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.4
+    },
+    "sword_slash_impact_2": {
+      "path": "assets/audio/sfx/sword_slash_impact_2.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.4
+    },
+    "sword_slash_impact_3": {
+      "path": "assets/audio/sfx/sword_slash_impact_3.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.4
+    },
+    "bullet_impact_flesh": {
+      "path": "assets/audio/sfx/bullet_impact_flesh.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.48
+    },
+    "bullet_impact_rock": {
+      "path": "assets/audio/sfx/bullet_impact_rock.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.44
+    },
+    "teleport_disappear": {
+      "path": "assets/audio/sfx/teleport_disappear.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "teleport_appear": {
+      "path": "assets/audio/sfx/teleport_appear.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "player_hurt_projectile": {
+      "path": "assets/audio/player/player_hurt_projectile.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "player_roll": {
+      "path": "assets/audio/player/player_roll.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.48
+    },
+    "player_wall_slide": {
+      "path": "assets/audio/player/player_wall_slide.wav",
+      "category": "sfx",
+      "loop": true,
+      "defaultVolume": 0.45
+    },
+    "crow_call": {
+      "path": "assets/audio/entity/crow_call.wav",
+      "category": "ambience",
+      "loop": false,
+      "defaultVolume": 0.55,
+      "spatial": { "minRadius": 60, "maxRadius": 260 }
+    },
+    "crow_wing_flaps": {
+      "path": "assets/audio/entity/crow_wing_flaps.wav",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.6,
+      "spatial": { "minRadius": 16, "maxRadius": 160 }
+    },
+    "wasp_buzz": {
+      "path": "assets/audio/entity/wasp_buzz.wav",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.5,
+      "spatial": { "minRadius": 30, "maxRadius": 220 }
+    },
+    "hive_buzz": {
+      "path": "assets/audio/entity/hive_buzz.wav",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.6,
+      "spatial": { "minRadius": 64, "maxRadius": 340 }
+    },
+    "spark_bug_wings": {
+      "path": "assets/audio/entity/spark_bug_wings.wav",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.4,
+      "spatial": { "minRadius": 24, "maxRadius": 160 }
+    },
+    "crow_death_blast": {
+      "path": "assets/audio/sfx/crow_death_blast.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "shadow_of_storms_death": {
+      "path": "assets/audio/sfx/shadow_of_storms_death.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.8
+    },
+    "shadow_of_storms_hurt": {
+      "path": "assets/audio/sfx/shadow_of_storms_hurt.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "ghoul_hurt": {
+      "path": "assets/audio/sfx/ghoul_hurt.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "spitter_hurt": {
+      "path": "assets/audio/sfx/spitter_hurt.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "ghoul_attack": {
+      "path": "assets/audio/sfx/ghoul_attack.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "spitter_attack": {
+      "path": "assets/audio/sfx/spitter_attack.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "bear_trap_snap": {
+      "path": "assets/audio/sfx/bear_trap_snap.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "spike_ejector_stab": {
+      "path": "assets/audio/sfx/spike_ejector_stab.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "shocker_ejector_zap": {
+      "path": "assets/audio/sfx/shocker_ejector_zap.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "swaying_sword_whoosh": {
+      "path": "assets/audio/sfx/swaying_sword_whoosh.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "swaying_sword_impact": {
+      "path": "assets/audio/sfx/swaying_sword_impact.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "arrow_volley_impact": {
+      "path": "assets/audio/sfx/arrow_volley_impact.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "dagger_bandit_slash": {
+      "path": "assets/audio/sfx/dagger_bandit_slash.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "bandit_hurt": {
+      "path": "assets/audio/sfx/bandit_hurt.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "bandit_death": {
+      "path": "assets/audio/sfx/bandit_death.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "ghoul_spitter_death": {
+      "path": "assets/audio/sfx/ghoul_spitter_death.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "dark_warden_attack_fireball": {
+      "path": "assets/audio/sfx/dark_warden_attack_fireball.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "dark_warden_death_vanish": {
+      "path": "assets/audio/sfx/dark_warden_death_vanish.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "dark_warden_death_whistle": {
+      "path": "assets/audio/sfx/dark_warden_death_whistle.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "dark_warden_hurt": {
+      "path": "assets/audio/sfx/dark_warden_hurt.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "footsteps_mud": {
+      "path": "assets/audio/entity/footsteps_mud.wav",
+      "category": "sfx",
+      "loop": true,
+      "defaultVolume": 0.5,
+      "spatial": { "minRadius": 50, "maxRadius": 280 }
+    },
+    "boss_encounter": {
+      "path": "assets/audio/sfx/boss_encounter.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "dark_warden_attack_flame_swoosh": {
+      "path": "assets/audio/sfx/dark_warden_attack_flame_swoosh.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "orb_mage_attack1_boom": {
+      "path": "assets/audio/sfx/orb_mage_attack1_boom.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "orb_mage_attack1_vfx_fire_impact": {
+      "path": "assets/audio/sfx/orb_mage_attack1_vfx_fire_impact.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "orb_mage_attack1_vfx_electric_blast": {
+      "path": "assets/audio/sfx/orb_mage_attack1_vfx_electric_blast.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "orb_mage_attack2_fireball": {
+      "path": "assets/audio/sfx/orb_mage_attack2_fireball.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.42
+    },
+    "orb_mage_attack2_dark_magic": {
+      "path": "assets/audio/sfx/orb_mage_attack2_dark_magic.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.42
+    },
+    "orb_mage_buff_cast": {
+      "path": "assets/audio/sfx/orb_mage_buff_cast.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "orb_mage_hurt_grunt": {
+      "path": "assets/audio/sfx/orb_mage_hurt_grunt.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "orb_mage_death_squelch": {
+      "path": "assets/audio/sfx/orb_mage_death_squelch.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "caged_shocker_attack1_swing": {
+      "path": "assets/audio/sfx/caged_shocker_attack1_swing.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "caged_shocker_attack2_swing": {
+      "path": "assets/audio/sfx/caged_shocker_attack2_swing.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "caged_shocker_hurt_scream": {
+      "path": "assets/audio/sfx/caged_shocker_hurt_scream.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "caged_shocker_death_scream": {
+      "path": "assets/audio/sfx/caged_shocker_death_scream.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "widow_death_blast": {
+      "path": "assets/audio/sfx/widow_death_blast.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.5
+    },
+    "widow_walk_footsteps": {
+      "path": "assets/audio/entity/widow_walk_footsteps.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.55,
+      "spatial": { "minRadius": 60, "maxRadius": 320 }
+    },
+    "widow_walk_stone_smash": {
+      "path": "assets/audio/entity/widow_walk_stone_smash.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.45,
+      "spatial": { "minRadius": 60, "maxRadius": 320 }
+    },
+    "widow_buff_power_up": {
+      "path": "assets/audio/sfx/widow_buff_power_up.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "widow_buff_steam_hiss": {
+      "path": "assets/audio/sfx/widow_buff_steam_hiss.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.55
+    },
+    "widow_whistle_1": {
+      "path": "assets/audio/entity/widow_whistle_1.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.6,
+      "spatial": { "minRadius": 80, "maxRadius": 380 }
+    },
+    "widow_whistle_2": {
+      "path": "assets/audio/entity/widow_whistle_2.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.6,
+      "spatial": { "minRadius": 80, "maxRadius": 380 }
+    },
+    "widow_teleport_appear_crack": {
+      "path": "assets/audio/sfx/widow_teleport_appear_crack.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.8
+    },
+    "widow_attack1_smash": {
+      "path": "assets/audio/sfx/widow_attack1_smash.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 1.0
+    },
+    "widow_ranged_squelch": {
+      "path": "assets/audio/sfx/widow_ranged_squelch.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "widow_teleport_disappear_step": {
+      "path": "assets/audio/sfx/widow_teleport_disappear_step.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "widow_teleport_disappear_transform": {
+      "path": "assets/audio/sfx/widow_teleport_disappear_transform.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.6
+    },
+    "widow_body_movement_1": {
+      "path": "assets/audio/entity/widow_body_movement_1.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.35,
+      "spatial": { "minRadius": 60, "maxRadius": 320 }
+    },
+    "widow_body_movement_2": {
+      "path": "assets/audio/entity/widow_body_movement_2.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.35,
+      "spatial": { "minRadius": 60, "maxRadius": 320 }
+    },
+    "widow_body_movement_3": {
+      "path": "assets/audio/entity/widow_body_movement_3.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.35,
+      "spatial": { "minRadius": 60, "maxRadius": 320 }
+    },
+    "caged_spider_movement": {
+      "path": "assets/audio/entity/caged_spider_movement.wav",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.45,
+      "spatial": { "minRadius": 24, "maxRadius": 160 }
+    },
+    "caged_spider_squeak": {
+      "path": "assets/audio/entity/caged_spider_squeak.wav",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.55,
+      "spatial": { "minRadius": 32, "maxRadius": 200 }
+    },
+    "caged_spider_death_squeak": {
+      "path": "assets/audio/sfx/caged_spider_death_squeak.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.35
+    },
+    "heart_hoarder_cloth_flap": {
+      "path": "assets/audio/entity/heart_hoarder_cloth_flap.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.55,
+      "spatial": { "minRadius": 80, "maxRadius": 420 }
+    },
+    "heart_hoarder_death_rocks": {
+      "path": "assets/audio/sfx/heart_hoarder_death_rocks.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.8
+    },
+    "heart_hoarder_attack1_earthquake": {
+      "path": "assets/audio/sfx/heart_hoarder_attack1_earthquake.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.75
+    },
+    "heart_hoarder_attack1_wood_whoosh": {
+      "path": "assets/audio/sfx/heart_hoarder_attack1_wood_whoosh.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "heart_hoarder_attack1_punch": {
+      "path": "assets/audio/sfx/heart_hoarder_attack1_punch.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "heart_hoarder_attack2_chop1": {
+      "path": "assets/audio/sfx/heart_hoarder_attack2_chop1.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "heart_hoarder_attack2_chop2": {
+      "path": "assets/audio/sfx/heart_hoarder_attack2_chop2.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "heart_hoarder_attack3_chop1": {
+      "path": "assets/audio/sfx/heart_hoarder_attack3_chop1.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "heart_hoarder_attack3_chop2": {
+      "path": "assets/audio/sfx/heart_hoarder_attack3_chop2.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "heart_hoarder_attack3_stone_whoosh": {
+      "path": "assets/audio/sfx/heart_hoarder_attack3_stone_whoosh.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.7
+    },
+    "heart_hoarder_teleport_disappear": {
+      "path": "assets/audio/sfx/heart_hoarder_teleport_disappear.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.75
+    },
+    "heart_hoarder_teleport_appear": {
+      "path": "assets/audio/sfx/heart_hoarder_teleport_appear.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.75
+    },
+    "entity_footsteps_pebbles": {
+      "path": "assets/audio/player/player_footsteps_pebbles.ogg",
+      "category": "sfx",
+      "loop": true,
+      "defaultVolume": 0.45,
+      "spatial": { "minRadius": 50, "maxRadius": 280 }
+    },
+    "entity_footsteps_metal_stairs": {
+      "path": "assets/audio/player/player_footsteps_metal_stairs.ogg",
+      "category": "sfx",
+      "loop": true,
+      "defaultVolume": 0.36,
+      "rate": 1.5,
+      "spatial": { "minRadius": 50, "maxRadius": 280 }
+    }
+  },
+  "globalAmbience": ["cave_drips_flowing", "cave_drips_echo"],
+  "levelOverrides": {
+    "Level_0":  { "ambience": ["cave_wind_howling"] },
+    "Level_6":  { "ambience": ["cave_wind_howling"] },
+    "Level_17": { "ambience": ["cave_wind_howling"] },
+    "Level_19": { "ambience": ["cave_wind_howling"] },
+    "Level_13": { "ambience": ["cave_stone_falling"] },
+    "Level_16": { "ambience": ["cave_stone_falling"] },
+    "Level_9":  { "ambience": ["turbine_subby", "factory_hum_industrial"] },
+    "Level_11": { "ambience": ["turbine_subby", "factory_hum_industrial"] },
+    "Level_18": { "ambience": ["turbine_subby", "factory_hum_industrial"] }
+  },
+  "entitySounds": {
+    "House2": ["fan_window"],
+    "House6": ["hvac_aircon"],
+    "Light_with_bugs_spawn": ["light_bulb_buzz", "insect_wings_flap"],
+    "Sign1": ["fluorescent_buzz"],
+    "The_hive_spawn": ["hive_buzz"],
+    "Caged_spider_spawn": ["caged_spider_movement", "caged_spider_squeak"]
+  },
+  "movingEntitySounds": {
+    "Evil_crow_spawn": ["crow_wing_flaps"],
+    "Wasp_spawn": ["wasp_buzz"],
+    "Spark_bug_spawn": ["spark_bug_wings"]
+  },
+  "entityWalkSounds": {
+    "Ghoul_spawn": "footsteps_mud",
+    "Spitter_spawn": "footsteps_mud",
+    "Archer_bandit_spawn": { "ground": "entity_footsteps_pebbles", "bridge": "entity_footsteps_metal_stairs" },
+    "Assassin_spawn": { "ground": "entity_footsteps_pebbles", "bridge": "entity_footsteps_metal_stairs" },
+    "Caged_shocker_spawn": { "ground": "entity_footsteps_pebbles", "bridge": "entity_footsteps_metal_stairs" },
+    "Dagger_bandit_spawn": { "ground": "entity_footsteps_pebbles", "bridge": "entity_footsteps_metal_stairs" },
+    "Dark_warden_spawn": { "ground": "entity_footsteps_pebbles", "bridge": "entity_footsteps_metal_stairs" },
+    "Doberman_spawn": { "ground": "entity_footsteps_pebbles", "bridge": "entity_footsteps_metal_stairs" },
+    "Flame_dude_spawn": { "ground": "entity_footsteps_pebbles", "bridge": "entity_footsteps_metal_stairs" },
+    "Orb_mage_spawn": { "ground": "entity_footsteps_pebbles", "bridge": "entity_footsteps_metal_stairs" },
+    "Shadow_of_storms_spawn": { "ground": "entity_footsteps_pebbles", "bridge": "entity_footsteps_metal_stairs" },
+    "The_blood_king_spawn": { "ground": "entity_footsteps_pebbles", "bridge": "entity_footsteps_metal_stairs" }
+  },
+  "entitySoundSequences": {
+    "The_tarnished_widow_spawn": [
+      "widow_body_movement_1",
+      "widow_body_movement_2",
+      "widow_body_movement_3"
+    ],
+    "The_heart_hoarder_spawn": [
+      "heart_hoarder_cloth_flap"
+    ]
+  },
+  "entityPeriodicSounds": {
+    "Evil_crow_spawn": [
+      {
+        "soundId": "crow_call",
+        "minIntervalMs": 6000,
+        "maxIntervalMs": 16000
+      }
+    ]
+  },
+  "playerStateSounds": {
+    "movement": "player_cloth_movement",
+    "footstepsGround": "player_footsteps_pebbles",
+    "footstepsBridge": "player_footsteps_metal_stairs",
+    "wallSlide": "player_wall_slide"
+  }
+}

@@ -503,7 +503,7 @@ export function preloadAllEntities(scene: Phaser.Scene): void {
   for (const { identifier, config } of listEntityRegistryEntries()) {
     for (const [animKey, anim] of Object.entries(config.animations)) {
       const fullKey = entityAnimFullKey(identifier, animKey);
-      scene.load.spritesheet(fullKey, anim.file, {
+      scene.load.spritesheet(fullKey, `/${anim.file}`, {
         frameWidth: anim.frameWidth,
         frameHeight: anim.frameHeight,
       });

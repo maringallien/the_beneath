@@ -21,6 +21,32 @@ export interface LdtkEntityTileRef {
   h: number;
 }
 
+// LDtk stores Point field values as level-local cell coordinates. A single
+// Point becomes one of these; a Point Array becomes an array of these.
+export interface LdtkPointValue {
+  cx: number;
+  cy: number;
+}
+
+// Subset of LDtk's FieldInstance schema we actually read. __type is the LDtk
+// type string (e.g. "Point", "Array<Point>", "Int", "String") and __value is
+// the deserialized JS value. We narrow on __type at parse time.
+export interface LdtkFieldInstance {
+  __identifier: string;
+  __type: string;
+  __value: unknown;
+  defUid?: number;
+}
+
+// Resolved waypoint in world-space pixels. Derived by parseLdtk from a Point
+// Array field named "loiterPath" — kept off the raw LDtk schema so consumers
+// (Enemy, EntityFactory) get world-px coordinates without re-resolving the
+// level offset themselves.
+export interface LoiterPathPoint {
+  x: number;
+  y: number;
+}
+
 export interface LdtkEntityInstance {
   __identifier: string;
   __grid: [number, number];
@@ -34,7 +60,12 @@ export interface LdtkEntityInstance {
   defUid: number;
   __worldX?: number;
   __worldY?: number;
-  fieldInstances?: ReadonlyArray<unknown>;
+  fieldInstances?: ReadonlyArray<LdtkFieldInstance>;
+  // Populated by parseLdtk.getEntities — world-space px points from the
+  // entity's "loiterPath" Point-Array field, or null if the field is absent
+  // / empty. Not part of LDtk's native schema; this is an internal
+  // enrichment so downstream code doesn't need the level worldX/Y/gridSize.
+  loiterPath?: ReadonlyArray<LoiterPathPoint> | null;
 }
 
 export interface LdtkLayerInstance {
