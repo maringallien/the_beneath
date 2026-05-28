@@ -86,6 +86,10 @@ export function getRenderableLayers(level: LdtkLevel): RenderableTileLayer[] {
 // to be drawn as a static image at its position. No game logic — purely
 // visual. Common for parallax columns, props, signs, etc.
 export interface RenderableEntityTile {
+  // LDtk entity identifier (e.g. "Sign1"). Carried through so the renderer
+  // can attach per-identifier behavior to specific decorations (e.g. flicker
+  // tweens on neon signs) without re-querying the LDtk model.
+  identifier: string;
   tilesetUid: number;
   // Source rect in tileset px (LDtk's __tile.x/y/w/h). Width and height can
   // be larger than the tileset's tileGridSize — these are arbitrary crops.
@@ -139,6 +143,7 @@ export function getRenderableEntityLayers(
       if (!inst.__tile) continue;
       if (skipIdentifiers?.has(inst.__identifier)) continue;
       decorations.push({
+        identifier: inst.__identifier,
         tilesetUid: inst.__tile.tilesetUid,
         srcX: inst.__tile.x,
         srcY: inst.__tile.y,

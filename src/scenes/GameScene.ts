@@ -18,8 +18,25 @@ import {
   ENTITY_DEPTH,
   PLAYER_DEPTH,
   RESPAWN_DELAY_MS,
+  SAVE_REQUESTED_EVENT,
+  SAVE_TOAST_COLOR,
+  SAVE_TOAST_DEPTH,
+  SAVE_TOAST_DURATION_MS,
+  SAVE_TOAST_FONT_FAMILY,
+  SAVE_TOAST_FONT_SIZE_PX,
+  SAVE_TOAST_OFFSET_Y_PX,
+  SAVE_TOAST_RISE_PX,
+  SAVE_TOAST_TEXT,
   SCENE_KEYS,
+  LIGHTING_DEBUG_HUD,
+  LIGHTING_ENABLED,
+  LIGHTING_LERP_RATE_PER_SEC,
+  WORLD_DIM_ALPHA,
+  WORLD_DIM_ALPHA_ENCLOSED,
+  WORLD_DIM_ALPHA_OPEN,
 } from '../constants';
+import { AmmoDrop } from '../entities/AmmoDrop';
+import type { AmmoDropSpawnerScene } from '../entities/AmmoDropSpawnerScene';
 import { Enemy } from '../entities/Enemy';
 import {
   EnemyProjectile,
@@ -32,7 +49,10 @@ import {
   type SpawnedEntities,
 } from '../entities/EntityFactory';
 import { Door } from '../entities/Door';
-import { PLAYER_DIED_EVENT, Player } from '../entities/Player';
+import { InteractionManager } from '../entities/InteractionManager';
+import { PLAYER_DIED_EVENT, Player, type PickupKind } from '../entities/Player';
+import { PlayerHud } from '../entities/PlayerHud';
+import { Save } from '../entities/Save';
 import {
   Projectile,
   type ProjectileSpawnOptions,
@@ -57,11 +77,17 @@ import {
   renderLevel,
   type RenderedLevel,
 } from '../level/LevelRenderer';
+import { computeOpennessGrid } from '../level/OpennessGrid';
+import { OpennessLookup } from '../level/OpennessLookup';
 import {
   collectTilesetsForAllLevels,
   loadTilesetsAtRuntime,
   tilesetTextureKey,
 } from '../level/TilesetRegistry';
+import {
+  computeWorldDimDepth,
+  WorldDimOverlay,
+} from '../level/WorldDimOverlay';
 import type { CharacterModeId } from '../sprites/characterTypes';
 
 interface LevelSlot {
@@ -75,10 +101,16 @@ interface LevelSlot {
   rendered: RenderedLevel;
 }
 
-// Player state preserved across LDtk hot-reloads. Transient action state
-// (locked attacks, combo counter, dash duration) is intentionally NOT
-// preserved — restoring mid-attack into a freshly-built world is more
-// confusing than letting the player drop back to idle for one frame.
+// Player state preserved across LDtk hot-reloads AND across save→death→
+// respawn. Transient action state (locked attacks, combo counter, dash
+// duration) is intentionally NOT preserved — restoring mid-attack into a
+// freshly-built world is more confusing than letting the player drop back
+// to idle for one frame.
+//
+// To extend: add the field here, capture it in snapshotPlayer(), apply it in
+// restorePlayer(). Resource fields (HP/ammo/magic) round-trip through
+// Player.applyRestoredState(); position/velocity/mode/facing have dedicated
+// setters in restorePlayer().
 interface PlayerSnapshot {
   x: number;
   y: number;
@@ -86,6 +118,10 @@ interface PlayerSnapshot {
   vy: number;
   flipX: boolean;
   mode: CharacterModeId;
+  health: number;
+  gun1Ammo: number;
+  gun2Ammo: number;
+  magic: number;
 }
 
 // Pixels of camera-viewport padding when deciding whether a level is visible.
@@ -108,7 +144,20 @@ const TELEPORT_TARGET_BLOCKLIST: ReadonlySet<string> = new Set([
 // isLineBlocked's sample stride and the project's LDtk collision grid.
 const TILE_SIZE_PX = 16;
 
-export class GameScene extends Phaser.Scene {
+// Maps a [0, 1] openness sample to the corresponding screen-wide dim alpha.
+// Linear interpolation between WORLD_DIM_ALPHA_ENCLOSED (at openness=0) and
+// WORLD_DIM_ALPHA_OPEN (at openness=1). Pure helper extracted so the
+// initial-seed call at world build and the per-frame call in updateLighting
+// share one definition; tune the dim curve by editing the two constants
+// without searching for inline math.
+function openness01ToDimAlpha(openness: number): number {
+  return (
+    WORLD_DIM_ALPHA_ENCLOSED +
+    (WORLD_DIM_ALPHA_OPEN - WORLD_DIM_ALPHA_ENCLOSED) * openness
+  );
+}
+
+export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   private player!: Player;
   // One collision tilemap per level (positioned at the level's worldX/Y).
   // Kept as a list so player and projectile colliders can be wired against
@@ -143,6 +192,11 @@ export class GameScene extends Phaser.Scene {
   // rather than floating at the LDtk pivot point). Plain group; the
   // collider is wired against every collision layer in buildWorld.
   private staticEntities!: Phaser.GameObjects.Group;
+  // Ammo pickups dropped by chests and enemies. Plain group; AmmoDrop creates
+  // its own dynamic body with gravity-on, so a physics group's createCallback
+  // would clobber that. The terrain collider lets them land on floors; the
+  // player↔ammoDrops overlap consumes them on contact.
+  private ammoDrops!: Phaser.GameObjects.Group;
   // Tracks the entities returned by spawnEntities so HMR teardown can destroy
   // them in one call. Player is held separately on this.player for ergonomic
   // access; both reference the same instance.
@@ -153,17 +207,54 @@ export class GameScene extends Phaser.Scene {
   // them explicitly.
   private colliders: Phaser.Physics.Arcade.Collider[] = [];
   private hotReloadUnsub: (() => void) | null = null;
-  // HUD text for the player's HP. Created in create() (after buildWorld so
-  // this.player exists), survives HMR untouched (tearDownWorld does not
-  // touch it), and is auto-destroyed by Phaser on scene shutdown/restart.
-  private healthText: Phaser.GameObjects.Text | null = null;
-  // Last value rendered to healthText. Per-frame setText would re-rasterize
-  // the texture unnecessarily; only update when the value actually changes.
-  private lastRenderedHealth = -1;
+  // Camera-pinned HUD. Created in create() (after buildWorld so this.player
+  // exists), survives HMR untouched (tearDownWorld never touches HUD display
+  // objects), and is auto-destroyed by Phaser on scene shutdown/restart. The
+  // HUD itself owns its repaint dedup, so no lastRendered* field is needed
+  // here.
+  private hud: PlayerHud | null = null;
+  // Hold-E interaction system. Built in buildWorld after entities spawn so
+  // the registry has live targets; destroyed in tearDownWorld so HMR rebuilds
+  // the icon and re-registers fresh chest references rather than holding on
+  // to destroyed sprites.
+  private interactions: InteractionManager | null = null;
+  // Most recent player checkpoint, set by takeSave() when the player commits
+  // a Save crystal interaction. Survives tearDownWorld/buildWorld so the
+  // respawn-from-save path can read it after the world rebuild, and survives
+  // HMR for the same reason (a hot-reload during a run shouldn't wipe the
+  // checkpoint). Cleared on full scene.restart() because the field lives on
+  // the scene instance and a restart re-instantiates the scene.
+  // null = no save has been taken yet → death falls back to scene.restart().
+  private saveSlot: PlayerSnapshot | null = null;
   // Last LDtk level identifier we applied ambience for. Cached on the scene
   // instance (cleared on scene.restart) so updateAmbience can skip the rect
   // test on frames where the player hasn't moved between levels.
   private lastAmbienceLevelId: string | null = null;
+  // Camera-pinned dark overlay drawn between non-foreground tile layers and
+  // the foreground glow pass. Owned by the world build/teardown lifecycle:
+  // created in buildWorld once levels exist (so the foreground depths are
+  // known), destroyed in tearDownWorld. Null while no world is built and
+  // when WORLD_DIM_ALPHA is 0 (overlay skipped to avoid a no-op draw call).
+  private worldDim: WorldDimOverlay | null = null;
+
+  // Per-level openness scores indexed for spatial lookup. Populated during
+  // buildWorld; queried each frame in update() with the player's world coords
+  // to drive WorldDimOverlay's alpha. Cleared in tearDownWorld so HMR/respawn
+  // rebuild from fresh IntGrid data.
+  private opennessLookup: OpennessLookup | null = null;
+  // Smoothed dim alpha. Tracks the per-frame lerp toward the openness-derived
+  // target so screen brightness eases across region boundaries instead of
+  // snapping cell-by-cell. Initialized to the static WORLD_DIM_ALPHA at
+  // buildWorld so the first frame doesn't pop. Reset on world teardown.
+  private currentDimAlpha = WORLD_DIM_ALPHA;
+  // Last openness value sampled at a valid in-level position. Held across
+  // frames where the player sits in inter-level whitespace (mid-jump across
+  // a seam) so the screen doesn't flash dark while crossing the gap.
+  private lastOpennessSample = 0.5;
+  // Optional debug HUD showing live lighting state (sampled openness,
+  // target/current dim alpha). Enabled by LIGHTING_DEBUG_HUD; created in
+  // buildWorld alongside worldDim; destroyed in tearDownWorld.
+  private lightingDebugText: Phaser.GameObjects.Text | null = null;
 
   constructor() {
     super({ key: SCENE_KEYS.GAME });
@@ -178,43 +269,117 @@ export class GameScene extends Phaser.Scene {
     // ambience set; override levels (Level_0/6/17/19) crossfade to their own.
     setLevelAmbience(this, this.getCurrentLevelId());
     this.hotReloadUnsub = subscribeLdtkUpdate(this.onLdtkChange);
+    // ESC opens the pause menu. Event-based (not JustDown-polled) so the
+    // listener is naturally scoped: Phaser disables a scene's keyboard
+    // listeners while the scene is paused, so ESC inside PauseScene goes to
+    // PauseScene's own handler without double-firing here.
+    this.input.keyboard?.on('keydown-ESC', this.openPauseMenu, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.onSceneShutdown, this);
   }
 
-  // HP readout pinned to the top-left of the screen. setScrollFactor(0)
-  // anchors it to the camera viewport (it doesn't move when the world
-  // scrolls); the high depth keeps it above gameplay sprites. Camera zoom
-  // still applies, so the visible size is fontSize × CAMERA_ZOOM.
+  // Launches PauseScene on top of this scene, then pauses this scene. Order
+  // matters: launch first so PauseScene is in the active scenes list before
+  // this scene's update loop stops. Also freezes the global animation
+  // manager so background sprites (idle loops, traps, etc.) visually halt
+  // behind the dim — scene.pause halts update/physics/tweens/timers but
+  // leaves the animation manager running.
+  private openPauseMenu(): void {
+    this.anims.pauseAll();
+    this.scene.launch(SCENE_KEYS.PAUSE);
+    this.scene.pause();
+  }
+
+  // 5-bar player HUD pinned to the top-left of the screen. The HUD object
+  // applies setScrollFactor(0) and a high depth on its display children so
+  // they stay anchored to the camera viewport above all gameplay sprites.
+  // Camera zoom still applies, so source-pixel dimensions render at
+  // PLAYER_HUD_* × CAMERA_ZOOM on screen.
   private setupHud(): void {
-    this.healthText = this.add.text(8, 8, '', {
-      fontFamily: 'monospace',
-      fontSize: '12px',
-      color: '#ff8888',
-      backgroundColor: '#000000aa',
-      padding: { x: 6, y: 3 },
-    });
-    this.healthText.setScrollFactor(0);
-    this.healthText.setDepth(10000);
+    this.hud = new PlayerHud(this);
+    // Drive HUD position+ratio updates from the main camera's PRE_RENDER
+    // event. That fires after Camera.preRender() rebuilds the camera matrix
+    // and refreshes midPoint, so the HUD positions are in sync with the
+    // *current* frame's camera scroll — eliminating the one-frame drift
+    // that subscribing to scene PRE_UPDATE introduces (PRE_UPDATE fires
+    // before the camera follow lerp this frame, so positions trail the
+    // visible camera by one tick). PRE_RENDER fires during the render
+    // phase, which runs regardless of any throws in the UPDATE phase.
+    this.cameras.main.on(
+      Phaser.Cameras.Scene2D.Events.PRE_RENDER,
+      this.updateHud,
+      this,
+    );
   }
 
   private updateHud(): void {
-    if (!this.healthText) return;
-    const hp = this.player.getHealth();
-    if (hp === this.lastRenderedHealth) return;
-    this.healthText.setText(`HP: ${hp}/${this.player.getMaxHealth()}`);
-    this.lastRenderedHealth = hp;
+    if (!this.hud) return;
+    this.hud.update(
+      {
+        health: this.player.getHealth(),
+        maxHealth: this.player.getMaxHealth(),
+        stamina: this.player.getStamina(),
+        maxStamina: this.player.getMaxStamina(),
+        magic: this.player.getMagic(),
+        maxMagic: this.player.getMaxMagic(),
+        gun1Ammo: this.player.getGun1Ammo(),
+        maxGun1Ammo: this.player.getMaxGun1Ammo(),
+        gun2Ammo: this.player.getGun2Ammo(),
+        maxGun2Ammo: this.player.getMaxGun2Ammo(),
+      },
+      this.cameras.main,
+    );
   }
 
   update(): void {
     this.player.update();
     this.updateEnemies();
-    this.updateDoors();
     this.updateTraps();
-    this.updateHud();
+    this.updateDoors();
+    // Interaction tick after the player and per-entity updates so the
+    // closest-target scan reads this frame's resolved positions (the player
+    // may have moved during update(), and Chest.canInteract() can flip from
+    // true to false mid-animation).
+    this.interactions?.update(
+      this.player.x,
+      this.player.y,
+      this.game.loop.delta,
+    );
+    // HUD position is driven by the camera PRE_RENDER event (see setupHud)
+    // so it stays in sync with the current frame's scroll.
     this.clampCameraLag();
     this.cullOffscreenLevels();
     this.updateAmbience();
+    this.updateLighting();
     updateEntitySounds(this.player.x, this.player.y);
+  }
+
+  // Drives the screen-wide dim alpha from the player's local IntGrid
+  // openness. The lookup returns null when the player is between levels
+  // (mid-jump across a seam), in which case the previous valid sample
+  // sticks — without that, the screen would flash dark across every gap.
+  // Time-based lerp keeps the visible transition smooth across the
+  // cell-level discreteness of the openness grid and across frame rate
+  // variation (delta-aware factor).
+  private updateLighting(): void {
+    if (!LIGHTING_ENABLED || !this.opennessLookup || !this.worldDim) return;
+    const sample = this.opennessLookup.sample(this.player.x, this.player.y);
+    if (sample !== null) {
+      this.lastOpennessSample = sample;
+    }
+    const target = openness01ToDimAlpha(this.lastOpennessSample);
+    const dtSec = this.game.loop.delta * 0.001;
+    const factor = Math.min(1, LIGHTING_LERP_RATE_PER_SEC * dtSec);
+    this.currentDimAlpha += (target - this.currentDimAlpha) * factor;
+    this.worldDim.setAlpha(this.currentDimAlpha);
+    if (this.lightingDebugText) {
+      const sampleStr = sample === null ? 'null' : sample.toFixed(3);
+      const levelId = this.findLevelIdAt(this.player.x, this.player.y);
+      this.lightingDebugText.setText(
+        `level: ${levelId ?? '-'}\n` +
+          `openness: ${sampleStr} (held: ${this.lastOpennessSample.toFixed(3)})\n` +
+          `dim α  target: ${target.toFixed(3)}  now: ${this.currentDimAlpha.toFixed(3)}`,
+      );
+    }
   }
 
   // Per-frame proximity tick for ejector traps. Trigger condition depends on
@@ -310,16 +475,6 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // Per-frame proximity tick for every spawned door. Cheap (no instanceof,
-  // no group iteration) because `spawned.doors` is a pre-filtered array
-  // populated once at buildWorld time.
-  private updateDoors(): void {
-    if (!this.spawned) return;
-    for (const door of this.spawned.doors) {
-      door.update(this.player.x, this.player.y);
-    }
-  }
-
   // Re-applies the level ambience set whenever the player crosses into a new
   // LDtk level. SoundManager.setLevelAmbience is idempotent, so calling
   // with an unchanged id is cheap — but we cache the last-applied id to skip
@@ -370,6 +525,18 @@ export class GameScene extends Phaser.Scene {
       if (obj instanceof Enemy) {
         obj.update(this.player);
       }
+    }
+  }
+
+  // Per-frame proximity tick for doors. Drives the closed↔opening↔open state
+  // machine in Door.update(); the player↔doors collider's process callback
+  // reads the resulting isPassable() to gate collision.
+  private updateDoors(): void {
+    if (!this.spawned) return;
+    const px = this.player.x;
+    const py = this.player.y;
+    for (const door of this.spawned.doors) {
+      door.update(px, py);
     }
   }
 
@@ -608,6 +775,9 @@ export class GameScene extends Phaser.Scene {
 
     // Render every level at its world coords. LevelRenderer offsets its
     // containers by level.worldX/Y so the multi-level world lines up.
+    // Per-level openness grids are computed alongside the collision build so
+    // both consume the same IntGrid pass — see opennessLookup below.
+    const opennessLookup = LIGHTING_ENABLED ? new OpennessLookup() : null;
     for (const lvl of project.levels) {
       const rendered = renderLevel(this, project, lvl);
       this.levelSlots.push({
@@ -629,14 +799,34 @@ export class GameScene extends Phaser.Scene {
           lvl.worldY,
         );
         this.collisionLayers.push(collisionLayer);
+        if (opennessLookup) {
+          // Skip levels whose IntGrid yields no usable grid (zero-sized,
+          // pure-solid, or sentinel rows). The level still renders and still
+          // collides; lighting just falls back to the inter-level default
+          // (last known openness sample) when the player crosses it.
+          const opennessGrid = computeOpennessGrid(intGrid);
+          if (opennessGrid) {
+            opennessLookup.add({
+              identifier: lvl.identifier,
+              worldX: lvl.worldX,
+              worldY: lvl.worldY,
+              pxWid: lvl.pxWid,
+              pxHei: lvl.pxHei,
+              gridSize: intGrid.gridSize,
+              grid: opennessGrid,
+            });
+          }
+        }
       }
     }
+    this.opennessLookup = opennessLookup;
 
     this.projectiles = this.add.group();
     this.enemies = this.add.group();
     this.enemyProjectiles = this.add.group();
     this.traps = this.add.group();
     this.staticEntities = this.add.group();
+    this.ammoDrops = this.add.group();
 
     // Spawn entities from every level so enemies/items in other levels exist
     // when the player walks into them. The player factory only fires for the
@@ -676,13 +866,21 @@ export class GameScene extends Phaser.Scene {
         trap.on(TRAP_DAMAGE_FRAME_EVENT, this.onTrapDamageFrame, this);
       }
     }
-    // Decoration entities that have gravity:true in the registry (Save,
-    // Mushroom_merchant) need a terrain collider so they settle on the
+    // Decoration entities that have gravity:true in the registry
+    // (Mushroom_merchant) need a terrain collider so they settle on the
     // floor rather than falling forever. Other AnimatedEntity instances
     // with gravity:false get added too — the collider is a no-op for
     // bodies whose physics aren't moving, so the wiring stays uniform.
     for (const other of spawned.others) {
       this.staticEntities.add(other);
+    }
+    // Save crystals graduated out of `others` into their own typed list (so
+    // InteractionManager can register them without a type guard), but they
+    // still have gravity:true in the registry — add them to staticEntities
+    // explicitly so the terrain collider applies and they rest on the floor
+    // rather than falling forever.
+    for (const save of spawned.saves) {
+      this.staticEntities.add(save);
     }
     const spawnLevel = getLevel(project, CURRENT_LEVEL_IDENTIFIER);
     if (!spawned.player) {
@@ -693,6 +891,22 @@ export class GameScene extends Phaser.Scene {
     this.spawned = spawned;
     this.player = spawned.player;
     this.player.setDepth(PLAYER_DEPTH);
+
+    // Hold-E interactions. Built after the player exists (the manager needs
+    // it as a query source for lockedAction) and after entities spawn (so
+    // chests/saves are registered with live references). Future interactables
+    // get added here too — register them after their own pre-filtered list
+    // lands in SpawnedEntities, mirroring how chests are wired.
+    this.interactions = new InteractionManager(this, this.player);
+    this.interactions.registerAll(spawned.chests);
+    this.interactions.registerAll(spawned.saves);
+
+    // Save crystals fire SAVE_REQUESTED_EVENT on commit; takeSave reads the
+    // current player state into this.saveSlot and pops a "Game Saved" toast.
+    // Subscribed here (per buildWorld) so HMR rebuilds wire to the fresh
+    // event bus; tearDownWorld removes the listener so duplicates can't
+    // accumulate across rebuilds.
+    this.events.on(SAVE_REQUESTED_EVENT, this.takeSave, this);
 
     for (const layer of this.collisionLayers) {
       this.colliders.push(this.physics.add.collider(this.player, layer));
@@ -732,12 +946,17 @@ export class GameScene extends Phaser.Scene {
           this,
         ),
       );
+      // Ammo drops settle on floors and ride moving platforms via the same
+      // collider as everything else. No process/callback: a drop just bounces
+      // on the floor under default Arcade rules until the player picks it up
+      // or its lifetime expires.
+      this.colliders.push(
+        this.physics.add.collider(this.ammoDrops, layer),
+      );
     }
 
-    // Closed doors act as walls. The process callback skips collision while
-    // the door is open so the player walks through; otherwise Phaser's
-    // default solid-collision response kicks in and the immovable door
-    // pushes the player back.
+    // Doors are static walls. Immovable bodies on the Door side mean the
+    // default Arcade collision response just pushes the player back.
     if (spawned.doors.length > 0) {
       this.colliders.push(
         this.physics.add.collider(
@@ -810,6 +1029,18 @@ export class GameScene extends Phaser.Scene {
         this,
       ),
     );
+    // Player picks up ammo drops on body overlap. No proximity prompt — the
+    // pickup is automatic. The callback addAmmo-and-destroy is small enough
+    // that we don't bother with a process callback to gate it.
+    this.colliders.push(
+      this.physics.add.overlap(
+        this.player,
+        this.ammoDrops,
+        this.onPlayerPicksUpAmmo,
+        undefined,
+        this,
+      ),
+    );
 
     this.cameras.main.setZoom(CAMERA_ZOOM);
     // Lerp values < 1 smooth the follow toward the target each frame. 0.08 on
@@ -835,15 +1066,72 @@ export class GameScene extends Phaser.Scene {
       maxY - minY,
     );
 
-    // PLAYER_DIED_EVENT → schedule scene restart after the death anim plays.
-    // The captured `diedPlayer` lets the delayed callback ignore the trigger
-    // when HMR has since rebuilt the world — comparing against the current
-    // this.player avoids restarting a freshly-built scene because of a death
-    // that fired in the previous world.
+    // World dim overlay: a camera-pinned dark rectangle slotted just under
+    // the lowest IntGrid/Foreground* layer depth. Background/parallax tile
+    // layers and the per-level masks sit below it and get darkened; IntGrid
+    // ground, foreground tiles, the foreground glow pass, and entities
+    // (ENTITY_DEPTH=100) sit above and render at full brightness. IntGrid is
+    // grouped with the foregrounds so Foreground1 decorations painted on top
+    // of ground tiles don't read brighter than their substrate. Skipped at
+    // ALPHA=0 so the constant doubles as a kill switch without changing the
+    // wiring.
+    if (WORLD_DIM_ALPHA > 0) {
+      const renderedLevels = this.levelSlots.map((slot) => slot.rendered);
+      const dimDepth = computeWorldDimDepth(renderedLevels);
+      if (dimDepth !== null) {
+        this.worldDim = new WorldDimOverlay(this, dimDepth);
+        // Seed the dynamic-alpha state from the player's spawn openness so
+        // frame 0 already shows the correct brightness for the spawn region
+        // — otherwise a player spawning in a tight corridor sees a brief
+        // flash at WORLD_DIM_ALPHA before the lerp eases down to the
+        // enclosed target.
+        if (LIGHTING_ENABLED && this.opennessLookup) {
+          const spawnSample = this.opennessLookup.sample(
+            this.player.x,
+            this.player.y,
+          );
+          if (spawnSample !== null) {
+            this.lastOpennessSample = spawnSample;
+          }
+          this.currentDimAlpha = openness01ToDimAlpha(
+            this.lastOpennessSample,
+          );
+          this.worldDim.setAlpha(this.currentDimAlpha);
+        }
+
+        if (LIGHTING_DEBUG_HUD) {
+          // Camera-pinned diagnostic readout: each frame shows the raw
+          // openness sample at the player's tile, the openness-mapped
+          // target alpha, and the smoothed current alpha actually being
+          // drawn. Letting the user watch these change (or not) as they
+          // walk around is the fastest way to spot whether the lighting
+          // system is producing variation or collapsing to a uniform value.
+          this.lightingDebugText = this.add
+            .text(8, 8, '', {
+              fontFamily: 'monospace',
+              fontSize: '10px',
+              color: '#ffffff',
+              backgroundColor: 'rgba(0,0,0,0.6)',
+              padding: { x: 4, y: 2 },
+            })
+            .setScrollFactor(0, 0)
+            .setDepth(100_000);
+        }
+      }
+    }
+
+    // PLAYER_DIED_EVENT → either rewind to the last save (if one exists) or
+    // fall back to a full scene restart. The captured `diedPlayer` lets the
+    // delayed callback ignore the trigger when HMR or an earlier respawn
+    // has since rebuilt the world — comparing against the current
+    // this.player avoids re-entering the rebuild for a stale death.
     const diedPlayer = this.player;
     this.player.once(PLAYER_DIED_EVENT, () => {
       this.time.delayedCall(RESPAWN_DELAY_MS, () => {
-        if (this.player === diedPlayer) {
+        if (this.player !== diedPlayer) return;
+        if (this.saveSlot) {
+          this.respawnFromSave();
+        } else {
           this.scene.restart();
         }
       });
@@ -882,6 +1170,20 @@ export class GameScene extends Phaser.Scene {
     }
     this.levelSlots = [];
 
+    if (this.worldDim) {
+      this.worldDim.destroy(this);
+      this.worldDim = null;
+    }
+
+    if (this.lightingDebugText) {
+      this.lightingDebugText.destroy();
+      this.lightingDebugText = null;
+    }
+
+    this.opennessLookup = null;
+    this.currentDimAlpha = WORLD_DIM_ALPHA;
+    this.lastOpennessSample = 0.5;
+
     if (this.projectiles) {
       // clear(true, true) removes from group and destroys child Projectiles;
       // then destroy() disposes the now-empty group itself.
@@ -919,10 +1221,33 @@ export class GameScene extends Phaser.Scene {
       this.staticEntities.destroy();
     }
 
+    if (this.ammoDrops) {
+      // Same teardown shape as `projectiles`: AmmoDrops are dynamic (not in
+      // SpawnedEntities), so clear(true, true) destroys each drop. Player
+      // ammo state lives on the Player instance and is preserved across HMR
+      // by destroyEntities({ preservePlayer: true }) at the call sites.
+      this.ammoDrops.clear(true, true);
+      this.ammoDrops.destroy();
+    }
+
     if (this.spawned) {
       destroyEntities(this.spawned);
       this.spawned = null;
     }
+
+    // Drop the interaction system AFTER destroyEntities so canInteract() on
+    // any in-flight target can't be called on a destroyed sprite during the
+    // manager's own teardown (the icon Container's destroy() is independent
+    // of the registry, but the registry holds references the manager null
+    // out here for symmetry).
+    if (this.interactions) {
+      this.interactions.destroy();
+      this.interactions = null;
+    }
+
+    // Unsubscribe the save-request handler so a subsequent buildWorld's
+    // .on() doesn't accumulate duplicate listeners across HMR or respawn.
+    this.events.off(SAVE_REQUESTED_EVENT, this.takeSave, this);
   }
 
   private snapshotPlayer(): PlayerSnapshot | null {
@@ -934,6 +1259,10 @@ export class GameScene extends Phaser.Scene {
       vy: this.player.body.velocity.y,
       flipX: this.player.flipX,
       mode: this.player.getCurrentMode(),
+      health: this.player.getHealth(),
+      gun1Ammo: this.player.getGun1Ammo(),
+      gun2Ammo: this.player.getGun2Ammo(),
+      magic: this.player.getMagic(),
     };
   }
 
@@ -956,7 +1285,97 @@ export class GameScene extends Phaser.Scene {
     // idle animation that re-anchors with the *current* flipX. Setting flip
     // last guarantees the final anchor matches the restored facing.
     this.player.setFacing(snapshot.flipX);
+    // Resource fields go through applyRestoredState so Player owns the
+    // clamping. Done after the mode switch so any future mode-dependent
+    // resource cap can read the right max.
+    this.player.applyRestoredState({
+      health: snapshot.health,
+      gun1Ammo: snapshot.gun1Ammo,
+      gun2Ammo: snapshot.gun2Ammo,
+      magic: snapshot.magic,
+    });
     this.cameras.main.centerOn(snapshot.x, snapshot.y);
+  }
+
+  // SAVE_REQUESTED_EVENT handler. Snapshots the player into saveSlot and
+  // pops a floating "Game Saved" text above the crystal that triggered the
+  // save. Multi-save semantics: every successful interaction overwrites the
+  // single slot, so the most recent crystal wins.
+  private takeSave(crystal: Save): void {
+    const snapshot = this.snapshotPlayer();
+    if (!snapshot) return;
+    this.saveSlot = snapshot;
+    this.showSaveToast(crystal);
+  }
+
+  // Floating "Game Saved" text that rises and fades over SAVE_TOAST_DURATION_MS
+  // then destroys itself. Source-pixel font + setResolution(CAMERA_ZOOM)
+  // matches the HUD's smoothing pattern so the text reads crisply at zoom.
+  // Anchored to the crystal's body.top so it always appears above the
+  // silhouette regardless of which crystal was used.
+  private showSaveToast(crystal: Save): void {
+    const startX = crystal.x;
+    const startY = crystal.body.top - SAVE_TOAST_OFFSET_Y_PX;
+    const toast = this.add.text(startX, startY, SAVE_TOAST_TEXT, {
+      fontFamily: SAVE_TOAST_FONT_FAMILY,
+      fontSize: `${SAVE_TOAST_FONT_SIZE_PX}px`,
+      color: SAVE_TOAST_COLOR,
+    });
+    toast.setOrigin(0.5, 1);
+    toast.setResolution(CAMERA_ZOOM);
+    toast.setDepth(SAVE_TOAST_DEPTH);
+    // Same LINEAR-filter trick used elsewhere (magic orb, interaction E):
+    // the global pixelArt:true config nearest-samples text textures by
+    // default, which would make the toast look jagged.
+    toast.texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
+    this.tweens.add({
+      targets: toast,
+      y: startY - SAVE_TOAST_RISE_PX,
+      alpha: 0,
+      duration: SAVE_TOAST_DURATION_MS,
+      ease: 'Sine.easeOut',
+      onComplete: () => toast.destroy(),
+    });
+  }
+
+  // Death-recovery path when a save exists. Mirrors the HMR rebuild flow
+  // (tearDownWorld → buildWorld → restorePlayer) so the respawn re-enters
+  // a freshly built world with the player's saved state re-applied. The
+  // LDtk source is re-parsed each time rather than cached so any LDtk edits
+  // made during the same session are reflected on respawn.
+  private respawnFromSave(): void {
+    const snapshot = this.saveSlot;
+    if (!snapshot) {
+      this.scene.restart();
+      return;
+    }
+    let project: LdtkProject;
+    try {
+      project = parseLdtkProject(ldtkRaw);
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        console.warn(
+          '[respawn] Failed to reparse LDtk on respawn — falling back to scene.restart.',
+          error,
+        );
+      }
+      this.scene.restart();
+      return;
+    }
+    this.tearDownWorld();
+    try {
+      this.buildWorld(project);
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        console.error(
+          '[respawn] buildWorld failed after teardown — falling back to scene.restart.',
+          error,
+        );
+      }
+      this.scene.restart();
+      return;
+    }
+    this.restorePlayer(snapshot, project);
   }
 
   private isInsideAnyLevel(
@@ -1043,6 +1462,7 @@ export class GameScene extends Phaser.Scene {
       this.hotReloadUnsub();
       this.hotReloadUnsub = null;
     }
+    this.input.keyboard?.off('keydown-ESC', this.openPauseMenu, this);
   }
 
   private onProjectilePlatformImpact: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback =
@@ -1178,6 +1598,31 @@ export class GameScene extends Phaser.Scene {
 
       playerObj.hurt(trapObj.getDamage(), trapObj.x, trapObj.y);
     };
+
+  // Player picks up a drop (ammo or magic shard). Always consumes (clamp
+  // behavior lives in Player.addPickup): walking into a drop at max still
+  // destroys it, which matches genre convention and keeps the callback
+  // branchless.
+  //
+  // TODO: playOneShot(this, 'pickup') once the audio registry has a pickup
+  // entry — symmetric with Chest's chest_open TODO.
+  private onPlayerPicksUpAmmo: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback =
+    (playerObj, ammoObj) => {
+      if (!(playerObj instanceof Player)) return;
+      if (!(ammoObj instanceof AmmoDrop)) return;
+      if (playerObj.isDead()) return;
+      playerObj.addPickup(ammoObj.getKind(), ammoObj.getAmount());
+      ammoObj.destroy();
+    };
+
+  // Implements AmmoDropSpawnerScene structurally. Called by Chest/Enemy via
+  // the structural interface, not by name elsewhere — keep the signature in
+  // sync with AmmoDropSpawnerScene.spawnAmmoDrop or the structural assertion
+  // in those classes will silently break.
+  spawnAmmoDrop(kind: PickupKind, x: number, y: number): void {
+    const drop = new AmmoDrop(this, x, y, kind);
+    this.ammoDrops.add(drop);
+  }
 
   // Mirror of onPlayerHitsTrap for enemies. Enemy.takeDamage doesn't have a
   // built-in invuln window like Player.hurt does, so use the enemy's own

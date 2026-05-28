@@ -406,6 +406,28 @@ export interface AnimatedEntityBehaviorConfig {
     // from teleport-locking itself when the player spam-fires.
     readonly cooldownMs: number;
   };
+  // When set, the entity emits an instantaneous circular damage burst on
+  // the configured frame of its death animation. Hits the player and every
+  // other live Enemy whose body center sits inside the radius — friendly
+  // fire is intentional so a hive bursting can wipe its own swarm. Self is
+  // excluded. When the entity has no death animation registered, the burst
+  // fires immediately on entering the dead state instead, since there's no
+  // frame timeline to align to. Use for entities whose death is a hazard
+  // rather than a passive corpse (e.g. The_hive). Omit to disable.
+  readonly deathExplosion?: {
+    // Damage applied to each entity caught in the blast.
+    readonly damage: number;
+    // Blast radius in source pixels, measured from the entity's body
+    // center. The center-vs-center distance check means a target's body
+    // edge can extend slightly past the radius and still be hit, which
+    // reads as expected for explosive AoE.
+    readonly radius: number;
+    // Frame index (0-based) of the death animation at which the burst
+    // fires. Aligns the damage moment with the visible blast peak instead
+    // of the first frame of the death animation. Validated against the
+    // death animation's frameCount at boot when the death anim exists.
+    readonly frame: number;
+  };
 }
 
 // Per-entity trap parameters. Presence of this block is the signal the
@@ -437,6 +459,25 @@ export interface AnimatedEntityTrapConfig {
   };
 }
 
+// One independent drop event. Sources expose an array of these (see
+// AnimatedEntityConfig.drops) so a chest can guarantee both an ammo pickup
+// AND a magic orb in a single open, while an enemy can stay at one event.
+// Each event rolls its own chancePct and weighted kind pick independently
+// of the others.
+export interface AnimatedEntityDropConfig {
+  // Probability (0-100) that this event fires. 100 = guaranteed.
+  readonly chancePct: number;
+  // Weighted table of pickup kinds. Weights are relative — `[{kind:'gun1',
+  // weight:2}, {kind:'gun2', weight:1}]` is "2x as likely to be gun1 as gun2".
+  // Caller normalizes by summing weights. Must be non-empty.
+  readonly kinds: ReadonlyArray<AnimatedEntityDropKindConfig>;
+}
+
+export interface AnimatedEntityDropKindConfig {
+  readonly kind: 'gun1' | 'gun2' | 'magic';
+  readonly weight: number;
+}
+
 export interface AnimatedEntityConfig {
   // Name of the animation key (within `animations`) that the entity plays
   // on spawn. Required so partial-anim entities (e.g. The_hive has only
@@ -463,6 +504,12 @@ export interface AnimatedEntityConfig {
   // above/under" semantics fall out of Arcade's bounding-box overlap when
   // the trap's physicsBody is sized to match its visible damage zone.
   readonly trap?: AnimatedEntityTrapConfig;
+  // Optional drops array. Each entry is an independent drop event; on a
+  // qualifying trigger (chest open complete, enemy death anim complete) the
+  // source rolls each event and spawns a pickup for each successful roll.
+  // Absent or empty = entity never drops. Chests typically have two events
+  // (ammo + orb), enemies usually one.
+  readonly drops?: ReadonlyArray<AnimatedEntityDropConfig>;
 }
 
 export type EntityRegistry = Readonly<Record<string, AnimatedEntityConfig>>;

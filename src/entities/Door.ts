@@ -3,55 +3,64 @@ import { playOneShot } from '../audio';
 import { AnimatedEntity } from './AnimatedEntity';
 import { entityAnimFullKey } from './entityRegistryLoader';
 
+const DOOR_IDENTIFIER = 'Door_spawn';
+const DOOR_SLAM_SOUND_ID = 'door_slam';
+
 const DOOR_OPEN_RADIUS_PX = 80;
-// Strictly greater than DOOR_OPEN_RADIUS_PX to give hysteresis — without
-// the gap, the door would flicker open/closed (and slam-spam) when the
-// player hovers near the boundary.
+// Strictly greater than DOOR_OPEN_RADIUS_PX. Without the gap the door
+// flickers (and slam-spams) when the player hovers near the boundary.
 const DOOR_CLOSE_RADIUS_PX = 140;
 const DOOR_OPEN_RADIUS_SQ = DOOR_OPEN_RADIUS_PX * DOOR_OPEN_RADIUS_PX;
 const DOOR_CLOSE_RADIUS_SQ = DOOR_CLOSE_RADIUS_PX * DOOR_CLOSE_RADIUS_PX;
-const DOOR_SLAM_SOUND_ID = 'door_slam';
-const DOOR_IDENTIFIER = 'Door_spawn';
-const DOOR_ANIM_KEY = 'door_open_idle';
 
-// Frame offsets counted from the end of the door_open_idle clip.
-// -2 = second-to-last frame (open pose), -1 = last frame (closed pose).
-const OPEN_FRAME_FROM_END = -2;
-const CLOSED_FRAME_FROM_END = -1;
+// 1-based frame within door_open at which the door becomes passable. Player
+// is blocked through the first 7 swing frames so the wall is solid while
+// the door is visibly still in the way.
+const DOOR_OPEN_PASSABLE_FRAME = 8;
 
-// Proximity-driven door. The door_open_idle clip is treated as a one-shot
-// transition between two end-of-clip poses: the second-to-last frame is
-// the "open" pose used when the player is near, and the last frame is
-// the "closed" pose used when the player is outside the close radius.
-// Each open↔closed transition replays the clip from frame 0 and freezes
-// it on the target pose, and also fires the door slam SFX.
+type DoorState = 'closed' | 'opening' | 'open';
+
+// Proximity-driven door. Default state is the looping door_closed_idle
+// (1 frame). When the player enters DOOR_OPEN_RADIUS_PX the door fires
+// door_slam and plays the 14-frame door_open one-shot; on ANIMATION_COMPLETE
+// it idles on door_open_idle. When the player retreats past
+// DOOR_CLOSE_RADIUS_PX the door fires door_slam again and snaps directly
+// to door_closed_idle.
 //
-// First update silently snaps to whichever pose the player's current
-// distance implies (no animation play), so a door spawned next to the
-// player at scene start doesn't slam or animate immediately.
+// The first update tick snaps silently to the state matching the player's
+// initial distance, so a save loaded near a door doesn't slam at scene
+// start.
 export class Door extends AnimatedEntity {
-  private isOpen = false;
+  private doorState: DoorState = 'closed';
   private initialized = false;
-  private readonly fullAnimKey: string;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     super(scene, x, y, DOOR_IDENTIFIER);
-    this.fullAnimKey = entityAnimFullKey(DOOR_IDENTIFIER, DOOR_ANIM_KEY);
-    // The player↔doors collider (registered in GameScene) treats the door as
-    // a wall when closed. Immovable keeps the player from shoving the door
-    // out of place during contact.
+    // The player↔doors collider's process callback gates on isPassable();
+    // setImmovable keeps the player from shoving the closed door out of
+    // place during contact.
     this.body.setImmovable(true);
-    // AnimatedEntity kicks off the clip with a random progress offset for
-    // visual variety. For a door driven by proximity that's noise — halt
-    // it on the closed pose until the first update() resolves real state.
-    this.snapToPose(CLOSED_FRAME_FROM_END);
+
+    // Scoped completion listener for door_open only. door_closed_idle and
+    // door_open_idle loop and never complete, so the scope is documentation
+    // more than necessity.
+    const openCompleteEvent = `${Phaser.Animations.Events.ANIMATION_COMPLETE_KEY}${entityAnimFullKey(
+      DOOR_IDENTIFIER,
+      'door_open',
+    )}`;
+    this.on(openCompleteEvent, this.onOpenAnimationComplete, this);
   }
 
-  // True when the door is fully open and the player should pass through.
-  // GameScene's player↔doors collider uses this as its process callback so
-  // the collision is skipped only while the door is open.
+  // True when the player↔doors collider should skip collision. Closed = no.
+  // Opening = yes once the visible door has swung past
+  // DOOR_OPEN_PASSABLE_FRAME (Phaser frame index is 1-based). Open = yes.
   isPassable(): boolean {
-    return this.isOpen;
+    if (this.doorState === 'open') return true;
+    if (this.doorState === 'opening') {
+      const idx = this.anims.currentFrame?.index ?? 1;
+      return idx >= DOOR_OPEN_PASSABLE_FRAME;
+    }
+    return false;
   }
 
   update(playerX: number, playerY: number): void {
@@ -60,51 +69,33 @@ export class Door extends AnimatedEntity {
     const distSq = dx * dx + dy * dy;
 
     if (!this.initialized) {
-      this.isOpen = distSq <= DOOR_OPEN_RADIUS_SQ;
       this.initialized = true;
-      this.snapToPose(
-        this.isOpen ? OPEN_FRAME_FROM_END : CLOSED_FRAME_FROM_END,
-      );
+      if (distSq <= DOOR_OPEN_RADIUS_SQ) {
+        this.doorState = 'open';
+        this.playLogical('door_open_idle');
+      }
       return;
     }
 
-    if (this.isOpen && distSq >= DOOR_CLOSE_RADIUS_SQ) {
-      this.isOpen = false;
+    if (this.doorState === 'closed') {
+      if (distSq <= DOOR_OPEN_RADIUS_SQ) {
+        this.doorState = 'opening';
+        this.playLogical('door_open');
+        playOneShot(this.scene, DOOR_SLAM_SOUND_ID);
+      }
+      return;
+    }
+
+    if (distSq >= DOOR_CLOSE_RADIUS_SQ) {
+      this.doorState = 'closed';
+      this.playLogical('door_closed_idle');
       playOneShot(this.scene, DOOR_SLAM_SOUND_ID);
-      this.playToPose(CLOSED_FRAME_FROM_END);
-    } else if (!this.isOpen && distSq <= DOOR_OPEN_RADIUS_SQ) {
-      this.isOpen = true;
-      playOneShot(this.scene, DOOR_SLAM_SOUND_ID);
-      this.playToPose(OPEN_FRAME_FROM_END);
     }
   }
 
-  // Jumps the sprite directly to the target pose with no animation play.
-  // Used on construction and first update so the door doesn't visibly
-  // animate when the scene loads.
-  private snapToPose(offsetFromEnd: number): void {
-    const targetFrame = this.poseFrame(offsetFromEnd);
-    if (!targetFrame) return;
-    this.anims.stop();
-    this.anims.setCurrentFrame(targetFrame);
-  }
-
-  // Replays the clip from frame 0 and freezes it on the target pose.
-  // Used on open↔closed transitions so the door visibly animates between
-  // the two states.
-  private playToPose(offsetFromEnd: number): void {
-    const targetFrame = this.poseFrame(offsetFromEnd);
-    if (!targetFrame) return;
-    this.play(this.fullAnimKey);
-    this.anims.stopOnFrame(targetFrame);
-  }
-
-  private poseFrame(
-    offsetFromEnd: number,
-  ): Phaser.Animations.AnimationFrame | null {
-    const anim = this.scene.anims.get(this.fullAnimKey);
-    if (!anim) return null;
-    const index = anim.frames.length + offsetFromEnd;
-    return anim.frames[index] ?? null;
+  private onOpenAnimationComplete(): void {
+    if (this.doorState !== 'opening') return;
+    this.doorState = 'open';
+    this.playLogical('door_open_idle');
   }
 }

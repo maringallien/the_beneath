@@ -9,6 +9,8 @@ import {
 } from '../audio';
 import { ENEMY_COMBAT_TIMEOUT_MS } from '../constants';
 import type { LoiterPathPoint } from '../ldtk/types';
+import { rollDrop } from './AmmoDrop';
+import type { AmmoDropSpawnerScene } from './AmmoDropSpawnerScene';
 import { AnimatedEntity } from './AnimatedEntity';
 import { EnemyHealthBar } from './EnemyHealthBar';
 import type { EnemyProjectileSpawnOptions } from './EnemyProjectile';
@@ -317,6 +319,10 @@ export class Enemy extends AnimatedEntity {
   // player-dealt damage event; once it elapses we restore HP and hide the
   // bar. Sentinel 0 == not in combat.
   private combatTimeoutAt = 0;
+  // Latches true the moment the death-explosion AoE fires so the frame-
+  // trigger path in onAnimUpdate and the no-anim fallback in enterDeadState
+  // can't double-fire. No-op for entities without behavior.deathExplosion.
+  private deathExplosionFired = false;
 
   constructor(
     scene: Phaser.Scene,
@@ -1448,8 +1454,83 @@ export class Enemy extends AnimatedEntity {
     const played = this.playLogical(deathAnim);
     if (!played) {
       // No death animation registered — destroy immediately so the corpse
-      // doesn't linger on its last hurt/idle frame forever.
+      // doesn't linger on its last hurt/idle frame forever. Spawn the ammo
+      // drop here (rather than on animation-complete) so this short-circuit
+      // path doesn't silently skip loot. Fire the explosion now too: the
+      // frame-trigger path can't run without an animation timeline to
+      // listen on, so falling through here would silently drop the AoE.
+      this.maybeTriggerDeathExplosion();
+      this.maybeSpawnAmmoDrop();
       this.destroy();
+    }
+  }
+
+  // Applies the configured death-explosion AoE damage burst, if any. Called
+  // from onAnimUpdate when the death animation reaches the configured frame,
+  // and from enterDeadState's no-anim fallback when no death animation is
+  // registered. Hits the player and every other live Enemy whose body center
+  // sits inside the radius; self is excluded so the dying entity doesn't
+  // double-tick its own death. sourceIsPlayer:false on the enemy damage path
+  // keeps unrelated enemies from flipping into combat (and revealing their
+  // HP bar) from a third-party blast. Chain explosions are intentional — a
+  // hive caught inside another hive's blast will trigger its own burst when
+  // its own death frame lands. Latched via deathExplosionFired so the
+  // frame-trigger path can't double-fire on a re-emitted ANIMATION_UPDATE.
+  private maybeTriggerDeathExplosion(): void {
+    if (this.deathExplosionFired) return;
+    const explosion = this.behavior.deathExplosion;
+    if (!explosion) return;
+    this.deathExplosionFired = true;
+    const cx = this.body.center.x;
+    const cy = this.body.center.y;
+    const r = explosion.radius;
+    const bodies = this.scene.physics.overlapRect(
+      cx - r,
+      cy - r,
+      r * 2,
+      r * 2,
+      true,
+      false,
+    ) as Phaser.Physics.Arcade.Body[];
+    const rSq = r * r;
+    for (const body of bodies) {
+      const obj = body.gameObject;
+      if (obj === this) continue;
+      // overlapRect uses the axis-aligned bounding rect; reject targets
+      // whose body center sits outside the inscribed circle so a corner
+      // of the square AOI doesn't reach further than authored.
+      const dx = body.center.x - cx;
+      const dy = body.center.y - cy;
+      if (dx * dx + dy * dy > rSq) continue;
+      if (obj instanceof Player) {
+        if (obj.isDead()) continue;
+        obj.hurt(explosion.damage, cx, cy);
+        continue;
+      }
+      if (obj instanceof Enemy) {
+        if (obj.isDead()) continue;
+        obj.takeDamage(explosion.damage, cx, cy, { sourceIsPlayer: false });
+      }
+    }
+  }
+
+  // Rolls each entry in the enemy's `drops` array (if any) and asks the scene
+  // to spawn a pickup per successful roll, at the corpse's current body center.
+  // Called from both death paths: (a) the death-anim ANIMATION_COMPLETE
+  // handler, and (b) the no-death-anim short-circuit in enterDeadState above.
+  // Body center is cached into locals before any destroy() so the spawn
+  // position survives even if the call site destroys this sprite immediately
+  // after.
+  private maybeSpawnAmmoDrop(): void {
+    const drops = this.config.drops;
+    if (!drops || drops.length === 0) return;
+    const spawnX = this.body.center.x;
+    const spawnY = this.body.center.y;
+    const spawner = this.scene as unknown as AmmoDropSpawnerScene;
+    for (const dropConfig of drops) {
+      const kind = rollDrop(dropConfig);
+      if (!kind) continue;
+      spawner.spawnAmmoDrop(kind, spawnX, spawnY);
     }
   }
 
@@ -1478,6 +1559,27 @@ export class Enemy extends AnimatedEntity {
         this.activeTriggerSounds.push(sound);
       }
       this.firedTriggers.add(fireKey);
+    }
+
+    // Death-explosion AoE frame trigger. Fires once when the death animation
+    // reaches behavior.deathExplosion.frame (0-indexed), aligning damage with
+    // the visible blast peak rather than the first frame of the death anim.
+    // Gated on enemyState='dead' + the death anim's full key so a non-death
+    // animation reaching the same numeric frame index can't fire the burst.
+    // Self-latching via deathExplosionFired inside maybeTriggerDeathExplosion.
+    if (
+      this.enemyState === 'dead' &&
+      this.behavior.deathExplosion &&
+      !this.deathExplosionFired
+    ) {
+      const deathAnimKey = this.behavior.deathAnimation ?? 'death';
+      const deathFullKey = entityAnimFullKey(this.getIdentifier(), deathAnimKey);
+      if (
+        animation.key === deathFullKey &&
+        frame.index >= this.behavior.deathExplosion.frame
+      ) {
+        this.maybeTriggerDeathExplosion();
+      }
     }
 
     if (this.enemyState !== 'attack') return;
@@ -1578,6 +1680,7 @@ export class Enemy extends AnimatedEntity {
       const deathAnim = this.behavior.deathAnimation ?? 'death';
       const deathFullKey = entityAnimFullKey(this.getIdentifier(), deathAnim);
       if (animation.key === deathFullKey) {
+        this.maybeSpawnAmmoDrop();
         this.destroy();
       }
       return;

@@ -30,6 +30,12 @@ import {
   SWORD_ATTACK_DAMAGE,
   SWORD_ATTACK_REACH_X,
   SWORD_ATTACK_REACH_Y,
+  INITIAL_GUN1_AMMO,
+  INITIAL_GUN2_AMMO,
+  INITIAL_MAGIC,
+  MAX_GUN1_AMMO,
+  MAX_GUN2_AMMO,
+  MAX_MAGIC,
 } from '../constants';
 import { Enemy } from './Enemy';
 import { Trap } from './Trap';
@@ -101,6 +107,8 @@ export type PlayerHurtSource = 'melee' | 'projectile';
 export interface PlayerHurtOptions {
   readonly source?: PlayerHurtSource;
 }
+
+export type PickupKind = 'gun1' | 'gun2' | 'magic';
 
 const SWORD_SLASH_IMPACT_SOUND_IDS = [
   'sword_slash_impact_1',
@@ -334,6 +342,9 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   private wheelCooldownUntil = 0;
   private flyMode = false;
   private health = PLAYER_MAX_HEALTH;
+  private gun1Ammo = INITIAL_GUN1_AMMO;
+  private gun2Ammo = INITIAL_GUN2_AMMO;
+  private magic = INITIAL_MAGIC;
   private invulnerableUntil = 0;
   // Apex sprite.y during the current airborne phase (lowest y value =
   // highest visual point, since the Y axis points down), or null when
@@ -1507,8 +1518,84 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     return PLAYER_MAX_HEALTH;
   }
 
+  // TODO(player-resources): wire to real consumption (dash/roll cost) and regen.
+  getStamina(): number {
+    return 100;
+  }
+  // TODO(player-resources): wire to real consumption (dash/roll cost) and regen.
+  getMaxStamina(): number {
+    return 100;
+  }
+
+  getMagic(): number {
+    return this.magic;
+  }
+  getMaxMagic(): number {
+    return MAX_MAGIC;
+  }
+
+  getGun1Ammo(): number {
+    return this.gun1Ammo;
+  }
+  getMaxGun1Ammo(): number {
+    return MAX_GUN1_AMMO;
+  }
+
+  getGun2Ammo(): number {
+    return this.gun2Ammo;
+  }
+  getMaxGun2Ammo(): number {
+    return MAX_GUN2_AMMO;
+  }
+
+  // Bulk state setter used by the save/respawn pipeline (and HMR restore).
+  // Position, velocity, mode, and facing are restored by the existing
+  // setPosition/setVelocity/setCurrentMode/setFacing calls in GameScene; this
+  // method handles only the resource fields that don't have public setters
+  // elsewhere. Each value is clamped to its per-kind max so a snapshot
+  // produced under a higher cap (e.g. a future upgrade) can't push the player
+  // above the current limit.
+  //
+  // Note for future maintainers: if you add new player state fields that
+  // need to survive death/respawn, add them to PlayerSnapshot in GameScene
+  // AND to this method so the round-trip stays complete.
+  applyRestoredState(state: {
+    health: number;
+    gun1Ammo: number;
+    gun2Ammo: number;
+    magic: number;
+  }): void {
+    this.health = Phaser.Math.Clamp(state.health, 0, PLAYER_MAX_HEALTH);
+    this.gun1Ammo = Phaser.Math.Clamp(state.gun1Ammo, 0, MAX_GUN1_AMMO);
+    this.gun2Ammo = Phaser.Math.Clamp(state.gun2Ammo, 0, MAX_GUN2_AMMO);
+    this.magic = Phaser.Math.Clamp(state.magic, 0, MAX_MAGIC);
+  }
+
+  // Pickup-driven resource grant. Clamped at the per-kind max so a fresh drop
+  // never pushes a count past capacity. Used by GameScene's player↔drops overlap
+  // handler; consumption (firing depletes ammo, casting depletes magic) is a
+  // separate follow-up (see the player-resources TODO trail elsewhere).
+  addPickup(kind: PickupKind, amount: number): void {
+    if (kind === 'gun1') {
+      this.gun1Ammo = Math.min(MAX_GUN1_AMMO, this.gun1Ammo + amount);
+    } else if (kind === 'gun2') {
+      this.gun2Ammo = Math.min(MAX_GUN2_AMMO, this.gun2Ammo + amount);
+    } else {
+      this.magic = Math.min(MAX_MAGIC, this.magic + amount);
+    }
+  }
+
   isDead(): boolean {
     return this.lockedAction === 'dead';
+  }
+
+  // True while any action (attack/dash/roll/block/climb/hurt/dead) owns the
+  // player's input. Consumed by InteractionManager as the gate that suspends
+  // hold-E progress so the player can't be swinging a sword and simultaneously
+  // opening a chest. Structural — InteractionManager imports it via its own
+  // InteractionPlayerQuery interface, no Player import needed.
+  isInteractionBlocked(): boolean {
+    return this.lockedAction !== null;
   }
 
   hurt(

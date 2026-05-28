@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import type { LdtkEntityInstance } from '../ldtk/types';
 import { AnimatedEntity } from './AnimatedEntity';
+import { Chest } from './Chest';
 import { Door } from './Door';
 import { Enemy } from './Enemy';
 import { listEntityRegistryEntries } from './entityRegistryLoader';
@@ -23,11 +24,10 @@ const SPECIAL_FACTORIES: Readonly<Record<string, EntityFactoryFn>> = {
     const { x, y } = pivotCenter(instance);
     return new Player(scene, x, y);
   },
-  // Door has gameplay logic (proximity-driven open/close + slam SFX) that
-  // generic AnimatedEntity can't express, so it gets a hand-written factory
-  // here. The Door subclass extends AnimatedEntity, so the registry's
-  // animation config still drives its sprite — only the per-frame update
-  // hook is added.
+  // Door is a static, immovable wall. The Door subclass extends
+  // AnimatedEntity so the registry still drives its sprite/body; the
+  // hand-written factory exists so the player↔doors collider can be
+  // wired up against a concrete subclass.
   Door_spawn: (scene, instance) => {
     const { x, y } = pivotCenter(instance);
     return new Door(scene, x, y);
@@ -39,6 +39,18 @@ const SPECIAL_FACTORIES: Readonly<Record<string, EntityFactoryFn>> = {
   Save_spawn: (scene, instance) => {
     const { x, y } = pivotCenter(instance);
     return new Save(scene, x, y);
+  },
+  // Chests share AnimatedEntity's spritesheet wiring but freeze on frame 0
+  // instead of looping. A future interaction hook will call play() on the
+  // returned Chest to run the open animation through once (loops:false in
+  // the registry, so it settles on the last frame).
+  Chest1_spawn: (scene, instance) => {
+    const { x, y } = pivotCenter(instance);
+    return new Chest(scene, x, y, 'Chest1_spawn');
+  },
+  Chest2_spawn: (scene, instance) => {
+    const { x, y } = pivotCenter(instance);
+    return new Chest(scene, x, y, 'Chest2_spawn');
   },
 };
 
@@ -103,17 +115,29 @@ export const DYNAMIC_ENTITY_IDENTIFIERS: ReadonlySet<string> = new Set(
 export interface SpawnedEntities {
   player: Player | null;
   enemies: ReadonlyArray<Enemy>;
-  // Doors with proximity-driven open/close logic. Pulled out of `others`
-  // so GameScene's per-frame loop can call door.update(playerX, playerY)
-  // without an instanceof check on every decoration entity.
+  // Static, immovable doors. Pulled out of `others` so GameScene can
+  // wire the player↔doors collider once at buildWorld time without
+  // iterating a mixed group on every collision check.
   doors: ReadonlyArray<Door>;
   // Passive damage sources. Pulled out of `others` so GameScene can wire
   // the player↔traps overlap once at buildWorld time without iterating a
   // mixed group on every collision check.
   traps: ReadonlyArray<Trap>;
-  // Pure-decoration AnimatedEntities (chests, ambient animals, lamps).
-  // Kept distinct from `enemies`/`traps` so GameScene can iterate enemies
-  // per-frame without an instanceof check.
+  // Hold-E interactable chests. Pulled out of `others` so InteractionManager
+  // gets a pre-typed list at registration time without per-frame instanceof
+  // filtering. Future interactables (NPCs, levers, save crystals) either
+  // graduate similarly out of `others` or stay there and are picked up via
+  // the Interactable type guard at registration time.
+  chests: ReadonlyArray<Chest>;
+  // Hold-E interactable save crystals. Pulled out of `others` for the same
+  // reason as `chests` — InteractionManager gets a pre-typed list. Saves
+  // also need a terrain collider (gravity:true in the registry) so GameScene
+  // adds them to staticEntities explicitly now that they're no longer in
+  // `others`.
+  saves: ReadonlyArray<Save>;
+  // Pure-decoration AnimatedEntities (ambient animals, lamps, etc.).
+  // Kept distinct from `enemies`/`traps`/`chests`/`saves` so GameScene can
+  // iterate typed lists per-frame without an instanceof check.
   others: ReadonlyArray<Phaser.GameObjects.GameObject>;
 }
 
@@ -125,6 +149,8 @@ export function spawnEntities(
   const enemies: Enemy[] = [];
   const doors: Door[] = [];
   const traps: Trap[] = [];
+  const chests: Chest[] = [];
+  const saves: Save[] = [];
   const others: Phaser.GameObjects.GameObject[] = [];
   const unhandled = new Set<string>();
 
@@ -153,6 +179,10 @@ export function spawnEntities(
       doors.push(obj);
     } else if (obj instanceof Trap) {
       traps.push(obj);
+    } else if (obj instanceof Chest) {
+      chests.push(obj);
+    } else if (obj instanceof Save) {
+      saves.push(obj);
     } else {
       others.push(obj);
     }
@@ -166,7 +196,7 @@ export function spawnEntities(
     );
   }
 
-  return { player, enemies, doors, traps, others };
+  return { player, enemies, doors, traps, chests, saves, others };
 }
 
 // Symmetric teardown for spawnEntities. Optionally preserves the player so
@@ -185,6 +215,12 @@ export function destroyEntities(
   }
   for (const trap of spawned.traps) {
     trap.destroy();
+  }
+  for (const chest of spawned.chests) {
+    chest.destroy();
+  }
+  for (const save of spawned.saves) {
+    save.destroy();
   }
   for (const obj of spawned.others) {
     obj.destroy();
@@ -264,6 +300,12 @@ function floorAlignedSpawnPosition(
     // then back up by (anchorY - frameHeight/2) so the anchor row lands at
     // the box bottom rather than the frame bottom.
     correctionY = instance.height / 2 - (anchorY - frameHeight / 2);
+  } else if (pivotY === 0) {
+    // Top-anchored entity (e.g. ceiling-mounted hive). Mirror the pivotX=0
+    // X-axis behavior: align the sprite's top edge with the LDtk box top,
+    // matching where the LDtk preview tile renders. Without this, the sprite
+    // centers within the box and appears lower than the placement point.
+    correctionY = (frameHeight - instance.height) / 2;
   }
   return { x: x + correctionX, y: y + correctionY };
 }

@@ -4,6 +4,8 @@ import type {
   AnimatedEntityAttackConfig,
   AnimatedEntityBehaviorConfig,
   AnimatedEntityConfig,
+  AnimatedEntityDropConfig,
+  AnimatedEntityDropKindConfig,
   AnimatedEntityHitboxConfig,
   AnimatedEntityTrapConfig,
   EntityRegistry,
@@ -80,6 +82,8 @@ function validateEntry(
         'Enemies (with health/AI) use behavior; passive damage sources use trap.',
     );
   }
+  const drops =
+    entry.drops === undefined ? undefined : validateDrops(identifier, entry.drops);
   return {
     defaultAnimation,
     physicsBody: {
@@ -90,7 +94,72 @@ function validateEntry(
     animations,
     behavior,
     trap,
+    drops,
   };
+}
+
+function validateDrops(
+  identifier: string,
+  raw: unknown,
+): ReadonlyArray<AnimatedEntityDropConfig> {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new Error(
+      `entityRegistry["${identifier}"].drops must be a non-empty array`,
+    );
+  }
+  const drops: AnimatedEntityDropConfig[] = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    drops.push(validateDropEvent(identifier, i, raw[i]));
+  }
+  return drops;
+}
+
+function validateDropEvent(
+  identifier: string,
+  index: number,
+  raw: unknown,
+): AnimatedEntityDropConfig {
+  if (raw == null || typeof raw !== 'object') {
+    throw new Error(
+      `entityRegistry["${identifier}"].drops[${index}] must be an object`,
+    );
+  }
+  const d = raw as Record<string, unknown>;
+  const ctx = `entityRegistry["${identifier}"].drops[${index}]`;
+  const chancePct = d.chancePct;
+  if (
+    typeof chancePct !== 'number' ||
+    !Number.isFinite(chancePct) ||
+    chancePct < 0 ||
+    chancePct > 100
+  ) {
+    throw new Error(
+      `${ctx}.chancePct must be a number in [0, 100] (got ${JSON.stringify(chancePct)})`,
+    );
+  }
+  if (!Array.isArray(d.kinds) || d.kinds.length === 0) {
+    throw new Error(`${ctx}.kinds must be a non-empty array`);
+  }
+  const kinds: AnimatedEntityDropKindConfig[] = [];
+  for (let i = 0; i < d.kinds.length; i += 1) {
+    const entryRaw = d.kinds[i];
+    if (entryRaw == null || typeof entryRaw !== 'object') {
+      throw new Error(`${ctx}.kinds[${i}] must be an object`);
+    }
+    const e = entryRaw as Record<string, unknown>;
+    if (e.kind !== 'gun1' && e.kind !== 'gun2' && e.kind !== 'magic') {
+      throw new Error(
+        `${ctx}.kinds[${i}].kind must be "gun1", "gun2", or "magic" (got ${JSON.stringify(e.kind)})`,
+      );
+    }
+    if (typeof e.weight !== 'number' || !Number.isFinite(e.weight) || e.weight < 0) {
+      throw new Error(
+        `${ctx}.kinds[${i}].weight must be a non-negative number (got ${JSON.stringify(e.weight)})`,
+      );
+    }
+    kinds.push({ kind: e.kind, weight: e.weight });
+  }
+  return { chancePct, kinds };
 }
 
 function validateTrap(
@@ -338,6 +407,56 @@ function validateBehavior(
     };
   }
 
+  let deathExplosion:
+    | {
+        readonly damage: number;
+        readonly radius: number;
+        readonly frame: number;
+      }
+    | undefined;
+  if (b.deathExplosion !== undefined) {
+    if (b.deathExplosion === null || typeof b.deathExplosion !== 'object') {
+      throw new Error(`${ctx}.deathExplosion must be an object when set`);
+    }
+    const e = b.deathExplosion as Record<string, unknown>;
+    const ectx = `${ctx}.deathExplosion`;
+    const requirePositive = (field: string): number => {
+      const value = e[field];
+      if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+        throw new Error(`${ectx}.${field} must be a positive number`);
+      }
+      return value;
+    };
+    const frameRaw = e.frame;
+    if (
+      typeof frameRaw !== 'number' ||
+      !Number.isInteger(frameRaw) ||
+      frameRaw < 0
+    ) {
+      throw new Error(
+        `${ectx}.frame must be a non-negative integer (got ${JSON.stringify(frameRaw)})`,
+      );
+    }
+    // Frame must address a valid index of the death animation when one is
+    // registered. When the entity has no death anim the runtime falls back
+    // to firing on enterDeadState, so the frame is unused and we don't
+    // enforce a bound (still required by the schema for authoring clarity).
+    const deathAnimKey = deathAnimation ?? 'death';
+    if (deathAnimKey in animations) {
+      const frameCount = animations[deathAnimKey].frameCount;
+      if (frameRaw >= frameCount) {
+        throw new Error(
+          `${ectx}.frame ${frameRaw} is out of range for "${deathAnimKey}" (frameCount=${frameCount})`,
+        );
+      }
+    }
+    deathExplosion = {
+      damage: requirePositive('damage'),
+      radius: requirePositive('radius'),
+      frame: frameRaw,
+    };
+  }
+
   return {
     health,
     hurtAnimation,
@@ -354,6 +473,7 @@ function validateBehavior(
     attack,
     attackPool,
     dodgeOnProjectile,
+    deathExplosion,
   };
 }
 

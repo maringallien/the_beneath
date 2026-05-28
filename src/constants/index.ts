@@ -68,6 +68,105 @@ export const GUNSLINGER_GUN1_FIRE_RATE_MULTIPLIER = 1.3;
 // than gun1 (rapid fire) to compensate for its slower fire rate.
 export const PROJECTILE_GUN1_DAMAGE = 10;
 export const PROJECTILE_GUN2_DAMAGE = 15;
+
+// Ammo capacity and starting values. INITIAL == MAX so the player spawns with
+// a full magazine. Gun2's smaller capacity reflects its heavier shells.
+export const INITIAL_GUN1_AMMO = 30;
+export const MAX_GUN1_AMMO = 30;
+export const INITIAL_GUN2_AMMO = 10;
+export const MAX_GUN2_AMMO = 10;
+// Per-pickup grant. Gun2 grants fewer to compensate for the smaller magazine
+// and to keep heavier ammo scarce.
+export const AMMO_PICKUP_GUN1_AMOUNT = 5;
+export const AMMO_PICKUP_GUN2_AMOUNT = 2;
+
+// Magic resource: matches the current stub return values so the existing HUD
+// reads transparently across the change from stub to backing field. Magic
+// shards dropped by chests/ghouls/bosses grant MAGIC_PICKUP_AMOUNT per pickup.
+export const INITIAL_MAGIC = 100;
+export const MAX_MAGIC = 100;
+export const MAGIC_PICKUP_AMOUNT = 25;
+
+// Magic orb placeholder: generated procedurally in PreloadScene as a pure
+// black smooth circle. No highlight, no pulse — the visual "magic" comes from
+// the mist particle emitter that follows each spawned orb (see below). Swap
+// for a real PNG by loading at MAGIC_ORB_TEXTURE_KEY in preload() and
+// removing the generator call.
+export const MAGIC_ORB_TEXTURE_KEY = 'magic_orb';
+// Source-pixel size of the generated orb texture. Authored larger than the
+// final display size so LINEAR sampling at the camera's zoom has enough
+// resolution to keep the edge smooth. Reduced from 16 → 12 so the orb reads
+// as slightly smaller than ammo drops.
+export const MAGIC_ORB_TEXTURE_SIZE_PX = 12;
+// Gold-yellow body. The orb itself carries no detail — the mist emitter is
+// what makes it read as magical rather than as a plain dot.
+export const MAGIC_ORB_FILL_COLOR = 0xffd700;
+
+// Magic orbs don't fall — they loiter near their spawn point with a slow
+// sinusoidal drift on both axes. Different X/Y periods produce an open
+// Lissajous figure so the motion never repeats a straight line; per-orb random
+// phase prevents multiple co-located orbs from moving in lockstep.
+export const MAGIC_ORB_LOITER_X_AMPLITUDE_PX = 8;
+export const MAGIC_ORB_LOITER_Y_AMPLITUDE_PX = 5;
+export const MAGIC_ORB_LOITER_X_PERIOD_MS = 2400;
+export const MAGIC_ORB_LOITER_Y_PERIOD_MS = 1800;
+// Lifts the orb's anchor above the source's body surface (chest body.top or
+// enemy body.center) so it visibly hovers in the air rather than resting on
+// the lid / corpse.
+export const MAGIC_ORB_SPAWN_Y_OFFSET_PX = -10;
+
+// Mist particle emitter: each magic orb has one attached, emitting a slow
+// stream of tiny dark puffs that drift upward and fade. "Discrete" means low
+// emission rate so individual particles read separately rather than as a
+// continuous fog.
+export const MIST_PARTICLE_TEXTURE_KEY = 'magic_mist';
+// 6x6 source pixels: small enough to feel like a discrete particle, large
+// enough for LINEAR filtering to soften the edge into something mist-like.
+export const MIST_PARTICLE_TEXTURE_SIZE_PX = 6;
+export const MIST_PARTICLE_COLOR = 0xffd700;
+// Lifespan window per particle (ms). Random within range so the cloud doesn't
+// pulse in a uniform rhythm.
+export const MIST_PARTICLE_LIFESPAN_MIN_MS = 900;
+export const MIST_PARTICLE_LIFESPAN_MAX_MS = 1500;
+// Emit cadence: one particle per ~400ms. Higher = sparser. Low quantity per
+// emission keeps the "discrete" feel.
+export const MIST_PARTICLE_EMIT_FREQUENCY_MS = 400;
+// Drift speed range (px/s). Slow — the mist rises rather than shoots.
+export const MIST_PARTICLE_SPEED_MIN = 6;
+export const MIST_PARTICLE_SPEED_MAX = 14;
+// Particle alpha lifecycle: spawn faint, fade to invisible. Starting below 1
+// keeps individual particles from punching through the dim backgrounds too
+// hard, reinforcing the "wisp" feel.
+export const MIST_PARTICLE_ALPHA_START = 0.55;
+export const MIST_PARTICLE_ALPHA_END = 0;
+// Slight scale-up over lifespan to feel like dissipating vapor.
+export const MIST_PARTICLE_SCALE_START = 0.7;
+export const MIST_PARTICLE_SCALE_END = 1.4;
+// Emission area around the orb's anchor (source px). Particles spawn within
+// this radius of the orb's position, so the mist appears to surround it rather
+// than fountain out of a single point.
+export const MIST_PARTICLE_EMIT_RADIUS_PX = 4;
+
+// World-drop physics body. Smaller than the 16x16 sprite frame so the drop
+// nestles into floor corners and the player's 16x24 body easily overlaps it
+// walking past.
+export const AMMO_DROP_BODY_WIDTH_PX = 10;
+export const AMMO_DROP_BODY_HEIGHT_PX = 10;
+// Sprite scale applied on top of the 16x16 source frame. 0.5 renders the icon
+// at ~8 source px (24 canvas px at zoom 3), readable but not tile-sized.
+export const AMMO_DROP_DISPLAY_SCALE = 0.5;
+// Initial pop on spawn. Negative Y is upward; X gets a uniform ±jitter so a
+// chest dropping two pickups doesn't stack them perfectly.
+export const AMMO_DROP_SPAWN_VELOCITY_Y = -100;
+export const AMMO_DROP_SPAWN_VELOCITY_X_JITTER = 30;
+// Linear X drag (px/s²). Arcade Physics has no surface friction, so without
+// drag the spawn-jitter X velocity persists indefinitely and the drop slides
+// along the floor forever. 400 stops a 30 px/s slide in ~0.08s — the drop
+// settles where it lands without a visible glide.
+export const AMMO_DROP_DRAG_X = 400;
+// Drops despawn after this window to avoid littering arenas where the player
+// over-farmed; 30s is enough to retrace a few rooms but not whole zones.
+export const AMMO_DROP_LIFETIME_MS = 30_000;
 // Sword melee damage per swing. Melee is close-range, so the per-hit value
 // is higher than a single projectile to compensate for the increased risk.
 export const SWORD_ATTACK_DAMAGE = 15;
@@ -114,7 +213,8 @@ export const GUN_OVERLAY_GRIP_ORIGIN_X = 3 / 32;
 export const SCENE_KEYS = {
   BOOT: 'BootScene',
   PRELOAD: 'PreloadScene',
-  GAME: 'GameScene'
+  GAME: 'GameScene',
+  PAUSE: 'PauseScene'
 } as const;
 
 // LDtk level identifier rendered by GameScene. The PreloadScene must inspect
@@ -153,3 +253,335 @@ export const ENEMY_HEALTH_BAR_OUTLINE_COLOR = 0x000000;
 // the bar legible. Tile layers stop at ENTITY_DEPTH, so this is always on top
 // of world geometry too.
 export const ENEMY_HEALTH_BAR_DEPTH = ENTITY_DEPTH + 2;
+
+// Player HUD: two stacked groups. HP/STA/MAG anchor top-left; G1/G2 ammo
+// anchor top-right with the row's right edge against the margin. HP/STA/MAG
+// render art assets; G1/G2 render an ammo icon + count. ORIGIN_*_PX and
+// ROW_PITCH_PX are CANVAS pixels (final screen coords).
+// Margin from the viewport edge to the HUD content's left/top. Sized so the
+// frame's outer corner accents (which extend ~10 canvas px past the content
+// edge at CAMERA_ZOOM=3) still have a few canvas px of clearance from the
+// viewport border instead of clipping into the corner.
+export const PLAYER_HUD_ORIGIN_X_PX = 18;
+export const PLAYER_HUD_ORIGIN_Y_PX = 18;
+// Vertical pitch between HP and the row below it. Sized for the tallest
+// asset (HP slider ~37 canvas px tall at HP_SLIDER_SCALE=0.78) with a small
+// gap below.
+export const PLAYER_HUD_ROW_PITCH_PX = 44;
+// Tighter pitch for the STA→MAG gap. The stamina and magic bars are short
+// (~9 canvas px) so they can sit closer together than HP's row.
+export const PLAYER_HUD_STA_MAG_PITCH_PX = 22;
+// World-unit gap between a row's label and its content sprite/icon, used by
+// the right-aligned ammo group (each row is sized to its own label).
+export const PLAYER_HUD_LABEL_CONTENT_GAP_WORLD_UNITS = 1;
+// World-unit padding between the widest label in the left group and the bar
+// column. All three bars (HP/STA/MAG) are pinned to the same X by computing
+// `worldX + maxLabelWidth + this padding`, so they line up regardless of
+// per-row label size differences.
+export const PLAYER_HUD_LEFT_BAR_INDENT_WORLD_UNITS = 4;
+// Matches the depth the legacy healthText used so the HUD reliably renders on
+// top of every gameplay object including the enemy health bars.
+export const PLAYER_HUD_DEPTH = 10_000;
+export const PLAYER_HUD_LABEL_FONT_FAMILY = 'monospace';
+// Default font size for HUD text (HP label, G1/G2 labels, ammo counts).
+export const PLAYER_HUD_LABEL_FONT_SIZE_PX = 6;
+// Smaller font for STA/MAG labels so they read closer to the short 3-source-
+// pixel bar height and don't tower over their content.
+export const PLAYER_HUD_SMALL_LABEL_FONT_SIZE_PX = 4;
+export const PLAYER_HUD_LABEL_COLOR = '#ffffff';
+
+// Default proximity range (source px) at which an interactable advertises its
+// E icon. Chests are small (14-22 px wide bodies) — at 36 px the icon appears
+// about one body-width before the player would naturally bump the chest, so
+// the prompt reads as "you're close" rather than "you're already there".
+// Squared form is consumed by InteractionManager; recompute when changing.
+export const INTERACTION_RANGE_PX = 36;
+export const INTERACTION_RANGE_SQ = INTERACTION_RANGE_PX * INTERACTION_RANGE_PX;
+
+// Hold time (ms) to commit an interaction. 500 ms is short enough to feel
+// responsive on a chest but long enough to defeat accidental brushes against
+// the E key while running.
+export const INTERACTION_HOLD_DURATION_MS = 500;
+
+// E icon dimensions (source px). Sized to sit beside chests without
+// overlapping the lid; at CAMERA_ZOOM=3 a 9 px box renders ~27 canvas px.
+export const INTERACTION_ICON_SIZE_PX = 9;
+// Source-px gap above the interactable's anchor point. Stacks the icon
+// clear of the closed chest lid (chest1 is 19 px tall, body top sits a few
+// px above world center) with a small breathing margin.
+export const INTERACTION_ICON_OFFSET_Y_PX = 6;
+// Visual styling. The black border was removed in favor of the progress
+// outline being the sole framing element while held.
+export const INTERACTION_ICON_BG_COLOR = 0xffffff;
+export const INTERACTION_ICON_LETTER_COLOR = '#000000';
+// Authored at 2× the visible size so the source canvas has enough resolution
+// for LINEAR filtering to anti-alias the glyph. Combined with
+// INTERACTION_ICON_LETTER_SCALE the on-screen letter ends up the same visual
+// size as the prior 7px monospace render but with smooth edges.
+export const INTERACTION_ICON_FONT_SIZE_PX = 14;
+export const INTERACTION_ICON_LETTER_SCALE = 0.5;
+// Sans-serif stack rasterizes smoother than monospace at small sizes and
+// keeps the glyph readable across OSes (Arial on Win/macOS, Helvetica on
+// macOS, the platform sans-serif fallback elsewhere).
+export const INTERACTION_ICON_FONT_FAMILY = 'Arial, Helvetica, sans-serif';
+
+// Progress outline drawn around the box while E is held. Cyan reads as
+// "active" against the white box and isn't claimed by any other UI element
+// in this project (HP red, MAG dark-red, STA teal — none of them cyan).
+export const INTERACTION_ICON_PROGRESS_COLOR = 0x66ddff;
+export const INTERACTION_ICON_PROGRESS_STROKE_PX = 1;
+// Gap between the icon's box edge and the progress outline (source px).
+// Keeps the outline from visually merging with the white background.
+export const INTERACTION_ICON_PROGRESS_EDGE_OFFSET_PX = 2;
+
+// Alpha lerp rate (per ms) for icon fade in/out. 1/120 ≈ ~120 ms to fully
+// fade — quick enough that walking past a chest doesn't leave the icon
+// hovering, slow enough to read as a deliberate UI element rather than a
+// pop. Manager does its own approach() per frame; no tweens (HMR-safe).
+export const INTERACTION_ICON_FADE_RATE = 1 / 120;
+
+// Renders one step above enemy health bars so the icon is always legible
+// when standing next to an enemy that happens to be next to an interactable.
+export const INTERACTION_ICON_DEPTH = ENEMY_HEALTH_BAR_DEPTH + 1;
+
+// Emitted by a Save crystal when the player commits its hold-E interaction.
+// GameScene listens on its own scene event bus (not on the Player) so the
+// listener is scoped to the world build/teardown lifecycle. Payload is the
+// Save instance so the scene can place the "Game Saved" toast above the
+// specific crystal that was interacted with.
+export const SAVE_REQUESTED_EVENT = 'save-requested';
+
+// Floating "Game Saved" text shown above a Save crystal on successful save.
+// Source-px font size — the toast text uses CAMERA_ZOOM resolution like the
+// HUD so it stays crisp at zoom. Lifespan is the total time before destroy;
+// alpha tweens from 1 to 0 over the same window for a smooth fade-out.
+export const SAVE_TOAST_TEXT = 'Game Saved';
+export const SAVE_TOAST_FONT_FAMILY = 'Arial, Helvetica, sans-serif';
+export const SAVE_TOAST_FONT_SIZE_PX = 6;
+export const SAVE_TOAST_COLOR = '#ffffff';
+export const SAVE_TOAST_DURATION_MS = 1500;
+// Source-px gap above the crystal's body.top so the text floats clear of the
+// sprite silhouette.
+export const SAVE_TOAST_OFFSET_Y_PX = 12;
+// Source-px upward drift over the toast's lifetime — gentle "rises and fades"
+// motion rather than a static pop.
+export const SAVE_TOAST_RISE_PX = 6;
+// Renders above the interaction icon so a toast spawned while another save
+// is in proximity still reads cleanly.
+export const SAVE_TOAST_DEPTH = INTERACTION_ICON_DEPTH + 1;
+
+// Pause menu. Lives in its own scene (SCENE_KEYS.PAUSE) launched on top of
+// GameScene via scene.launch + scene.pause — the idiomatic Phaser pause
+// pattern halts physics, tweens, timers, and update() in one call. Word
+// sprites are loaded as plain PNGs with LINEAR filtering (matching
+// InteractionIcon and the magic orb) so they render smoothly at zoom rather
+// than nearest-sampled by the global pixelArt:true config.
+export const PAUSE_CONTINUE_TEXTURE_KEY = 'pause_word_continue';
+export const PAUSE_QUIT_TEXTURE_KEY = 'pause_word_quit';
+export const PAUSE_CONTINUE_ASSET_PATH =
+  '/DarkSpriteLib/general/ui/words/words_with_bg/ui_-_words1.png';
+export const PAUSE_QUIT_ASSET_PATH =
+  '/DarkSpriteLib/general/ui/words/words_with_bg/ui_-_words3.png';
+
+// Full-viewport dim drawn under the menu. 0.5 alpha dims gameplay enough to
+// pull focus to the menu while still letting the world read through.
+export const PAUSE_DIM_COLOR = 0x000000;
+export const PAUSE_DIM_ALPHA = 0.5;
+
+// Source-pixel scale for the word sprites.
+export const PAUSE_WORD_DISPLAY_SCALE = 1.5;
+// Canvas-pixel gap between the two word sprites once rendered.
+export const PAUSE_WORD_GAP_PX = 32;
+
+// Bounding box around the two word sprites. Drawn with Phaser.Graphics using
+// the same lineStyle+strokeRect approach as PlayerHud.drawGroupFrame; "decor"
+// is achieved with four small filled squares sitting just outside the outer
+// stroke at each corner.
+export const PAUSE_FRAME_COLOR = 0xffffff;
+export const PAUSE_FRAME_STROKE_PX = 2;
+export const PAUSE_FRAME_PADDING_PX = 16;
+export const PAUSE_FRAME_CORNER_ACCENT_SIZE_PX = 4;
+export const PAUSE_FRAME_CORNER_ACCENT_OFFSET_PX = 6;
+
+// Selection tint. Selected = no tint (white passthrough); unselected dims
+// the sprite via setTint. Default selection on open is Continue (index 0)
+// so a reflex Enter keeps the player in the game.
+export const PAUSE_SELECTED_TINT = 0xffffff;
+export const PAUSE_UNSELECTED_TINT = 0x808080;
+
+// Foreground bright-pixel glow. Each tileset used by a Foreground* layer gets
+// a sibling "glow" texture pre-baked at preload: every source pixel whose
+// luminance exceeds FOREGROUND_GLOW_LUMINANCE_THRESHOLD has a soft radial halo
+// painted at its position in the glow atlas. LevelRenderer then draws a second
+// Image per foreground tile from that atlas with ADD blend, so bright dots
+// emit a halo while the surrounding tile pixels stay unchanged. Combined with
+// WORLD_DIM_* below, the contrast pulls focus to the lit dots. Toggle this
+// flag to disable the effect entirely (no bake, no extra draw calls).
+export const FOREGROUND_GLOW_ENABLED = true;
+// LDtk layer identifier prefix that opts a layer into the glow pass. Matches
+// "Foreground1", "Foreground2", "Foreground3" in the_beneath.ldtk. Other
+// tile layers (Parallax*, IntGrid, Background*) are unaffected.
+export const FOREGROUND_GLOW_LAYER_PREFIX = 'Foreground';
+// Suffix appended to a tileset's texture key to address its sibling glow
+// atlas. GlowAtlasBaker writes the atlas under `${tilesetTextureKey(uid)}${SUFFIX}`;
+// LevelRenderer reads from the same key. Keep them in sync.
+export const FOREGROUND_GLOW_TEXTURE_SUFFIX = '_glow';
+// Luminance threshold (0..1, Rec.601 weights) above which a source pixel is
+// treated as "bright" and gets a halo. 0.85 catches near-white dots (stars,
+// candle highlights, lamp cores) while leaving stone/grass mid-tones alone.
+// Raise if too many incidental highlights glow; lower to catch dimmer dots.
+export const FOREGROUND_GLOW_LUMINANCE_THRESHOLD = 0.78;
+// Halo radius in *source* pixels. Camera zoom multiplies the on-screen
+// radius — at CAMERA_ZOOM=3, RADIUS_PX=3 becomes 9 canvas px. Smaller =
+// tighter pinpricks; larger = soft bloom. The atlas is LINEAR-filtered so
+// the halo stays smooth at any zoom.
+export const FOREGROUND_GLOW_RADIUS_PX = 3;
+// Alpha at the very center of a halo (r=0). The radial falloff fades from
+// this value to 0 across RADIUS_PX. Overlapping halos accumulate additively
+// in the bake, so a tight cluster of bright pixels reads brighter than a
+// single isolated dot without each individual halo punching through.
+// Multiplied at runtime by the container's flicker alpha, so this is the
+// peak brightness of a single isolated halo when the flicker is at its
+// maximum — the visible average sits lower (see FLICKER_* below).
+export const FOREGROUND_GLOW_CORE_ALPHA = 0.4;
+// Falloff curve exponent. alpha(r) = CORE_ALPHA * (1 - r/RADIUS)^EXPONENT.
+// 1 = linear, 2 = quadratic (softer center → harder edge), 0.5 = sqrt
+// (bright plateau, fast outer fade). 1.6 reads as a smooth wisp rather than
+// a hard ring or a foggy blob.
+export const FOREGROUND_GLOW_FALLOFF_EXPONENT = 1.6;
+
+// Flicker: each foreground glow container gets a yoyo'd alpha tween between
+// MIN and MAX, with a random duration in [DURATION_MIN, DURATION_MAX] and a
+// random initial delay so neighboring containers fall out of phase. Visual
+// effect: the dots breathe like candlelight rather than glowing steadily.
+// Since the glow images use BlendModes.ADD, multiplying the container alpha
+// directly scales the additive contribution per pixel.
+export const FOREGROUND_GLOW_FLICKER_MIN_ALPHA = 0.45;
+export const FOREGROUND_GLOW_FLICKER_MAX_ALPHA = 1.0;
+// Period range per yoyo half-cycle (ms). A full bright→dim→bright loop
+// takes DURATION × 2. Short enough to read as flicker, long enough to feel
+// organic rather than strobed. Per-container random sample within the range
+// is paired with a per-container random initial delay so the overall world
+// never has every dot pulsing in lockstep.
+export const FOREGROUND_GLOW_FLICKER_DURATION_MIN_MS = 280;
+export const FOREGROUND_GLOW_FLICKER_DURATION_MAX_MS = 720;
+
+// Neon sign flicker. Sign entities whose identifier is registered in
+// SignTextureBaker get split into two textures at first render — a static
+// "structure" image (frame, mounts) and a "lit" overlay (the colored
+// letters/icons). Only the lit overlay receives the flicker tween, so the
+// frame stays visible while the light buzzes on/off. The tween is a chain
+// of randomized pulses: each "burst" plays 1-N rapid on/off pulses, then
+// holds at full brightness for a random idle interval, then loops. Both
+// the burst size, each pulse duration, and the idle interval are sampled
+// independently per cycle — no two cycles look identical, and no two sign
+// instances share a schedule.
+//
+// Alpha at the bottom of a flicker pulse. 0 cuts the lit overlay entirely
+// (true off — the structure carries the sign through the dark beat); a small
+// non-zero residual would keep a faint ghost glow visible at all times.
+export const SIGN_FLICKER_DIM_ALPHA = 0.0;
+// One "burst" is a sequence of 1-N rapid dim/bright pulses, separated by
+// longer idle periods at full brightness. Larger max → noisier/more-broken
+// neon; smaller max → calmer single-pulse flickers. Sampled per cycle.
+export const SIGN_FLICKER_BURST_SIZE_MIN = 1;
+export const SIGN_FLICKER_BURST_SIZE_MAX = 4;
+// Per-pulse duration range in ms (one alpha transition, e.g. bright→dim or
+// dim→bright). Short = abrupt strobe; long = soft pulse. 18-90ms reads as
+// a buzzing fluorescent. Sampled independently for every transition so a
+// single burst contains a mix of fast and slow pulses.
+export const SIGN_FLICKER_PULSE_DURATION_MIN_MS = 18;
+export const SIGN_FLICKER_PULSE_DURATION_MAX_MS = 90;
+// Idle hold at full brightness between bursts. Lower bound caps the max
+// flicker frequency. Sampled per cycle so the pattern stays irregular —
+// a steady period would read as a metronome rather than a faulty light.
+export const SIGN_FLICKER_INTERVAL_MIN_MS = 250;
+export const SIGN_FLICKER_INTERVAL_MAX_MS = 1400;
+
+// Pulsate: smooth sine-eased yoyo between MIN and MAX alpha on a lit
+// overlay. Used by lit decorations whose config.mode is 'pulsate' (e.g.
+// the small teal window dots on House2..House5) — visually a slow,
+// organic "breathing" glow rather than the abrupt sign flicker. MIN > 0
+// keeps the light visible at all times (a true off would read as a
+// flicker, not a pulsate).
+export const SIGN_PULSATE_MIN_ALPHA = 0.25;
+export const SIGN_PULSATE_MAX_ALPHA = 1.0;
+// Half-cycle duration (ms). One full breath (dim → bright → dim) takes
+// DURATION × 2. Random per-instance sample within this range so neighboring
+// house lights drift apart in phase and period — without the variance, a
+// city block reads as a single synchronized strobe. Wider range = stronger
+// drift over time; narrower = more uniform breathing.
+export const SIGN_PULSATE_DURATION_MIN_MS = 550;
+export const SIGN_PULSATE_DURATION_MAX_MS = 1300;
+
+// World dim overlay. Camera-pinned black Rectangle drawn at a depth below
+// the lowest IntGrid/Foreground* layer, so background + parallax visuals are
+// darkened but ground (IntGrid) and foreground tiles (and their glow) are
+// not. IntGrid is kept bright alongside Foreground* because they share a
+// tileset — splitting them across the dim makes the same source pixel render
+// at two different brightnesses where Foreground1 tiles overlay IntGrid
+// ground. Entities (ENTITY_DEPTH=100) sit above the dim, so the
+// player/enemies/HUD render at full brightness too.
+//
+// Alpha is dynamic when LIGHTING_ENABLED is true: GameScene samples openness
+// at the player's position and lerps the dim alpha between
+// WORLD_DIM_ALPHA_OPEN (in wide caves) and WORLD_DIM_ALPHA_ENCLOSED (in
+// tight tunnels). When LIGHTING_ENABLED is false, the dim stays at the
+// static WORLD_DIM_ALPHA value. Set WORLD_DIM_ALPHA=0 and LIGHTING_ENABLED
+// =false to disable the dim entirely without removing the wiring.
+export const WORLD_DIM_COLOR = 0x000000;
+export const WORLD_DIM_ALPHA = 0.15;
+
+// Openness-based dynamic lighting. For each walkable IntGrid cell in a
+// level, the system walks outward in 8 directions until it hits a solid
+// cell (or the level edge), takes the min distance, and normalizes it to a
+// 0..1 "openness" score. Each frame GameScene samples openness at the
+// player's current world position and modulates the screen-wide dim alpha
+// between OPEN and ENCLOSED. Net effect: the whole screen brightens in
+// open caves and dims in tight corridors. Set ENABLED=false to disable
+// the modulation (dim stays at static WORLD_DIM_ALPHA).
+export const LIGHTING_ENABLED = true;
+// Cells beyond this radius are treated as fully open. Lower = small rooms
+// also register as "fully open". 4 cells (64 px at 16-px gridSize) means
+// roughly an 8×8 px room counts as fully open. Higher pushes the bright end
+// further toward genuinely large caves.
+export const OPENNESS_SATURATION_CELLS = 4;
+// Half-extent (in cells) of the region-averaging kernel applied after the
+// per-cell raycast. Every cell's final openness = mean openness of the
+// walkable cells within this radius. The point is that screen brightness
+// reflects the surrounding *region's* openness, not the player's exact
+// tile — so standing next to a wall inside a big room still reads as
+// "big room" rather than "next to a wall". Larger = more uniform within
+// rooms but smears across multiple rooms (and on small levels can collapse
+// the entire level into one uniform value); smaller = more variation
+// within rooms but sharper room-to-room contrast. 5 cells ≈ an 11×11 cell
+// window (176 px) which captures local region without swallowing an
+// entire small level.
+export const OPENNESS_REGION_RADIUS_CELLS = 5;
+// Contrast power applied to the openness score after smoothing. Values < 1
+// lift mid-range openness toward 1.0 — i.e. modestly open rooms register as
+// "very open" and the brightness gap between corridor and cave widens. At
+// 0.4 a 50%-open room reads as ~76% open. Set to 1.0 to disable the curve.
+// Tune lower (e.g. 0.25) for an even more dramatic gap; higher (e.g. 0.8)
+// for a gentler ramp. Type-annotated as `number` so the consumer can
+// compare against 1 to short-circuit the no-op case without TS narrowing
+// the constant to its literal value.
+export const OPENNESS_CONTRAST_POWER: number = 0.4;
+// Dim alpha when the player is in a fully-open area (openness = 1). 0 means
+// no dim at all — the parallax backgrounds render at full brightness.
+export const WORLD_DIM_ALPHA_OPEN = 0.0;
+// Dim alpha when the player is in a fully-enclosed area (openness = 0).
+// Higher = darker tunnel. 0.85 is near-black tunnels (intentionally
+// extreme during tuning so brightness variation is unmistakable); dial
+// down to 0.5-0.6 once the curve feels right.
+export const WORLD_DIM_ALPHA_ENCLOSED = 0.85;
+// Lerp rate (per second) used to ease the current alpha toward the
+// openness-derived target. 4.0 ≈ ~250 ms to traverse most of the gap. Lower
+// = slower fade (more cinematic); higher = snappier response to crossing a
+// doorway. The smoothing is what keeps screen brightness from flickering as
+// the player walks between cells of different openness scores.
+export const LIGHTING_LERP_RATE_PER_SEC = 4.0;
+// Camera-pinned text overlay showing live lighting state (raw openness
+// sample, target alpha, smoothed alpha) for diagnostics during tuning.
+// Disable once the lighting curve feels right.
+export const LIGHTING_DEBUG_HUD = true;

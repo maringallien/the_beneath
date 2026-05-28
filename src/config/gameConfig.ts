@@ -1,8 +1,9 @@
 import Phaser from 'phaser';
 import { GRAVITY_Y } from '../constants';
 import { BootScene } from '../scenes/BootScene';
-import { PreloadScene } from '../scenes/PreloadScene';
 import { GameScene } from '../scenes/GameScene';
+import { PauseScene } from '../scenes/PauseScene';
+import { PreloadScene } from '../scenes/PreloadScene';
 
 export const gameConfig: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
@@ -23,5 +24,5 @@ export const gameConfig: Phaser.Types.Core.GameConfig = {
     mode: Phaser.Scale.RESIZE,
     parent: 'game'
   },
-  scene: [BootScene, PreloadScene, GameScene]
+  scene: [BootScene, PreloadScene, GameScene, PauseScene]
 };

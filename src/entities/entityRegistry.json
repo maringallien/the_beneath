@@ -6,6 +6,21 @@
       "height": 17
     },
     "gravity": true,
+    "drops": [
+      {
+        "chancePct": 50,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 1
+          },
+          {
+            "kind": "gun2",
+            "weight": 1
+          }
+        ]
+      }
+    ],
     "behavior": {
       "health": 25,
       "hurtSoundId": "bandit_hurt",
@@ -81,6 +96,21 @@
       "height": 10
     },
     "gravity": true,
+    "drops": [
+      {
+        "chancePct": 50,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 1
+          },
+          {
+            "kind": "gun2",
+            "weight": 1
+          }
+        ]
+      }
+    ],
     "behavior": {
       "health": 15,
       "hurtAnimation": "take_hit",
@@ -240,6 +270,21 @@
       "height": 21
     },
     "gravity": true,
+    "drops": [
+      {
+        "chancePct": 50,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 1
+          },
+          {
+            "kind": "gun2",
+            "weight": 1
+          }
+        ]
+      }
+    ],
     "behavior": {
       "health": 25,
       "hurtAnimation": "take_hit",
@@ -386,6 +431,90 @@
       }
     }
   },
+  "Chest1_spawn": {
+    "defaultAnimation": "chest_1.1",
+    "physicsBody": {
+      "width": 14,
+      "height": 10
+    },
+    "gravity": false,
+    "drops": [
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 2
+          },
+          {
+            "kind": "gun2",
+            "weight": 1
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "magic",
+            "weight": 1
+          }
+        ]
+      }
+    ],
+    "animations": {
+      "chest_1.1": {
+        "file": "DarkSpriteLib/general/objects/animated_objects/sci-fi_chests/chest_1.1.png",
+        "frameWidth": 20,
+        "frameHeight": 19,
+        "frameCount": 35,
+        "loops": false
+      }
+    }
+  },
+  "Chest2_spawn": {
+    "defaultAnimation": "chest_5.2",
+    "physicsBody": {
+      "width": 22,
+      "height": 15
+    },
+    "gravity": false,
+    "drops": [
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 1
+          },
+          {
+            "kind": "gun2",
+            "weight": 2
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "magic",
+            "weight": 1
+          }
+        ]
+      }
+    ],
+    "animations": {
+      "chest_5.2": {
+        "file": "DarkSpriteLib/general/objects/animated_objects/sci-fi_chests/chest_5.2.png",
+        "frameWidth": 43,
+        "frameHeight": 29,
+        "frameCount": 55,
+        "loops": false,
+        "anchorX": 18,
+        "anchorY": 29
+      }
+    }
+  },
   "Chest_2_1_spawn": {
     "defaultAnimation": "chest_2.1",
     "physicsBody": {
@@ -463,6 +592,21 @@
       "height": 15
     },
     "gravity": true,
+    "drops": [
+      {
+        "chancePct": 50,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 1
+          },
+          {
+            "kind": "gun2",
+            "weight": 1
+          }
+        ]
+      }
+    ],
     "behavior": {
       "health": 20,
       "hurtSoundId": "bandit_hurt",
@@ -558,6 +702,21 @@
       "height": 16
     },
     "gravity": true,
+    "drops": [
+      {
+        "chancePct": 50,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 1
+          },
+          {
+            "kind": "gun2",
+            "weight": 1
+          }
+        ]
+      }
+    ],
     "behavior": {
       "health": 40,
       "hurtSoundId": "dark_warden_hurt",
@@ -664,6 +823,21 @@
       "height": 17
     },
     "gravity": true,
+    "drops": [
+      {
+        "chancePct": 50,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 1
+          },
+          {
+            "kind": "gun2",
+            "weight": 1
+          }
+        ]
+      }
+    ],
     "behavior": {
       "health": 20,
       "attack": {
@@ -829,19 +1003,33 @@
     }
   },
   "Door_spawn": {
-    "defaultAnimation": "door_open_idle",
+    "defaultAnimation": "door_closed_idle",
     "physicsBody": {
       "width": 21,
       "height": 24
     },
     "gravity": false,
     "animations": {
+      "door_closed_idle": {
+        "file": "DarkSpriteLib/the_beneath/objects/animated_objects/door_closed_idle.png",
+        "frameWidth": 41,
+        "frameHeight": 48,
+        "frameCount": 1,
+        "loops": true
+      },
+      "door_open": {
+        "file": "DarkSpriteLib/the_beneath/objects/animated_objects/door_open.png",
+        "frameWidth": 41,
+        "frameHeight": 48,
+        "frameCount": 14,
+        "loops": false
+      },
       "door_open_idle": {
         "file": "DarkSpriteLib/the_beneath/objects/animated_objects/door_open_idle.png",
         "frameWidth": 41,
         "frameHeight": 48,
-        "frameCount": 15,
-        "loops": false
+        "frameCount": 1,
+        "loops": true
       }
     }
   },
@@ -987,6 +1175,21 @@
       "height": 32
     },
     "gravity": true,
+    "drops": [
+      {
+        "chancePct": 50,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 1
+          },
+          {
+            "kind": "gun2",
+            "weight": 1
+          }
+        ]
+      }
+    ],
     "behavior": {
       "health": 25,
       "hurtAnimation": "take_hit",
@@ -1099,6 +1302,25 @@
       "height": 22
     },
     "gravity": true,
+    "drops": [
+      {
+        "chancePct": 50,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 1
+          },
+          {
+            "kind": "gun2",
+            "weight": 1
+          },
+          {
+            "kind": "magic",
+            "weight": 1
+          }
+        ]
+      }
+    ],
     "behavior": {
       "health": 20,
       "hurtAnimation": "take_hit",
@@ -1180,6 +1402,21 @@
       "height": 18
     },
     "gravity": false,
+    "drops": [
+      {
+        "chancePct": 50,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 1
+          },
+          {
+            "kind": "gun2",
+            "weight": 1
+          }
+        ]
+      }
+    ],
     "behavior": {
       "health": 30,
       "hurtAnimation": "take_hit",
@@ -1296,6 +1533,21 @@
       "height": 35
     },
     "gravity": true,
+    "drops": [
+      {
+        "chancePct": 50,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 1
+          },
+          {
+            "kind": "gun2",
+            "weight": 1
+          }
+        ]
+      }
+    ],
     "behavior": {
       "health": 60,
       "hurtAnimation": "take_hit",
@@ -1487,6 +1739,65 @@
       "height": 30
     },
     "gravity": true,
+    "drops": [
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 1
+          },
+          {
+            "kind": "gun2",
+            "weight": 2
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 1
+          },
+          {
+            "kind": "gun2",
+            "weight": 2
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 1
+          },
+          {
+            "kind": "gun2",
+            "weight": 2
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "magic",
+            "weight": 1
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "magic",
+            "weight": 1
+          }
+        ]
+      }
+    ],
     "behavior": {
       "health": 50,
       "hurtAnimation": "take_hit",
@@ -1763,6 +2074,21 @@
       "height": 16
     },
     "gravity": true,
+    "drops": [
+      {
+        "chancePct": 50,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 1
+          },
+          {
+            "kind": "gun2",
+            "weight": 1
+          }
+        ]
+      }
+    ],
     "behavior": {
       "health": 15,
       "hurtAnimation": "take_hit",
@@ -1919,6 +2245,65 @@
       "height": 15
     },
     "gravity": true,
+    "drops": [
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 1
+          },
+          {
+            "kind": "gun2",
+            "weight": 2
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 1
+          },
+          {
+            "kind": "gun2",
+            "weight": 2
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "gun1",
+            "weight": 1
+          },
+          {
+            "kind": "gun2",
+            "weight": 2
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "magic",
+            "weight": 1
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "magic",
+            "weight": 1
+          }
+        ]
+      }
+    ],
     "behavior": {
       "health": 100,
       "hurtAnimation": "take_hit",
@@ -2427,13 +2812,18 @@
   "The_hive_spawn": {
     "defaultAnimation": "idle",
     "physicsBody": {
-      "width": 31,
+      "width": 21,
       "height": 25
     },
     "gravity": false,
     "behavior": {
       "health": 50,
-      "immovable": true
+      "immovable": true,
+      "deathExplosion": {
+        "damage": 20,
+        "radius": 60,
+        "frame": 4
+      }
     },
     "animations": {
       "death": {
