@@ -6,6 +6,7 @@ import {
   FOREGROUND_GLOW_FLICKER_MAX_ALPHA,
   FOREGROUND_GLOW_FLICKER_MIN_ALPHA,
   FOREGROUND_GLOW_LAYER_PREFIX,
+  LAYER_BRIGHTNESS_FACTORS,
   SIGN_FLICKER_BURST_SIZE_MAX,
   SIGN_FLICKER_BURST_SIZE_MIN,
   SIGN_FLICKER_DIM_ALPHA,
@@ -109,6 +110,34 @@ export function renderLevel(
     }
 
     out.push({ identifier: src.identifier, type: src.type, container });
+
+    // Per-layer brightness lift: for any layer whose identifier opts in via
+    // LAYER_BRIGHTNESS_FACTORS, draw an ADD-blended sibling of each tile so
+    // the layer reads (factor - 1) × 100% brighter without touching the
+    // shared tileset texture. Used when a foreground layer shares its
+    // tileset uid with the IntGrid ground and the two need to render at
+    // different brightnesses (the per-tileset preload lift can't
+    // differentiate them, since both pull from the same source pixels).
+    const brightnessFactor = LAYER_BRIGHTNESS_FACTORS[src.identifier];
+    if (brightnessFactor !== undefined && brightnessFactor > 1.0) {
+      const overlayAlpha = brightnessFactor - 1.0;
+      const overlayContainer = scene.add.container(level.worldX, level.worldY);
+      overlayContainer.setDepth(src.depth);
+      for (const t of src.tiles) {
+        const img = scene.add.image(t.px[0], t.px[1], textureKey, t.t);
+        img.setOrigin(0, 0);
+        img.setBlendMode(Phaser.BlendModes.ADD);
+        img.setAlpha(overlayAlpha);
+        if ((t.f & FLIP_HORIZONTAL) !== 0) img.setFlipX(true);
+        if ((t.f & FLIP_VERTICAL) !== 0) img.setFlipY(true);
+        overlayContainer.add(img);
+      }
+      out.push({
+        identifier: src.identifier,
+        type: src.type,
+        container: overlayContainer,
+      });
+    }
 
     // Glow pass: for any layer whose identifier opts into the effect, draw a
     // sibling glow image per tile from the pre-baked atlas with ADD blend.

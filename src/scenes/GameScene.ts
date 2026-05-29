@@ -14,11 +14,13 @@ import {
   CAMERA_MAX_VERTICAL_LAG_PX,
   CAMERA_VERTICAL_OFFSET_PX,
   CAMERA_ZOOM,
-  CURRENT_LEVEL_IDENTIFIER,
   ENTITY_DEPTH,
+  LANDING_CAMERA_Y_OFFSET_PX,
+  LANDING_PLAYER_VIEWPORT_FRACTION_X,
   PLAYER_DEPTH,
   RESPAWN_DELAY_MS,
   SAVE_REQUESTED_EVENT,
+  SHOP_REQUESTED_EVENT,
   SAVE_TOAST_COLOR,
   SAVE_TOAST_DEPTH,
   SAVE_TOAST_DURATION_MS,
@@ -28,6 +30,7 @@ import {
   SAVE_TOAST_RISE_PX,
   SAVE_TOAST_TEXT,
   SCENE_KEYS,
+  STARTING_LEVEL_IDENTIFIER,
   LIGHTING_DEBUG_HUD,
   LIGHTING_ENABLED,
   LIGHTING_LERP_RATE_PER_SEC,
@@ -45,6 +48,7 @@ import {
 import {
   destroyEntities,
   pivotCenter,
+  respawnEnemyAt,
   spawnEntities,
   type SpawnedEntities,
 } from '../entities/EntityFactory';
@@ -53,6 +57,8 @@ import { InteractionManager } from '../entities/InteractionManager';
 import { PLAYER_DIED_EVENT, Player, type PickupKind } from '../entities/Player';
 import { PlayerHud } from '../entities/PlayerHud';
 import { Save } from '../entities/Save';
+import type { ShopKind } from '../entities/shop/shopTypes';
+import { ShopOverlay } from '../ui/ShopOverlay';
 import {
   Projectile,
   type ProjectileSpawnOptions,
@@ -71,6 +77,7 @@ import {
 } from '../ldtk/parseLdtk';
 import type { LdtkProject } from '../ldtk/types';
 import { subscribeLdtkUpdate } from '../level/HotReloadBus';
+import { EnemyRespawnManager, type PendingRespawn } from '../level/EnemyRespawnManager';
 import { buildIntGridCollision } from '../level/LevelCollision';
 import {
   destroyRenderedLevel,
@@ -122,6 +129,8 @@ interface PlayerSnapshot {
   gun1Ammo: number;
   gun2Ammo: number;
   magic: number;
+  stamina: number;
+  coins: number;
 }
 
 // Pixels of camera-viewport padding when deciding whether a level is visible.
@@ -218,6 +227,11 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   // the icon and re-registers fresh chest references rather than holding on
   // to destroyed sprites.
   private interactions: InteractionManager | null = null;
+  // DOM-based merchant shop overlay. Created lazily on first openShop, then
+  // reused for every subsequent merchant interaction within the same world.
+  // tearDownWorld force-closes any open shop and nulls the reference so HMR
+  // rebuilds get a fresh overlay tied to the new Player instance.
+  private shopOverlay: ShopOverlay | null = null;
   // Most recent player checkpoint, set by takeSave() when the player commits
   // a Save crystal interaction. Survives tearDownWorld/buildWorld so the
   // respawn-from-save path can read it after the world rebuild, and survives
@@ -242,6 +256,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   // to drive WorldDimOverlay's alpha. Cleared in tearDownWorld so HMR/respawn
   // rebuild from fresh IntGrid data.
   private opennessLookup: OpennessLookup | null = null;
+  // Tracks killed non-boss enemies waiting to respawn at their original LDtk
+  // position once ENEMY_RESPAWN_DELAY_MS has elapsed AND the spawn point is
+  // off-camera. Owned by the buildWorld/tearDownWorld lifecycle: instantiated
+  // alongside the enemies group, cleared on teardown so HMR/respawn-from-save
+  // rebuild from a clean slate.
+  private respawnManager: EnemyRespawnManager | null = null;
   // Smoothed dim alpha. Tracks the per-frame lerp toward the openness-derived
   // target so screen brightness eases across region boundaries instead of
   // snapping cell-by-cell. Initialized to the static WORLD_DIM_ALPHA at
@@ -255,19 +275,49 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   // target/current dim alpha). Enabled by LIGHTING_DEBUG_HUD; created in
   // buildWorld alongside worldDim; destroyed in tearDownWorld.
   private lightingDebugText: Phaser.GameObjects.Text | null = null;
+  // First-boot flag forwarded from PreloadScene via the init() launch data.
+  // True → create() routes through the landing-page path (camera locked,
+  // player frozen, LandingScene overlay launched). Respawn-from-save and
+  // HMR rebuilds never set this, so they go straight to gameplay.
+  private shouldShowLanding = false;
+  // Mirror of shouldShowLanding kept live across the landing-page lifetime.
+  // update() gates clampCameraLag on this so the manual camera scroll set
+  // by positionCameraForLanding() isn't fought by the follow-clamp math
+  // every frame. beginGameplay() flips this to false when the player
+  // takes control.
+  private landingActive = false;
 
   constructor() {
     super({ key: SCENE_KEYS.GAME });
   }
 
+  // Phaser lifecycle hook fired before create(). Captures the launch-data
+  // payload passed in scene.start(GAME, data). Without an explicit value
+  // (HMR, scene.restart(), or any other entry path that doesn't pass data)
+  // shouldShowLanding stays false and the landing page is bypassed.
+  init(data: { startLanding?: boolean } = {}): void {
+    this.shouldShowLanding = data.startLanding ?? false;
+  }
+
   create(): void {
     this.buildWorld(parseLdtkProject(ldtkRaw));
-    this.setupHud();
-    // Drive ambience from whichever level the player spawned in. State lives
-    // in the SoundManager module so this survives scene.restart() (respawn)
-    // without resetting tracks. Non-override levels resolve to the global
-    // ambience set; override levels (Level_0/6/17/19) crossfade to their own.
-    setLevelAmbience(this, this.getCurrentLevelId());
+    if (this.shouldShowLanding) {
+      // Landing path: freeze the player, snap the camera to the landing
+      // framing, and launch LandingScene on top. HUD + ambience are deferred
+      // to beginGameplay() so neither appears during the start screen.
+      this.landingActive = true;
+      this.cameras.main.stopFollow();
+      this.positionCameraForLanding();
+      this.player.setControlsEnabled(false);
+      this.scene.launch(SCENE_KEYS.LANDING);
+    } else {
+      this.setupHud();
+      // Drive ambience from whichever level the player spawned in. State lives
+      // in the SoundManager module so this survives scene.restart() (respawn)
+      // without resetting tracks. Non-override levels resolve to the global
+      // ambience set; override levels (Level_0/6/17/19) crossfade to their own.
+      setLevelAmbience(this, this.getCurrentLevelId());
+    }
     this.hotReloadUnsub = subscribeLdtkUpdate(this.onLdtkChange);
     // ESC opens the pause menu. Event-based (not JustDown-polled) so the
     // listener is naturally scoped: Phaser disables a scene's keyboard
@@ -277,6 +327,49 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.onSceneShutdown, this);
   }
 
+  // Anchors the camera so the player sits at LANDING_PLAYER_VIEWPORT_FRACTION_X
+  // from the LEFT of the viewport, leaving the right side clear for the
+  // START button rendered by LandingScene. centerOn(cx, cy) centers the
+  // worldView on (cx, cy) in world space, so offsetting cx by half the
+  // display width minus the desired fraction shifts the player to the
+  // target column. Y centers on the SPAWN LEVEL'S vertical midpoint
+  // (rather than the player's y) so the framing reads as a deliberate
+  // composition of the level rather than wherever the spawn entity sits;
+  // falls back to player.y if the player isn't inside any level rect on
+  // the first frame.
+  private positionCameraForLanding(): void {
+    const cam = this.cameras.main;
+    const centerX =
+      this.player.x +
+      cam.displayWidth * (0.5 - LANDING_PLAYER_VIEWPORT_FRACTION_X);
+    const levelBounds = this.getLevelBoundsAt(this.player.x, this.player.y);
+    const baseCenterY = levelBounds
+      ? levelBounds.worldY + levelBounds.pxHei * 0.5
+      : this.player.y;
+    cam.centerOn(centerX, baseCenterY + LANDING_CAMERA_Y_OFFSET_PX);
+  }
+
+  // Hands control to the player after the landing fade-out completes.
+  // Idempotent: a stray second call (e.g. queued FADE_OUT_COMPLETE from a
+  // double-click) is a no-op. Performs the deferred setup that create()
+  // skipped on the landing path — HUD construction, ambience kickoff,
+  // camera follow — and unfreezes the player so they can move.
+  beginGameplay(): void {
+    if (!this.landingActive) return;
+    this.landingActive = false;
+    if (!this.hud) {
+      this.setupHud();
+    }
+    setLevelAmbience(this, this.getCurrentLevelId());
+    // Re-enable the follow camera using the same parameters as buildWorld()
+    // would have applied. From the locked landing position the camera will
+    // smoothly lerp back to the centered-on-player position during the
+    // fade-in — a nice incidental flourish, not a problem.
+    this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
+    this.cameras.main.setFollowOffset(0, CAMERA_VERTICAL_OFFSET_PX);
+    this.player.setControlsEnabled(true);
+  }
+
   // Launches PauseScene on top of this scene, then pauses this scene. Order
   // matters: launch first so PauseScene is in the active scenes list before
   // this scene's update loop stops. Also freezes the global animation
@@ -284,8 +377,38 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   // behind the dim — scene.pause halts update/physics/tweens/timers but
   // leaves the animation manager running.
   private openPauseMenu(): void {
+    // Ignore ESC while the landing-page overlay is active so the menu can't
+    // stack on top of the start screen.
+    if (this.landingActive) return;
     this.anims.pauseAll();
     this.scene.launch(SCENE_KEYS.PAUSE);
+    this.scene.pause();
+  }
+
+  // SHOP_REQUESTED_EVENT handler. Opens the DOM-based ShopOverlay (the shop
+  // lives as styled HTML over the Phaser canvas rather than a Phaser scene)
+  // and pauses GameScene so physics/timers/update halt while the buyer
+  // shops. The overlay calls onClose when the user dismisses it, which
+  // resumes the scene and the global animation manager symmetrically.
+  // Player.tryPurchase is invoked directly by the overlay across the pause
+  // boundary — the Player instance is still alive in memory while paused.
+  private openShop(payload: { kind: ShopKind }): void {
+    if (this.landingActive) return;
+    if (!this.shopOverlay) {
+      const parent =
+        this.game.canvas.parentElement ?? document.body;
+      this.shopOverlay = new ShopOverlay(this, parent);
+    }
+    if (this.shopOverlay.isOpen()) return;
+    this.anims.pauseAll();
+    this.shopOverlay.open({
+      kind: payload.kind,
+      player: this.player,
+      onClose: () => {
+        this.anims.resumeAll();
+        this.scene.resume();
+      },
+    });
     this.scene.pause();
   }
 
@@ -325,6 +448,8 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
         maxGun1Ammo: this.player.getMaxGun1Ammo(),
         gun2Ammo: this.player.getGun2Ammo(),
         maxGun2Ammo: this.player.getMaxGun2Ammo(),
+        coins: this.player.getCoins(),
+        maxCoins: this.player.getMaxCoins(),
       },
       this.cameras.main,
     );
@@ -335,6 +460,15 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.updateEnemies();
     this.updateTraps();
     this.updateDoors();
+    // Respawn scan runs after the per-entity ticks so any enemy that died
+    // this frame (DESTROY fired during updateEnemies → recordDeath enqueued)
+    // is in the registry before we scan. Internal throttle gates the scan
+    // to ENEMY_RESPAWN_CHECK_INTERVAL_MS regardless of frame rate.
+    this.respawnManager?.tick(
+      this.cameras.main,
+      this.time.now,
+      this.handleRespawn,
+    );
     // Interaction tick after the player and per-entity updates so the
     // closest-target scan reads this frame's resolved positions (the player
     // may have moved during update(), and Chest.canInteract() can flip from
@@ -345,8 +479,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       this.game.loop.delta,
     );
     // HUD position is driven by the camera PRE_RENDER event (see setupHud)
-    // so it stays in sync with the current frame's scroll.
-    this.clampCameraLag();
+    // so it stays in sync with the current frame's scroll. Skipped while
+    // the landing page holds the camera at a fixed scroll — the clamp
+    // would otherwise fight positionCameraForLanding() every frame.
+    if (!this.landingActive) {
+      this.clampCameraLag();
+    }
     this.cullOffscreenLevels();
     this.updateAmbience();
     this.updateLighting();
@@ -830,7 +968,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
 
     // Spawn entities from every level so enemies/items in other levels exist
     // when the player walks into them. The player factory only fires for the
-    // single Sword_master_spawn entity (currently in CURRENT_LEVEL_IDENTIFIER).
+    // single Sword_master_spawn entity (currently in STARTING_LEVEL_IDENTIFIER).
     const allEntities = project.levels.flatMap(getEntities);
     // Audio-anchor pass: decoration entities (House2/House6/etc.) bound to
     // a spatial sound in soundRegistry get a per-instance looping audio
@@ -841,18 +979,10 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       const { x, y } = pivotCenter(instance);
       registerEntitySound(this, instance.__identifier, instance.iid, x, y);
     }
+    this.respawnManager = new EnemyRespawnManager();
     const spawned = spawnEntities(this, allEntities);
     for (const enemy of spawned.enemies) {
-      enemy.setDepth(ENTITY_DEPTH);
-      this.enemies.add(enemy);
-      // Moving creatures (wasps, evil crows, spark bugs) carry their own
-      // spatial loops and periodic-call schedulers. The bindings live in
-      // soundRegistry.json keyed by LDtk identifier; the manager no-ops
-      // for unbound enemies, so a single call covers every enemy class.
-      registerMovingEntitySound(this, enemy.getIdentifier(), enemy);
-      registerEnemyWalkSound(this, enemy.getIdentifier(), enemy);
-      registerEntityPeriodicSound(this, enemy.getIdentifier(), enemy);
-      registerEntitySoundSequence(this, enemy.getIdentifier(), enemy);
+      this.attachEnemyToWorld(enemy);
     }
     for (const trap of spawned.traps) {
       trap.setDepth(ENTITY_DEPTH);
@@ -882,7 +1012,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     for (const save of spawned.saves) {
       this.staticEntities.add(save);
     }
-    const spawnLevel = getLevel(project, CURRENT_LEVEL_IDENTIFIER);
+    // Merchants also graduated out of `others`. Tech shop has gravity:false
+    // (the collider is a no-op for it); mushroom merchant has gravity:true
+    // and needs the terrain collider to settle on the floor. Uniform add is
+    // simpler than branching on the entity kind here.
+    for (const merchant of spawned.merchants) {
+      this.staticEntities.add(merchant);
+    }
+    const spawnLevel = getLevel(project, STARTING_LEVEL_IDENTIFIER);
     if (!spawned.player) {
       throw new Error(
         `Level "${spawnLevel.identifier}" did not spawn a Player — register a Player factory or place a player spawn entity`,
@@ -900,6 +1037,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.interactions = new InteractionManager(this, this.player);
     this.interactions.registerAll(spawned.chests);
     this.interactions.registerAll(spawned.saves);
+    this.interactions.registerAll(spawned.merchants);
 
     // Save crystals fire SAVE_REQUESTED_EVENT on commit; takeSave reads the
     // current player state into this.saveSlot and pops a "Game Saved" toast.
@@ -907,6 +1045,11 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // event bus; tearDownWorld removes the listener so duplicates can't
     // accumulate across rebuilds.
     this.events.on(SAVE_REQUESTED_EVENT, this.takeSave, this);
+    // Merchants fire SHOP_REQUESTED_EVENT on commit; openShop launches the
+    // ShopScene overlay paused on top of GameScene. Same per-buildWorld /
+    // per-tearDownWorld subscribe/unsubscribe shape as the save listener so
+    // HMR can't double-register the handler.
+    this.events.on(SHOP_REQUESTED_EVENT, this.openShop, this);
 
     for (const layer of this.collisionLayers) {
       this.colliders.push(this.physics.add.collider(this.player, layer));
@@ -1138,6 +1281,56 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     });
   }
 
+  // Wires a freshly-constructed Enemy into the world: depth, group, audio
+  // anchors, and the DESTROY-time death record for the respawn system.
+  // Shared by buildWorld's initial pass AND handleRespawn so a rebuilt
+  // enemy gets every hookup the original had — including a fresh DESTROY
+  // listener for its next death, enabling unlimited respawn cycles.
+  //
+  // The DESTROY handler is gated on isDead() so HMR teardown
+  // (destroyEntities() destroys live enemies) does NOT enqueue them: the
+  // teardown path also clears the manager, but the gate is the primary
+  // guard so the order of operations between tearDownWorld and the DESTROY
+  // event can't accidentally queue ghosts.
+  private attachEnemyToWorld(enemy: Enemy): void {
+    enemy.setDepth(ENTITY_DEPTH);
+    this.enemies.add(enemy);
+    // Moving creatures (wasps, evil crows, spark bugs) carry their own
+    // spatial loops and periodic-call schedulers. The bindings live in
+    // soundRegistry.json keyed by LDtk identifier; the manager no-ops
+    // for unbound enemies, so a single call covers every enemy class.
+    registerMovingEntitySound(this, enemy.getIdentifier(), enemy);
+    registerEnemyWalkSound(this, enemy.getIdentifier(), enemy);
+    registerEntityPeriodicSound(this, enemy.getIdentifier(), enemy);
+    registerEntitySoundSequence(this, enemy.getIdentifier(), enemy);
+    enemy.once(Phaser.GameObjects.Events.DESTROY, () => {
+      if (!enemy.isDead()) return;
+      this.respawnManager?.recordDeath(enemy, this.time.now);
+    });
+  }
+
+  // Respawn callback fired by EnemyRespawnManager.tick() when a queued entry
+  // is past its delay AND off-camera. Rebuilds the Enemy via the shared
+  // EntityFactory helper, then runs the same buildWorld post-spawn pass via
+  // attachEnemyToWorld so the new instance is indistinguishable from one
+  // that spawned at world build. Also re-registers the iid-keyed static
+  // audio anchor (e.g. the hive's bee buzz) that enterDeadState tore down
+  // — registerEntitySound is no-op for entities without a binding, so the
+  // call is safe for every enemy.
+  private handleRespawn = (entry: PendingRespawn): void => {
+    const enemy = respawnEnemyAt(
+      this,
+      entry.identifier,
+      entry.spawnX,
+      entry.spawnY,
+      entry.iid,
+      entry.loiterPath,
+    );
+    if (!enemy) return;
+    registerEntitySound(this, entry.identifier, entry.iid, entry.spawnX, entry.spawnY);
+    this.attachEnemyToWorld(enemy);
+  };
+
   // Reverses buildWorld in dependency order. Stops camera follow first to
   // avoid the camera holding a reference to a destroyed player; destroys
   // colliders before the bodies they reference; destroys tilemaps via both
@@ -1183,6 +1376,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.opennessLookup = null;
     this.currentDimAlpha = WORLD_DIM_ALPHA;
     this.lastOpennessSample = 0.5;
+
+    // Drop every pending respawn — the rebuilt world will contain every
+    // non-boss enemy alive (LDtk spawn pass runs fresh), so any stale entry
+    // would queue a duplicate respawn on top of the live one.
+    if (this.respawnManager) {
+      this.respawnManager.clear();
+      this.respawnManager = null;
+    }
 
     if (this.projectiles) {
       // clear(true, true) removes from group and destroys child Projectiles;
@@ -1245,9 +1446,19 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       this.interactions = null;
     }
 
+    // Force-close the shop overlay (if open) without invoking its onClose —
+    // the GameScene is being rebuilt, so resuming via onClose would re-enter
+    // a half-torn-down scene. Drop the reference so the next buildWorld
+    // constructs a fresh overlay tied to the new Player instance.
+    if (this.shopOverlay) {
+      this.shopOverlay.destroy();
+      this.shopOverlay = null;
+    }
+
     // Unsubscribe the save-request handler so a subsequent buildWorld's
     // .on() doesn't accumulate duplicate listeners across HMR or respawn.
     this.events.off(SAVE_REQUESTED_EVENT, this.takeSave, this);
+    this.events.off(SHOP_REQUESTED_EVENT, this.openShop, this);
   }
 
   private snapshotPlayer(): PlayerSnapshot | null {
@@ -1263,6 +1474,8 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       gun1Ammo: this.player.getGun1Ammo(),
       gun2Ammo: this.player.getGun2Ammo(),
       magic: this.player.getMagic(),
+      stamina: this.player.getStamina(),
+      coins: this.player.getCoins(),
     };
   }
 
@@ -1293,6 +1506,8 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       gun1Ammo: snapshot.gun1Ammo,
       gun2Ammo: snapshot.gun2Ammo,
       magic: snapshot.magic,
+      stamina: snapshot.stamina,
+      coins: snapshot.coins,
     });
     this.cameras.main.centerOn(snapshot.x, snapshot.y);
   }

@@ -147,9 +147,14 @@ function validateDropEvent(
       throw new Error(`${ctx}.kinds[${i}] must be an object`);
     }
     const e = entryRaw as Record<string, unknown>;
-    if (e.kind !== 'gun1' && e.kind !== 'gun2' && e.kind !== 'magic') {
+    if (
+      e.kind !== 'gun1' &&
+      e.kind !== 'gun2' &&
+      e.kind !== 'magic' &&
+      e.kind !== 'coin'
+    ) {
       throw new Error(
-        `${ctx}.kinds[${i}].kind must be "gun1", "gun2", or "magic" (got ${JSON.stringify(e.kind)})`,
+        `${ctx}.kinds[${i}].kind must be "gun1", "gun2", "magic", or "coin" (got ${JSON.stringify(e.kind)})`,
       );
     }
     if (typeof e.weight !== 'number' || !Number.isFinite(e.weight) || e.weight < 0) {

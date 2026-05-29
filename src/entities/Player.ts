@@ -30,14 +30,23 @@ import {
   SWORD_ATTACK_DAMAGE,
   SWORD_ATTACK_REACH_X,
   SWORD_ATTACK_REACH_Y,
+  INITIAL_COINS,
   INITIAL_GUN1_AMMO,
   INITIAL_GUN2_AMMO,
   INITIAL_MAGIC,
+  INITIAL_STAMINA,
+  MAX_COINS,
   MAX_GUN1_AMMO,
   MAX_GUN2_AMMO,
   MAX_MAGIC,
+  MAX_STAMINA,
+  AMMO_COST_PER_SHOT,
+  DASH_STAMINA_COST,
+  STAMINA_REGEN_INTERVAL_MS,
+  MAGIC_COST_PER_SWING,
 } from '../constants';
 import { Enemy } from './Enemy';
+import type { ShopItem } from './shop/shopTypes';
 import { Trap } from './Trap';
 import {
   animKey,
@@ -108,7 +117,7 @@ export interface PlayerHurtOptions {
   readonly source?: PlayerHurtSource;
 }
 
-export type PickupKind = 'gun1' | 'gun2' | 'magic';
+export type PickupKind = 'gun1' | 'gun2' | 'magic' | 'coin';
 
 const SWORD_SLASH_IMPACT_SOUND_IDS = [
   'sword_slash_impact_1',
@@ -162,7 +171,7 @@ const TELEPORT_HOVER_END_FRAME = 20;
 // cancel-stage chain (early advance) and the animation-complete chain.
 // The player stays in lockedAction='attack' (velocity 0) during the hold, with
 // the previous swing's final frame held on screen.
-const COMBO_INTERSWING_DELAY_MS = 250;
+const COMBO_INTERSWING_DELAY_MS = 125;
 const LEFT_MOUSE_BUTTON = 0;
 // Debug fly mode: 4-directional WASD movement at constant speed, gravity and
 // tile collision disabled. Lets the camera be panned across the whole world
@@ -345,6 +354,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   private gun1Ammo = INITIAL_GUN1_AMMO;
   private gun2Ammo = INITIAL_GUN2_AMMO;
   private magic = INITIAL_MAGIC;
+  private stamina = INITIAL_STAMINA;
+  private coins = INITIAL_COINS;
+  // Milliseconds accumulated toward the next stamina-bar tick. Advances by
+  // game.loop.delta each frame the player is not dashing; on crossing
+  // STAMINA_REGEN_INTERVAL_MS we grant one bar and subtract the interval.
+  // Reset to 0 on dash so the regen cadence restarts after a consumption.
+  private staminaRegenAccumMs = 0;
   private invulnerableUntil = 0;
   // Apex sprite.y during the current airborne phase (lowest y value =
   // highest visual point, since the Y axis points down), or null when
@@ -366,6 +382,11 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   private readonly attackPointerHandler: PointerHandler;
   private readonly wheelHandler: WheelHandler;
   private readonly postUpdateHandler: () => void;
+  // External freeze flag used by GameScene's landing-page flow. When false,
+  // updateInner() zeroes velocity and early-returns, and the pointer/wheel
+  // handlers no-op so clicking the START button doesn't fire a projectile
+  // and mouse-wheel scrolling doesn't swap modes.
+  private controlsEnabled = true;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     const initialIdleKey = animKey('sword_master', 'idle');
@@ -419,6 +440,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.projectileFireConfigs = buildProjectileFireConfigs();
 
     this.attackPointerHandler = (pointer) => {
+      if (!this.controlsEnabled) return;
       if (pointer.button === LEFT_MOUSE_BUTTON) {
         this.handleAttackInput();
       }
@@ -426,6 +448,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     scene.input.on(Phaser.Input.Events.POINTER_DOWN, this.attackPointerHandler);
 
     this.wheelHandler = (_pointer, _over, _dx, dy) => {
+      if (!this.controlsEnabled) return;
       if (dy === 0) return;
       if (this.scene.time.now < this.wheelCooldownUntil) return;
       // Browser convention: wheel-up scrolls the page upward => deltaY < 0.
@@ -471,6 +494,18 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
 
   getCurrentMode(): CharacterModeId {
     return this.currentMode;
+  }
+
+  // External freeze toggle for the landing-page flow. When disabled,
+  // updateInner() short-circuits and the pointer/wheel handlers no-op, so
+  // the player is fully inert (no movement, no attack from a stray click
+  // on the START button, no mode swap from a stray scroll). Re-enabling
+  // restores normal input handling immediately.
+  setControlsEnabled(enabled: boolean): void {
+    this.controlsEnabled = enabled;
+    if (!enabled) {
+      this.setVelocity(0, 0);
+    }
   }
 
   // Programmatic mode swap, used by HMR snapshot/restore. Bypasses the wheel
@@ -588,11 +623,21 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   }
 
   private updateInner(): void {
+    if (!this.controlsEnabled) {
+      // Landing-page freeze: zero lateral velocity so the player stands
+      // still, then bail before any input/state-machine work runs. Gravity
+      // is left alone so the player settles on the floor on first frame
+      // instead of hanging in mid-air at the LDtk spawn pivot.
+      this.setVelocityX(0);
+      return;
+    }
     if (this.lockedAction === 'dead') {
       // No input, no facing updates. Gravity still applies via the body's
       // own settings; the corpse settles wherever the knockback put it.
       return;
     }
+
+    this.tickStaminaRegen();
 
     if (Phaser.Input.Keyboard.JustDown(this.keyG)) {
       this.toggleFlyMode();
@@ -699,7 +744,8 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
 
     if (
       Phaser.Input.Keyboard.JustDown(this.keyShift) &&
-      isActionAvailable(this.currentMode, 'dash')
+      isActionAvailable(this.currentMode, 'dash') &&
+      this.stamina >= DASH_STAMINA_COST
     ) {
       this.startDash();
       return;
@@ -942,7 +988,52 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
 
     this.attackCounter = this.getFirstComboStep();
     this.currentAttackKind = this.magicMode ? 'magic' : 'regular';
+    if (this.isGunslingerMode() && !this.tryConsumeGunslingerAmmo()) {
+      return;
+    }
     this.startAttackAnim(this.attackCounter);
+  }
+
+  // Advances the stamina regen accumulator by this frame's delta and grants
+  // one bar each time it crosses STAMINA_REGEN_INTERVAL_MS. No-ops at full
+  // stamina or during a dash — during dash the regen is paused so the
+  // player can't infinitely chain dashes by burning a tiny regen window
+  // mid-animation.
+  private tickStaminaRegen(): void {
+    if (this.lockedAction === 'dash') return;
+    if (this.stamina >= MAX_STAMINA) {
+      this.staminaRegenAccumMs = 0;
+      return;
+    }
+    this.staminaRegenAccumMs += this.scene.game.loop.delta;
+    while (
+      this.staminaRegenAccumMs >= STAMINA_REGEN_INTERVAL_MS &&
+      this.stamina < MAX_STAMINA
+    ) {
+      this.stamina += 1;
+      this.staminaRegenAccumMs -= STAMINA_REGEN_INTERVAL_MS;
+    }
+    if (this.stamina >= MAX_STAMINA) {
+      this.staminaRegenAccumMs = 0;
+    }
+  }
+
+  // Checks ammo for the current gunslinger mode against AMMO_COST_PER_SHOT
+  // and decrements on success. Returns false (caller silently aborts) when
+  // the magazine is dry — no overlay anim, no SFX. Callers in non-gunslinger
+  // modes must not invoke this; the helper assumes the gunslinger branch.
+  private tryConsumeGunslingerAmmo(): boolean {
+    if (this.currentMode === 'gunslinger_gun1') {
+      if (this.gun1Ammo < AMMO_COST_PER_SHOT) return false;
+      this.gun1Ammo -= AMMO_COST_PER_SHOT;
+      return true;
+    }
+    if (this.currentMode === 'gunslinger_gun2') {
+      if (this.gun2Ammo < AMMO_COST_PER_SHOT) return false;
+      this.gun2Ammo -= AMMO_COST_PER_SHOT;
+      return true;
+    }
+    return true;
   }
 
   private getFirstComboStep(): number {
@@ -988,6 +1079,18 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   }
 
   private startAttackAnim(step: number): void {
+    // Magic-stance affordance check. Each magic swing costs
+    // MAGIC_COST_PER_SWING; when the meter can't pay, fall back to a regular
+    // sword swing so combos keep flowing instead of stalling. Runs per-swing
+    // because chained swings (scheduleChainedSwing → startAttackAnim) re-enter
+    // here and each one independently pays the cost.
+    if (this.currentAttackKind === 'magic') {
+      if (this.magic < MAGIC_COST_PER_SWING) {
+        this.currentAttackKind = 'regular';
+      } else {
+        this.magic -= MAGIC_COST_PER_SWING;
+      }
+    }
     this.lockedAction = 'attack';
     // Each new swing starts with a fresh set so a re-attack against the same
     // enemy lands again. This includes combo continuations (queuedAttack →
@@ -1031,6 +1134,10 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.setFacing(direction === -1);
     this.setVelocityX(PLAYER_DASH_SPEED * direction);
     this.playLogical('dash', { duration: PLAYER_DASH_DURATION_MS });
+    this.stamina = Math.max(0, this.stamina - DASH_STAMINA_COST);
+    // Reset the regen cadence so the next bar arrives a full interval after
+    // this dash, not a fraction of one inherited from prior idle time.
+    this.staminaRegenAccumMs = 0;
   }
 
   private startRoll(): void {
@@ -1518,13 +1625,11 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     return PLAYER_MAX_HEALTH;
   }
 
-  // TODO(player-resources): wire to real consumption (dash/roll cost) and regen.
   getStamina(): number {
-    return 100;
+    return this.stamina;
   }
-  // TODO(player-resources): wire to real consumption (dash/roll cost) and regen.
   getMaxStamina(): number {
-    return 100;
+    return MAX_STAMINA;
   }
 
   getMagic(): number {
@@ -1548,6 +1653,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     return MAX_GUN2_AMMO;
   }
 
+  getCoins(): number {
+    return this.coins;
+  }
+  getMaxCoins(): number {
+    return MAX_COINS;
+  }
+
   // Bulk state setter used by the save/respawn pipeline (and HMR restore).
   // Position, velocity, mode, and facing are restored by the existing
   // setPosition/setVelocity/setCurrentMode/setFacing calls in GameScene; this
@@ -1564,11 +1676,21 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     gun1Ammo: number;
     gun2Ammo: number;
     magic: number;
+    stamina: number;
+    coins?: number;
   }): void {
     this.health = Phaser.Math.Clamp(state.health, 0, PLAYER_MAX_HEALTH);
     this.gun1Ammo = Phaser.Math.Clamp(state.gun1Ammo, 0, MAX_GUN1_AMMO);
     this.gun2Ammo = Phaser.Math.Clamp(state.gun2Ammo, 0, MAX_GUN2_AMMO);
+    // Clamps against the current MAX_MAGIC — legacy saves authored under the
+    // old 100-unit cap collapse to MAX_MAGIC=3 cleanly. Same for stamina.
     this.magic = Phaser.Math.Clamp(state.magic, 0, MAX_MAGIC);
+    this.stamina = Phaser.Math.Clamp(state.stamina, 0, MAX_STAMINA);
+    // Coins field is optional so legacy snapshots predating the coin economy
+    // restore with the field absent — default to the player's current value
+    // (which is INITIAL_COINS at construction).
+    this.coins = Phaser.Math.Clamp(state.coins ?? this.coins, 0, MAX_COINS);
+    this.staminaRegenAccumMs = 0;
   }
 
   // Pickup-driven resource grant. Clamped at the per-kind max so a fresh drop
@@ -1580,9 +1702,44 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       this.gun1Ammo = Math.min(MAX_GUN1_AMMO, this.gun1Ammo + amount);
     } else if (kind === 'gun2') {
       this.gun2Ammo = Math.min(MAX_GUN2_AMMO, this.gun2Ammo + amount);
-    } else {
+    } else if (kind === 'magic') {
       this.magic = Math.min(MAX_MAGIC, this.magic + amount);
+    } else {
+      this.coins = Math.min(MAX_COINS, this.coins + amount);
     }
+  }
+
+  // Current value for a pickup-kind resource, so ShopScene can dim rows where
+  // the buyer is already at max for that resource (no point selling a no-op).
+  // Coins are included for completeness but the shop never sells coins.
+  getResourceValue(kind: PickupKind): number {
+    if (kind === 'gun1') return this.gun1Ammo;
+    if (kind === 'gun2') return this.gun2Ammo;
+    if (kind === 'magic') return this.magic;
+    return this.coins;
+  }
+
+  getResourceMax(kind: PickupKind): number {
+    if (kind === 'gun1') return MAX_GUN1_AMMO;
+    if (kind === 'gun2') return MAX_GUN2_AMMO;
+    if (kind === 'magic') return MAX_MAGIC;
+    return MAX_COINS;
+  }
+
+  // Atomic shop purchase: rejects (returns false, no state change) when the
+  // buyer can't afford the price OR already has the resource at max. On
+  // success deducts coins and grants the resource via addPickup so the clamp
+  // logic stays in one place. ShopScene calls this directly across the pause
+  // boundary — see the planner notes for why a direct call (not an event)
+  // works here: GameScene is paused but the Player instance is still alive.
+  tryPurchase(item: ShopItem): boolean {
+    if (this.coins < item.price) return false;
+    if (this.getResourceValue(item.pickupKind) >= this.getResourceMax(item.pickupKind)) {
+      return false;
+    }
+    this.coins -= item.price;
+    this.addPickup(item.pickupKind, item.grantAmount);
+    return true;
   }
 
   isDead(): boolean {

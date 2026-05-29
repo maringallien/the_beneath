@@ -1,0 +1,254 @@
+/* Merchant shop overlay — minimal layout matching the game's other UI.
+ *
+ * Visual idiom: flat grey panel framed by the game's own ui_border.png
+ * (used here as a CSS 9-slice border via border-image). The two themes
+ * differ only in the title accent color; everything else is identical.
+ *
+ * Asset note: the source ui_border.png is a 336×272 sheet with the actual
+ * frame content packed into the top-left 44×46. CSS border-image can't
+ * slice from an offset inside the source, so we use a pre-cropped sibling
+ * file (ui_border_frame.png). Re-crop with:
+ *   python3 -c "from PIL import Image; i=Image.open('ui_border.png');
+ *     i.crop(i.getbbox()).save('ui_border_frame.png')"
+ */
+
+.shop-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.7);
+  color: #d4d4d4;
+  user-select: none;
+  z-index: 10000;
+  font-family: 'Arial', 'Helvetica', sans-serif;
+  animation: shop-fade-in 100ms linear both;
+}
+
+@keyframes shop-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.shop-window {
+  position: relative;
+  width: 440px;
+  max-width: 92vw;
+  padding: 22px 26px 20px;
+  background: #2a2a2a;
+  /* 9-slice border driven by ui_border_frame.png. The 14px slice captures
+   * the frame's decorated corners + outer/inner strokes; the middle slice
+   * isn't filled, so the window's own #2a2a2a background fills the body. */
+  border-style: solid;
+  border-color: transparent;
+  border-width: 14px;
+  border-image-source: url('/DarkSpriteLib/general/ui/borders_and_hp/ui_border_frame.png');
+  border-image-slice: 14;
+  border-image-width: 14px;
+  border-image-repeat: stretch;
+  box-sizing: border-box;
+}
+
+/* Theme accent — used only for the title and the selected-row left edge.
+ * Everything else stays neutral grey so the panel reads as a single piece
+ * of in-world equipment regardless of which merchant opens it. */
+.shop-window--tech {
+  --shop-accent: #c89878;
+}
+
+.shop-window--mushroom {
+  --shop-accent: #7eb8d4;
+}
+
+/* === HEADER ========================================================= */
+
+.shop-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #3a3a3a;
+}
+
+.shop-title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: #ffffff;
+  margin: 0;
+}
+
+.shop-balance {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.shop-balance .shop-coin {
+  width: 18px;
+  height: 18px;
+}
+
+/* === ITEM ROWS ===================================================== */
+
+.shop-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.shop-item {
+  display: flex;
+  align-items: center;
+  padding: 9px 10px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+
+.shop-item:hover {
+  background: #333333;
+}
+
+.shop-item--selected {
+  background: #383838;
+  border-left-color: var(--shop-accent);
+}
+
+.shop-item--disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.shop-item--disabled:hover {
+  background: transparent;
+}
+
+.shop-item--just-purchased {
+  animation: shop-purchase-flash 200ms linear;
+}
+
+.shop-item--purchase-failed {
+  animation: shop-purchase-shake 220ms ease-out;
+}
+
+@keyframes shop-purchase-flash {
+  0% { background: #555555; }
+  100% { background: #383838; }
+}
+
+@keyframes shop-purchase-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px); }
+  75% { transform: translateX(3px); }
+}
+
+.shop-item-icon {
+  width: 28px;
+  height: 28px;
+  margin-right: 12px;
+  flex-shrink: 0;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.shop-item-icon--smooth {
+  image-rendering: auto;
+}
+
+.shop-item-body {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.shop-item-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.shop-item-detail {
+  font-size: 11px;
+  color: #888888;
+}
+
+.shop-item-status {
+  margin-right: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  padding: 2px 6px;
+  background: #1a1a1a;
+  color: #aaaaaa;
+  text-transform: uppercase;
+}
+
+.shop-item-status--max {
+  color: #8cb89a;
+}
+
+.shop-item-status--poor {
+  color: #c87a78;
+}
+
+.shop-item-price {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+}
+
+.shop-item--cant-afford .shop-item-price {
+  color: #c87a78;
+}
+
+.shop-item-price .shop-coin {
+  width: 16px;
+  height: 16px;
+}
+
+/* === FOOTER ======================================================= */
+
+.shop-footer {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid #3a3a3a;
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  font-size: 11px;
+  color: #888888;
+}
+
+.shop-footer-hint {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.shop-key {
+  display: inline-block;
+  background: #1a1a1a;
+  border: 1px solid #3a3a3a;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #d4d4d4;
+  min-width: 12px;
+  text-align: center;
+}
+
+.shop-coin {
+  display: inline-block;
+}

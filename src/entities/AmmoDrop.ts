@@ -9,6 +9,13 @@ import {
   AMMO_DROP_SPAWN_VELOCITY_Y,
   AMMO_PICKUP_GUN1_AMOUNT,
   AMMO_PICKUP_GUN2_AMOUNT,
+  COIN_DRAG_X,
+  COIN_DROP_DISPLAY_SCALE,
+  COIN_PICKUP_AMOUNT,
+  COIN_SPAWN_VELOCITY_X_JITTER,
+  COIN_SPAWN_VELOCITY_Y_MAX,
+  COIN_SPAWN_VELOCITY_Y_MIN,
+  COIN_TEXTURE_KEY,
   ENTITY_DEPTH,
   MAGIC_ORB_LOITER_X_AMPLITUDE_PX,
   MAGIC_ORB_LOITER_X_PERIOD_MS,
@@ -54,16 +61,23 @@ function textureForKind(kind: PickupKind): TextureChoice {
   if (kind === 'gun2') {
     return { key: HUD_AMMO_TEXTURE_KEY, frame: GUN2_FRAME, scale: AMMO_DROP_DISPLAY_SCALE };
   }
-  // Magic orb: 16px procedural texture, same 0.5× scale as ammo so the visible
-  // footprint matches. LINEAR filtering on the texture (set in PreloadScene)
-  // keeps the circle smooth despite the global pixelArt config.
-  return { key: MAGIC_ORB_TEXTURE_KEY, frame: undefined, scale: AMMO_DROP_DISPLAY_SCALE };
+  if (kind === 'magic') {
+    // Magic orb: 12px procedural texture, same 0.5× scale as ammo so the visible
+    // footprint matches. LINEAR filtering on the texture (set in PreloadScene)
+    // keeps the circle smooth despite the global pixelArt config.
+    return { key: MAGIC_ORB_TEXTURE_KEY, frame: undefined, scale: AMMO_DROP_DISPLAY_SCALE };
+  }
+  // Coin: procedural gold disc authored at 32 px source resolution for HUD
+  // sharpness; COIN_DROP_DISPLAY_SCALE shrinks it back to ~4 world units so
+  // world coins still read as smaller "minor pickups" than the magic orb.
+  return { key: COIN_TEXTURE_KEY, frame: undefined, scale: COIN_DROP_DISPLAY_SCALE };
 }
 
 function amountForKind(kind: PickupKind): number {
   if (kind === 'gun1') return AMMO_PICKUP_GUN1_AMOUNT;
   if (kind === 'gun2') return AMMO_PICKUP_GUN2_AMOUNT;
-  return MAGIC_PICKUP_AMOUNT;
+  if (kind === 'magic') return MAGIC_PICKUP_AMOUNT;
+  return COIN_PICKUP_AMOUNT;
 }
 
 // Weighted pick from a non-empty kinds table. Caller guarantees the array is
@@ -151,6 +165,19 @@ export class AmmoDrop extends Phaser.Physics.Arcade.Sprite {
       this.loiterStartTime = scene.time.now;
       this.loiterUpdateBound = (time: number) => this.loiterUpdate(time);
       scene.events.on(Phaser.Scenes.Events.UPDATE, this.loiterUpdateBound);
+    } else if (kind === 'coin') {
+      // Coin burst: wider X/Y spread + lower drag than ammo drops so a
+      // multi-coin payout (chest = 10, big chest = 20, boss = 50) scatters
+      // into a visible spray instead of stacking on a single tile. Each
+      // coin gets independent X and Y velocities so they take different
+      // arcs and land at different spots.
+      this.body.setAllowGravity(true);
+      this.body.setDragX(COIN_DRAG_X);
+      const vx = (Math.random() * 2 - 1) * COIN_SPAWN_VELOCITY_X_JITTER;
+      const vy =
+        COIN_SPAWN_VELOCITY_Y_MIN +
+        Math.random() * (COIN_SPAWN_VELOCITY_Y_MAX - COIN_SPAWN_VELOCITY_Y_MIN);
+      this.setVelocity(vx, vy);
     } else {
       // Ammo drops keep the falling/pop behavior. X drag damps the spawn
       // jitter so the drop settles where it lands rather than sliding along

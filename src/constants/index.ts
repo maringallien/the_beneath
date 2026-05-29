@@ -79,13 +79,82 @@ export const MAX_GUN2_AMMO = 10;
 // and to keep heavier ammo scarce.
 export const AMMO_PICKUP_GUN1_AMOUNT = 5;
 export const AMMO_PICKUP_GUN2_AMOUNT = 2;
+// Ammo consumed per gunshot. Same for both guns — capacity differences
+// already encode the relative scarcity.
+export const AMMO_COST_PER_SHOT = 1;
 
-// Magic resource: matches the current stub return values so the existing HUD
-// reads transparently across the change from stub to backing field. Magic
-// shards dropped by chests/ghouls/bosses grant MAGIC_PICKUP_AMOUNT per pickup.
-export const INITIAL_MAGIC = 100;
-export const MAX_MAGIC = 100;
-export const MAGIC_PICKUP_AMOUNT = 25;
+// Magic resource: discrete 3-bar meter. Each magic sword swing costs one bar
+// (MAGIC_COST_PER_SWING). No regen — refilled only by MAGIC_ORB pickups, which
+// grant one bar per pickup. HUD renders this as three independent segments.
+export const INITIAL_MAGIC = 3;
+export const MAX_MAGIC = 3;
+export const MAGIC_PICKUP_AMOUNT = 1;
+export const MAGIC_COST_PER_SWING = 1;
+
+// Stamina resource: discrete 3-bar meter, mirrors the magic shape. Each dash
+// costs one bar (DASH_STAMINA_COST). Stamina regenerates one bar every
+// STAMINA_REGEN_INTERVAL_MS while the player is not actively dashing.
+export const INITIAL_STAMINA = 3;
+export const MAX_STAMINA = 3;
+export const DASH_STAMINA_COST = 1;
+export const STAMINA_REGEN_INTERVAL_MS = 2000;
+
+// Gold coin currency: integer counter accumulated from chest/enemy drops.
+// Currently a pure score — a future shop will spend coins on ammo/magic.
+// MAX_COINS is a sentinel for HUD digit-width budgeting; not a real cap.
+export const INITIAL_COINS = 0;
+export const MAX_COINS = 9999;
+export const COIN_PICKUP_AMOUNT = 1;
+// Per-source drop counts. Each coin is one COIN_PICKUP_AMOUNT (1), so these
+// double as the gold value of each kill. Tuned per-entity in
+// entityRegistry.json as N independent `chancePct: 100` drop entries — these
+// constants document the tiers, the JSON is the source of truth.
+//   Weakest mook (Ghoul) ............... 3
+//   Regular enemy / bandit ............. 5
+//   Small chest (Chest1) ............... 10
+//   Large chest (Chest2) ............... 20
+//   Boss ............................... 50
+// Against shop prices (gun1 pack 10, gun2 pack 15, magic orb 25): a single
+// bandit funds half a gun1 pack, two bandits fund a gun1 pack, a small chest
+// = a magic orb almost, a large chest = a magic orb + ammo, a boss = 2
+// magic orbs.
+export const COIN_DROP_WEAK_ENEMY_COUNT = 3;
+export const COIN_DROP_REGULAR_ENEMY_COUNT = 5;
+export const COIN_DROP_CHEST_SMALL_COUNT = 10;
+export const COIN_DROP_CHEST_LARGE_COUNT = 20;
+export const COIN_DROP_BOSS_COUNT = 50;
+
+// Gold coin placeholder: generated procedurally in PreloadScene as a small
+// gold disc with an inset highlight ring. Mirrors the magic orb pattern —
+// LINEAR-filtered so it stays smooth at CAMERA_ZOOM. Swap for a real PNG
+// by loading at COIN_TEXTURE_KEY in preload() and removing the generator.
+export const COIN_TEXTURE_KEY = 'gold_coin';
+// Source-pixel size. Authored larger than the final display size so LINEAR
+// sampling has enough resolution to stay crisp in the HUD (where the icon
+// renders at ~9.6 world units × CAMERA_ZOOM = 28.8 canvas px); world-drop
+// scale (COIN_DROP_DISPLAY_SCALE) and HUD icon scale (PlayerHud's
+// COIN_ICON_SCALE) compensate to keep on-screen sizes unchanged.
+export const COIN_TEXTURE_SIZE_PX = 32;
+// World-drop scale: 32 × 0.125 = 4 world units, matching the previous coin
+// footprint when the source texture was 8 px at 0.5× scale. Coin-specific
+// (not AMMO_DROP_DISPLAY_SCALE) because the larger source texture would
+// otherwise make world coins balloon.
+export const COIN_DROP_DISPLAY_SCALE = 0.125;
+// Coin burst spawn. A chest with 20 coin drops spawns 20 AmmoDrop sprites
+// at the same XY; without these the tight ammo-drop jitter (±30 px/s drag
+// 400) collapses them onto a single tile and looks like one coin worth N.
+// Wider X velocity range + lower drag spreads the burst across ~80-100 px
+// so each coin lands at a visibly distinct spot. Y velocity range gives
+// each coin a different arc so they don't all peak at the same height.
+export const COIN_SPAWN_VELOCITY_X_JITTER = 140;
+export const COIN_SPAWN_VELOCITY_Y_MIN = -200;
+export const COIN_SPAWN_VELOCITY_Y_MAX = -90;
+export const COIN_DRAG_X = 90;
+// Warm gold body and a brighter highlight ring inset from the edge. The
+// highlight is rendered slightly off-center to give the disc a faint 3D
+// read at small sizes without needing a real sprite.
+export const COIN_FILL_COLOR = 0xffcc33;
+export const COIN_HIGHLIGHT_COLOR = 0xfff2a8;
 
 // Magic orb placeholder: generated procedurally in PreloadScene as a pure
 // black smooth circle. No highlight, no pulse — the visual "magic" comes from
@@ -214,12 +283,19 @@ export const SCENE_KEYS = {
   BOOT: 'BootScene',
   PRELOAD: 'PreloadScene',
   GAME: 'GameScene',
-  PAUSE: 'PauseScene'
+  PAUSE: 'PauseScene',
+  LANDING: 'LandingScene',
 } as const;
 
 // LDtk level identifier rendered by GameScene. The PreloadScene must inspect
 // the same identifier when picking which tilesets to load — keep them aligned.
 export const CURRENT_LEVEL_IDENTIFIER = 'Level_5';
+
+// LDtk level the player spawns into on a fresh boot. Triggers the landing
+// page overlay (LandingScene) at first launch so the player is framed for
+// the start screen. Distinct from CURRENT_LEVEL_IDENTIFIER so the legacy
+// reference can still point at the prior testing level if needed.
+export const STARTING_LEVEL_IDENTIFIER = 'Level_3';
 
 // Render depth for the player and other dynamic entities. Tile layers occupy
 // depth 0..N (back→front) using their LDtk layer position; this sits above
@@ -236,6 +312,23 @@ export const PLAYER_DEPTH = ENTITY_DEPTH + 1;
 // damage. Once the window lapses, HP snaps back to behavior.health (max) and
 // the floating health bar hides. Trap/fall damage does not refresh the timer.
 export const ENEMY_COMBAT_TIMEOUT_MS = 20_000;
+
+// Time after death before a non-boss enemy is eligible to respawn at its
+// original spawn point. Bosses (behavior.isBoss === true) opt out entirely.
+// Two minutes lands between "fresh encounter" and "you've moved on" — short
+// enough that backtracking through cleared rooms isn't empty, long enough
+// that the player isn't fighting refilled spawns mid-exploration.
+export const ENEMY_RESPAWN_DELAY_MS = 120_000;
+// Throttle (ms) for the respawn manager's per-tick scan. 1Hz is enough to
+// notice the threshold within a perceptible window without burning CPU on a
+// per-frame Map iteration that almost always returns "not yet".
+export const ENEMY_RESPAWN_CHECK_INTERVAL_MS = 1000;
+// Camera-rect padding (source px) added when checking whether a respawn point
+// is off-screen. A spawn point inside (camera rect + this padding) defers
+// the respawn so the player never sees an enemy materialize at the edge of
+// view. 64 ≈ four tiles — comfortably outside the visible band even on the
+// frame the player turns the camera.
+export const ENEMY_RESPAWN_OFFSCREEN_PADDING_PX = 64;
 // Floating health-bar visuals. Width sized so the bar reads cleanly above
 // small bandit-sized bodies (~16-32 px wide) and doesn't overpower tall boss
 // frames; height kept thin so the bar feels like UI overlay rather than part
@@ -409,6 +502,127 @@ export const PAUSE_FRAME_CORNER_ACCENT_OFFSET_PX = 6;
 export const PAUSE_SELECTED_TINT = 0xffffff;
 export const PAUSE_UNSELECTED_TINT = 0x808080;
 
+// Merchant shops. Tech_shop_spawn sells ammo; Mushroom_merchant_spawn sells
+// magic orbs. The merchant entity emits SHOP_REQUESTED_EVENT on hold-E commit
+// and GameScene shows a DOM-based ShopOverlay (src/ui/ShopOverlay) over the
+// canvas. Payload is `{ kind: 'tech' | 'mushroom' }` so the overlay picks
+// the right inventory.
+export const SHOP_REQUESTED_EVENT = 'shop-requested';
+
+// Per-item coin price. Tuned so a few cleared rooms (each enemy drops ≥1
+// coin, chests 5, bosses 20) can fund a small restock without trivializing
+// pickups. Gun2 charges more per shell because gun2 hits harder; magic orbs
+// are the priciest because each orb refills one of only 3 magic bars.
+export const SHOP_PRICE_GUN1_AMMO = 10;
+export const SHOP_PRICE_GUN2_AMMO = 15;
+export const SHOP_PRICE_MAGIC_ORB = 25;
+
+// Per-purchase grant. Aliased to the existing pickup amounts so buying a
+// gun1 magazine grants the same N bullets as walking into a gun1 drop —
+// keeps the value-per-unit consistent across drop and shop economies.
+export const SHOP_GUN1_GRANT_PER_PURCHASE = AMMO_PICKUP_GUN1_AMOUNT;
+export const SHOP_GUN2_GRANT_PER_PURCHASE = AMMO_PICKUP_GUN2_AMOUNT;
+export const SHOP_MAGIC_GRANT_PER_PURCHASE = MAGIC_PICKUP_AMOUNT;
+
+// Landing page. Shown on first boot via a LandingScene overlay launched on
+// top of GameScene. The START word sprite uses the same word-banner pattern
+// as PauseScene (LINEAR-filtered PNG inside a white bounding box). Clicking
+// or pressing Enter/Space fades both cameras to black, hands off to
+// GameScene.beginGameplay(), then fades back in.
+export const LANDING_START_TEXTURE_KEY = 'landing_word_start';
+export const LANDING_START_ASSET_PATH =
+  '/DarkSpriteLib/general/ui/words/words_with_bg/ui_-_words5.png';
+export const LANDING_START_DISPLAY_SCALE = 1.5;
+// Hover tint applied to the START sprite via setTint while the pointer
+// is over it. Phaser multiplies the texture's RGB by the tint, so a gray
+// value darkens uniformly without changing the silhouette. Cleared on
+// pointer-out (clearTint) to restore full brightness.
+export const LANDING_BUTTON_HOVER_TINT = 0x808080;
+// Scale multipliers applied on top of LANDING_START_DISPLAY_SCALE for
+// the hover (grow) and press (shrink) animations. HOVER eases the sprite
+// outward when the pointer enters, PRESS yoyos a brief inward pulse on
+// click/Enter/Space so the confirm feels physical even before the
+// 600ms fade-out begins. TWEEN_MS is the duration of each half-cycle.
+export const LANDING_BUTTON_HOVER_SCALE_MULTIPLIER = 1.05;
+export const LANDING_BUTTON_PRESS_SCALE_MULTIPLIER = 0.92;
+export const LANDING_BUTTON_TWEEN_MS = 120;
+
+// Landing-page game title rendered above the START button. Defaults to
+// the working title pulled from the project folder name; override
+// LANDING_TITLE_TEXT if the project gets a final name. Centered on the
+// same column as the START button so the two elements read as a single
+// stacked composition. Y fraction places the title above the button
+// (LANDING_BUTTON_VIEWPORT_FRACTION_Y) — keep some clearance between
+// them or the title and button will visually merge.
+export const LANDING_TITLE_TEXT = 'THE BENEATH';
+export const LANDING_TITLE_FONT_FAMILY = 'Arial, Helvetica, sans-serif';
+export const LANDING_TITLE_FONT_SIZE_PX = 48;
+export const LANDING_TITLE_FONT_WEIGHT = 'bold';
+export const LANDING_TITLE_COLOR = '#ffffff';
+export const LANDING_TITLE_VIEWPORT_FRACTION_Y = 0.18;
+
+// Fade durations for the click → black → gameplay transition. Matched in
+// and out so the visible pulse feels symmetric.
+export const LANDING_FADE_OUT_MS = 600;
+export const LANDING_FADE_IN_MS = 600;
+
+// Viewport fractions for the landing-page layout. Player is anchored at 25%
+// from the left of the screen; START button at BUTTON_FRACTION_X across and
+// BUTTON_FRACTION_Y down. GameScene positions the camera (via centerOn) so
+// the player lands on PLAYER_FRACTION_X; LandingScene positions the button
+// at the BUTTON_FRACTION values on the overlay camera's canvas dimensions.
+// Smaller BUTTON_FRACTION_Y = higher on screen.
+export const LANDING_PLAYER_VIEWPORT_FRACTION_X = 0.25;
+export const LANDING_BUTTON_VIEWPORT_FRACTION_X = 0.25;
+export const LANDING_BUTTON_VIEWPORT_FRACTION_Y = 0.32;
+// World-px shift applied to the landing camera's centerY on top of the
+// spawn level's vertical midpoint. Positive = camera moves down in world
+// space (the visible area shifts down, so anything anchored above —
+// including the player — reads HIGHER on screen). Tune to compose the
+// shot; 0 leaves the camera exactly at the level midpoint.
+export const LANDING_CAMERA_Y_OFFSET_PX = 50;
+
+// Screen-edge corner brackets. Each corner of the viewport gets a thin
+// white L-shape (two perpendicular line segments meeting at the corner).
+// No connecting strokes between corners — the brackets alone frame the
+// shot without imposing a full rectangle. MARGIN_PX pulls the bracket
+// vertices off the canvas edge so the lines aren't clipped; LENGTH_PX
+// is the leg length of each L.
+export const LANDING_SCREEN_FRAME_MARGIN_PX = 28;
+export const LANDING_SCREEN_FRAME_COLOR = 0xffffff;
+export const LANDING_SCREEN_FRAME_STROKE_PX = 2;
+export const LANDING_SCREEN_BRACKET_LENGTH_PX = 72;
+
+// Screen-edge vignette: four black gradient strips fading from opaque at
+// the viewport edge to transparent at THICKNESS_PX inward, painted by the
+// LandingScene above the world but below the START button and screen
+// frame. Reads as soft darkening at the edges so the eye is drawn toward
+// the player + button composition.
+export const LANDING_VIGNETTE_COLOR = 0x000000;
+export const LANDING_VIGNETTE_THICKNESS_PX = 380;
+export const LANDING_VIGNETTE_EDGE_ALPHA = 0.8;
+
+// Per-tileset brightness lift applied at preload (RGB multiplier on each
+// opaque pixel, clamped to 255). Used to compensate for tilesets whose source
+// art ships visibly darker than peers stacked in the same level. uid=2
+// (The_beneath_tileset1) backs every level's Foreground2 layer; the average-
+// luminance ratio against uid=4 is ~1.24, but the eye perceives brightness
+// non-linearly so the visible match lands well below that — tuned by feel.
+export const TILESET_BRIGHTNESS_FACTORS: Readonly<Record<number, number>> = {
+  2: 1.1,
+};
+
+// Per-LAYER brightness lift applied at render time via an ADD-blended sibling
+// overlay. Use this when a foreground decoration layer needs to read brighter
+// than the IntGrid ground it sits on, but they share the same tileset uid so
+// TILESET_BRIGHTNESS_FACTORS can't differentiate them (lifting the tileset
+// would brighten the ground too). The value is the total multiplier — 1.10 =
+// 10% brighter — and the renderer derives the overlay alpha as (factor - 1).
+// Cost: one extra draw call per tile in the listed layer.
+export const LAYER_BRIGHTNESS_FACTORS: Readonly<Record<string, number>> = {
+  Foreground1: 1.1,
+};
+
 // Foreground bright-pixel glow. Each tileset used by a Foreground* layer gets
 // a sibling "glow" texture pre-baked at preload: every source pixel whose
 // luminance exceeds FOREGROUND_GLOW_LUMINANCE_THRESHOLD has a soft radial halo
@@ -566,15 +780,16 @@ export const OPENNESS_REGION_RADIUS_CELLS = 5;
 // for a gentler ramp. Type-annotated as `number` so the consumer can
 // compare against 1 to short-circuit the no-op case without TS narrowing
 // the constant to its literal value.
-export const OPENNESS_CONTRAST_POWER: number = 0.4;
-// Dim alpha when the player is in a fully-open area (openness = 1). 0 means
-// no dim at all — the parallax backgrounds render at full brightness.
-export const WORLD_DIM_ALPHA_OPEN = 0.0;
+export const OPENNESS_CONTRAST_POWER: number = 0.25;
+// Dim alpha when the player is in a fully-open area (openness = 1). 0.15
+// leaves the brightest areas slightly tinted rather than at full asset
+// brightness — sets a darker floor for the whole range.
+export const WORLD_DIM_ALPHA_OPEN = 0.15;
 // Dim alpha when the player is in a fully-enclosed area (openness = 0).
-// Higher = darker tunnel. 0.85 is near-black tunnels (intentionally
-// extreme during tuning so brightness variation is unmistakable); dial
-// down to 0.5-0.6 once the curve feels right.
-export const WORLD_DIM_ALPHA_ENCLOSED = 0.85;
+// Tracks the OPEN endpoint at a constant +0.4 offset so the dynamic range
+// stays the same; raising both endpoints by 0.15 from the previous pair
+// (0.0 / 0.55) makes the world uniformly 15% darker.
+export const WORLD_DIM_ALPHA_ENCLOSED = 0.7;
 // Lerp rate (per second) used to ease the current alpha toward the
 // openness-derived target. 4.0 ≈ ~250 ms to traverse most of the gap. Lower
 // = slower fade (more cinematic); higher = snappier response to crossing a

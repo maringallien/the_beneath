@@ -1,13 +1,15 @@
 import Phaser from 'phaser';
-import type { LdtkEntityInstance } from '../ldtk/types';
+import type { LdtkEntityInstance, LoiterPathPoint } from '../ldtk/types';
 import { AnimatedEntity } from './AnimatedEntity';
 import { Chest } from './Chest';
 import { Door } from './Door';
 import { Enemy } from './Enemy';
-import { listEntityRegistryEntries } from './entityRegistryLoader';
+import { getEntityRegistryEntry, listEntityRegistryEntries } from './entityRegistryLoader';
 import type { AnimatedEntityConfig } from './entityRegistryTypes';
+import { MushroomMerchant } from './MushroomMerchant';
 import { Player } from './Player';
 import { Save } from './Save';
+import { TechShop } from './TechShop';
 import { Trap } from './Trap';
 
 export type EntityFactoryFn = (
@@ -51,6 +53,20 @@ const SPECIAL_FACTORIES: Readonly<Record<string, EntityFactoryFn>> = {
   Chest2_spawn: (scene, instance) => {
     const { x, y } = pivotCenter(instance);
     return new Chest(scene, x, y, 'Chest2_spawn');
+  },
+  // Merchants override the auto-factory's plain-AnimatedEntity path so they
+  // can implement Interactable and emit SHOP_REQUESTED_EVENT on hold-E commit.
+  // Same pattern as Save: the registry drives sprite/body/animation while
+  // hand-written code owns the interaction. pivotCenter mirrors the Save /
+  // Chest entries; gravity (mushroom merchant only) settles the body on the
+  // floor via the staticEntities collider wired in GameScene.
+  Tech_shop_spawn: (scene, instance) => {
+    const { x, y } = pivotCenter(instance);
+    return new TechShop(scene, x, y);
+  },
+  Mushroom_merchant_spawn: (scene, instance) => {
+    const { x, y } = pivotCenter(instance);
+    return new MushroomMerchant(scene, x, y);
   },
 };
 
@@ -135,6 +151,12 @@ export interface SpawnedEntities {
   // adds them to staticEntities explicitly now that they're no longer in
   // `others`.
   saves: ReadonlyArray<Save>;
+  // Hold-E interactable merchants (TechShop, MushroomMerchant). Same
+  // graduate-out-of-`others` rationale as `saves`/`chests`. Mushroom merchant
+  // has gravity:true so GameScene adds these to staticEntities for the
+  // terrain collider; tech shop has gravity:false but the collider is a
+  // no-op for non-moving bodies.
+  merchants: ReadonlyArray<TechShop | MushroomMerchant>;
   // Pure-decoration AnimatedEntities (ambient animals, lamps, etc.).
   // Kept distinct from `enemies`/`traps`/`chests`/`saves` so GameScene can
   // iterate typed lists per-frame without an instanceof check.
@@ -151,6 +173,7 @@ export function spawnEntities(
   const traps: Trap[] = [];
   const chests: Chest[] = [];
   const saves: Save[] = [];
+  const merchants: Array<TechShop | MushroomMerchant> = [];
   const others: Phaser.GameObjects.GameObject[] = [];
   const unhandled = new Set<string>();
 
@@ -183,6 +206,8 @@ export function spawnEntities(
       chests.push(obj);
     } else if (obj instanceof Save) {
       saves.push(obj);
+    } else if (obj instanceof TechShop || obj instanceof MushroomMerchant) {
+      merchants.push(obj);
     } else {
       others.push(obj);
     }
@@ -196,7 +221,7 @@ export function spawnEntities(
     );
   }
 
-  return { player, enemies, doors, traps, chests, saves, others };
+  return { player, enemies, doors, traps, chests, saves, merchants, others };
 }
 
 // Symmetric teardown for spawnEntities. Optionally preserves the player so
@@ -221,6 +246,9 @@ export function destroyEntities(
   }
   for (const save of spawned.saves) {
     save.destroy();
+  }
+  for (const merchant of spawned.merchants) {
+    merchant.destroy();
   }
   for (const obj of spawned.others) {
     obj.destroy();
@@ -308,4 +336,29 @@ function floorAlignedSpawnPosition(
     correctionY = (frameHeight - instance.height) / 2;
   }
   return { x: x + correctionX, y: y + correctionY };
+}
+
+// Rebuild a single Enemy at the given coords without re-running the full
+// LDtk-driven spawn pass. Used by EnemyRespawnManager when a killed enemy's
+// timer elapses: spawn coords come from the original Enemy.getSpawnX/Y
+// (already floor-aligned at first spawn, so no re-alignment here), and
+// iid + loiterPath round-trip through Enemy.getIid/getLoiterPath so the
+// rebuilt instance behaves identically to the original.
+//
+// Returns null when the identifier doesn't resolve to a behavior-bearing
+// registry entry — defensive against a registry edit that flips an entity
+// from enemy to decoration between the initial spawn and the respawn.
+// Caller (GameScene.handleRespawn) is responsible for the post-spawn
+// hookup that buildWorld also does: depth, group membership, audio anchors.
+export function respawnEnemyAt(
+  scene: Phaser.Scene,
+  identifier: string,
+  x: number,
+  y: number,
+  iid: string,
+  loiterPath: ReadonlyArray<LoiterPathPoint> | null,
+): Enemy | null {
+  const entry = getEntityRegistryEntry(identifier);
+  if (!entry || !entry.behavior) return null;
+  return new Enemy(scene, x, y, identifier, iid, loiterPath);
 }

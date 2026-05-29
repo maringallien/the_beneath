@@ -163,6 +163,11 @@ export class Enemy extends AnimatedEntity {
   // down static `entitySounds` anchors (keyed by iid) when this enemy dies —
   // moving anchors are keyed by sprite ref and torn down separately.
   private readonly iid: string;
+  // World coords the enemy was placed at on construction. Captured so the
+  // respawn manager can rebuild a killed enemy at exactly the same LDtk
+  // position regardless of where the corpse settled (knockback, gravity).
+  private readonly spawnX: number;
+  private readonly spawnY: number;
   // Flattened attack list: either the single `attack` from the registry, or
   // every entry in `attackPool`. Chase fields (aggressive / chaseRange /
   // moveSpeed / walkAnimation) are read from `attacks[0]` — multi-attack
@@ -334,6 +339,8 @@ export class Enemy extends AnimatedEntity {
   ) {
     super(scene, x, y, identifier);
     this.iid = iid;
+    this.spawnX = x;
+    this.spawnY = y;
     // Single-waypoint paths are expanded with the spawn position as an
     // implicit first waypoint, so one click in LDtk defines a useful
     // ping-pong patrol (spawn ↔ point). Multi-waypoint paths use what the
@@ -452,6 +459,32 @@ export class Enemy extends AnimatedEntity {
 
   isDead(): boolean {
     return this.enemyState === 'dead';
+  }
+
+  // Stable LDtk instance id. Same iid is reused when the respawn manager
+  // rebuilds this enemy so iid-keyed audio anchors line back up.
+  getIid(): string {
+    return this.iid;
+  }
+
+  getSpawnX(): number {
+    return this.spawnX;
+  }
+
+  getSpawnY(): number {
+    return this.spawnY;
+  }
+
+  // Authored patrol route in world-space px (null when unset). The respawn
+  // manager forwards this so the rebuilt enemy resumes the same path.
+  getLoiterPath(): ReadonlyArray<LoiterPathPoint> | null {
+    return this.loiterPath;
+  }
+
+  // True when the registry flags this entity as a boss. Bosses opt out of
+  // the auto-respawn system entirely.
+  isBoss(): boolean {
+    return this.behavior.isBoss === true;
   }
 
   // True while the boss is mid-teleport blink (disappear or appear clip

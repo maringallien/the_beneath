@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import {
   CAMERA_ZOOM,
+  COIN_TEXTURE_KEY,
   PLAYER_HUD_DEPTH,
   PLAYER_HUD_LABEL_COLOR,
   PLAYER_HUD_LABEL_CONTENT_GAP_WORLD_UNITS,
@@ -25,6 +26,8 @@ export interface PlayerHudValues {
   readonly maxGun1Ammo: number;
   readonly gun2Ammo: number;
   readonly maxGun2Ammo: number;
+  readonly coins: number;
+  readonly maxCoins: number;
 }
 
 // sliders.png row 0 frame indices (0..9). Phaser's spritesheet flattens the
@@ -35,11 +38,22 @@ const HP_SLIDER_FRAME_COUNT = 10;
 // frame; this scale lands it at a readable HUD size and is 30% larger than
 // the previous 0.6 baseline per user request.
 const HP_SLIDER_SCALE = 0.78;
-// Stamina and magic are both authored as 23×3 segmented strips. Native scale
-// keeps them compact in the horizontal layout (previously stamina was 2x
-// stretched vertically; per user the bars should display at half the size).
-const STA_SPRITE_SCALE = 1;
-const MAG_SPRITE_SCALE = 1;
+// Stamina and magic are rendered as three independent 7×3 segment sprites
+// per row (the source strips ship as three small bars with 1-px gaps; we
+// register each segment as its own frame in PreloadScene). The total
+// 3-segment footprint (3 × 7 + 2 × 1 = 23) matches the previous single-image
+// width so the surrounding HUD frame stays the same size when the meter
+// drains. Each resource maxes at 3, so the count of visible segments equals
+// the current value directly (current=2 → segs 0 & 1 visible, seg 2 hidden).
+const SEGMENT_SPRITE_SCALE = 1;
+const SEGMENT_WIDTH_WORLD = 7;
+const SEGMENT_GAP_WORLD = 1;
+const SEGMENT_STRIDE_WORLD = SEGMENT_WIDTH_WORLD + SEGMENT_GAP_WORLD;
+const SEGMENT_HEIGHT_WORLD = 3;
+const SEGMENT_COUNT = 3;
+const SEGMENT_TOTAL_WIDTH_WORLD =
+  SEGMENT_COUNT * SEGMENT_WIDTH_WORLD +
+  (SEGMENT_COUNT - 1) * SEGMENT_GAP_WORLD;
 
 // Ammo icons: hud_ammo spritesheet is a 6×3 grid of 16×16 tiles.
 // Frame 0 (top-left) = pistol bullet for G1; frame 12 (row 2, col 0) =
@@ -47,6 +61,12 @@ const MAG_SPRITE_SCALE = 1;
 const AMMO_ICON_SCALE = 0.6;
 const GUN1_ICON_FRAME = 0;
 const GUN2_ICON_FRAME = 12;
+// Coin icon: procedural 32×32 texture (see PreloadScene.generateCoinTexture).
+// Source is larger than the 16×16 ammo tile, so the scale is set so the
+// coin renders at roughly the same visible height as the ammo icons
+// (16 × 0.6 ≈ 9.6 world units; 32 × 0.3 = 9.6 world units). The oversized
+// source keeps the HUD icon crisp at CAMERA_ZOOM rather than upscaling 8 px.
+const COIN_ICON_SCALE = 0.3;
 // World-unit gap between the icon's right edge and the count text. With
 // CAMERA_ZOOM=3 this renders as ~3 canvas pixels.
 const AMMO_COUNT_GAP_WORLD_UNITS = 1;
@@ -82,7 +102,19 @@ interface IconCountRow {
   lastCount: number;
 }
 
-type BarRow = AssetBarRow | IconCountRow;
+// STA / MAG rows. Each holds SEGMENT_COUNT individual image sprites side by
+// side, one per source-strip segment. Segments are toggled visible/hidden
+// based on the current value; layout always treats the group as if all
+// segments were present so the surrounding frame doesn't shift as the meter
+// drains.
+interface SegmentBarRow {
+  readonly kind: 'segments';
+  readonly segments: ReadonlyArray<Phaser.GameObjects.Image>;
+  readonly label: Phaser.GameObjects.Text;
+  lastValue: number;
+}
+
+type BarRow = AssetBarRow | IconCountRow | SegmentBarRow;
 
 function safeRatio(current: number, max: number): number {
   if (max <= 0) return 0;
@@ -139,31 +171,22 @@ export class PlayerHud {
       label: makeText(scene, 'HP'),
     });
 
-    // Row 1 — STA. Teal 3-segment 23×3 strip from ui_stamina_bar.png 'content'.
-    const staSprite = scene.add.image(0, 0, 'hud_stamina', 'content');
-    staSprite.setOrigin(0, 0);
-    staSprite.setDepth(PLAYER_HUD_DEPTH);
-    staSprite.setScale(STA_SPRITE_SCALE);
-    rows.push({
-      kind: 'asset',
-      sprite: staSprite,
-      label: makeText(scene, 'STA', PLAYER_HUD_SMALL_LABEL_FONT_SIZE_PX),
-    });
-
-    // Row 2 — MAG. Dark-red 23×3 strip from updated ui_magic_bar.png 'content'.
-    const magSprite = scene.add.image(0, 0, 'hud_magic', 'content');
-    magSprite.setOrigin(0, 0);
-    magSprite.setDepth(PLAYER_HUD_DEPTH);
-    magSprite.setScale(MAG_SPRITE_SCALE);
-    rows.push({
-      kind: 'asset',
-      sprite: magSprite,
-      label: makeText(scene, 'MAG', PLAYER_HUD_SMALL_LABEL_FONT_SIZE_PX),
-    });
+    // Rows 1, 2 — STA / MAG. Each is a 3-segment row built from the per-
+    // segment frames registered against hud_stamina / hud_magic. Segments
+    // start fully visible; PlayerHud.update toggles visibility based on the
+    // current value each frame.
+    rows.push(this.buildSegmentBarRow(scene, 'hud_stamina', 'STA'));
+    rows.push(this.buildSegmentBarRow(scene, 'hud_magic', 'MAG'));
 
     // Rows 3, 4 — G1 / G2 ammo as [icon] x [count].
     rows.push(this.buildIconCountRow(scene, 'G1', GUN1_ICON_FRAME));
     rows.push(this.buildIconCountRow(scene, 'G2', GUN2_ICON_FRAME));
+
+    // Row 5 — gold coin counter. Uses the procedural COIN_TEXTURE_KEY
+    // single-frame texture rather than hud_ammo. Sits directly under G2 with
+    // the same right-aligned framing; the layout loop in update() handles
+    // the third row automatically off this.rows.length.
+    rows.push(this.buildCoinRow(scene));
 
     this.rows = rows;
   }
@@ -197,6 +220,14 @@ export class PlayerHud {
     // we compute the horizontal chain.
     this.applyCount(3, values.gun1Ammo);
     this.applyCount(4, values.gun2Ammo);
+    this.applyCount(5, values.coins);
+
+    // Drive STA / MAG segment visibility off the current resource value.
+    // Each resource maxes at SEGMENT_COUNT (3); segments[i] is visible when
+    // current > i. Cached lastValue keeps the per-frame call cheap when the
+    // value hasn't changed.
+    this.applySegments(this.rows[1], values.stamina);
+    this.applySegments(this.rows[2], values.magic);
 
     // Two stacked groups. Indices 0..2 (HP, STA, MAG) anchor top-left;
     // indices 3..4 (G1, G2) anchor top-right so the row's right edge sits
@@ -277,6 +308,12 @@ export class PlayerHud {
       include(row.label.x, row.label.y, row.label.displayWidth, row.label.displayHeight);
       if (row.kind === 'asset') {
         include(row.sprite.x, row.sprite.y, row.sprite.displayWidth, row.sprite.displayHeight);
+      } else if (row.kind === 'segments') {
+        // Include every segment's footprint (even hidden ones) so the frame
+        // stays anchored to the full 3-segment width regardless of meter level.
+        for (const seg of row.segments) {
+          include(seg.x, seg.y, SEGMENT_WIDTH_WORLD, SEGMENT_HEIGHT_WORLD);
+        }
       } else {
         include(row.icon.x, row.icon.y, row.icon.displayWidth, row.icon.displayHeight);
         include(row.count.x, row.count.y, row.count.displayWidth, row.count.displayHeight);
@@ -328,6 +365,11 @@ export class PlayerHud {
         contentX,
         worldCenterY - row.sprite.displayHeight / 2,
       );
+    } else if (row.kind === 'segments') {
+      const top = worldCenterY - SEGMENT_HEIGHT_WORLD / 2;
+      for (let i = 0; i < row.segments.length; i += 1) {
+        row.segments[i].setPosition(contentX + i * SEGMENT_STRIDE_WORLD, top);
+      }
     } else {
       row.icon.setPosition(
         contentX,
@@ -346,6 +388,11 @@ export class PlayerHud {
     if (row.kind === 'asset') {
       return base + row.sprite.displayWidth;
     }
+    if (row.kind === 'segments') {
+      // Fixed total footprint, independent of how many segments are visible —
+      // keeps the row width stable as the meter drains.
+      return base + SEGMENT_TOTAL_WIDTH_WORLD;
+    }
     return (
       base +
       row.icon.displayWidth +
@@ -358,6 +405,8 @@ export class PlayerHud {
     let h = row.label.displayHeight;
     if (row.kind === 'asset') {
       if (row.sprite.displayHeight > h) h = row.sprite.displayHeight;
+    } else if (row.kind === 'segments') {
+      if (SEGMENT_HEIGHT_WORLD > h) h = SEGMENT_HEIGHT_WORLD;
     } else {
       if (row.icon.displayHeight > h) h = row.icon.displayHeight;
       if (row.count.displayHeight > h) h = row.count.displayHeight;
@@ -369,6 +418,8 @@ export class PlayerHud {
     for (const row of this.rows) {
       if (row.kind === 'asset') {
         row.sprite.destroy();
+      } else if (row.kind === 'segments') {
+        for (const seg of row.segments) seg.destroy();
       } else {
         row.icon.destroy();
         row.count.destroy();
@@ -377,6 +428,42 @@ export class PlayerHud {
     }
     this.leftFrame.destroy();
     this.rightFrame.destroy();
+  }
+
+  private buildSegmentBarRow(
+    scene: Phaser.Scene,
+    textureKey: string,
+    label: string,
+  ): SegmentBarRow {
+    const segments: Phaser.GameObjects.Image[] = [];
+    for (let i = 0; i < SEGMENT_COUNT; i += 1) {
+      const seg = scene.add.image(0, 0, textureKey, `seg${i}`);
+      seg.setOrigin(0, 0);
+      seg.setDepth(PLAYER_HUD_DEPTH);
+      seg.setScale(SEGMENT_SPRITE_SCALE);
+      segments.push(seg);
+    }
+    return {
+      kind: 'segments',
+      segments,
+      label: makeText(scene, label, PLAYER_HUD_SMALL_LABEL_FONT_SIZE_PX),
+      // -1 forces the first applySegments call to write the initial visibility
+      // state regardless of the spawned `current`.
+      lastValue: -1,
+    };
+  }
+
+  // Sets segment visibility from `current`. Each segment shows when its
+  // index is below the current value, so current=2 lights segments 0 and 1
+  // and leaves segment 2 hidden. The lastValue cache skips the loop when the
+  // resource hasn't changed since the previous frame.
+  private applySegments(row: BarRow, current: number): void {
+    if (row.kind !== 'segments') return;
+    if (row.lastValue === current) return;
+    row.lastValue = current;
+    for (let i = 0; i < row.segments.length; i += 1) {
+      row.segments[i].setVisible(i < current);
+    }
   }
 
   private buildIconCountRow(
@@ -396,6 +483,29 @@ export class PlayerHud {
       icon,
       count,
       label: makeText(scene, label),
+      lastCount: -1,
+    };
+  }
+
+  // Coin row: same IconCountRow shape as ammo rows but sourced from the
+  // procedural COIN_TEXTURE_KEY single-frame texture, scaled and labelled for
+  // the gold-coin currency. Uses '$' as the label glyph so it matches the
+  // single-glyph footprint of G1/G2 instead of widening the right-column
+  // chain. The icon is a single-frame texture so no `frame` is passed —
+  // Phaser falls back to the default __BASE frame.
+  private buildCoinRow(scene: Phaser.Scene): IconCountRow {
+    const icon = scene.add.sprite(0, 0, COIN_TEXTURE_KEY);
+    icon.setOrigin(0, 0);
+    icon.setDepth(PLAYER_HUD_DEPTH);
+    icon.setScale(COIN_ICON_SCALE);
+
+    const count = makeText(scene, 'x 0');
+
+    return {
+      kind: 'iconcount',
+      icon,
+      count,
+      label: makeText(scene, '$'),
       lastCount: -1,
     };
   }

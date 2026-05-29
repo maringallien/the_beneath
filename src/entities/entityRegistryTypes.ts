@@ -365,6 +365,13 @@ export interface AnimatedEntityBehaviorConfig {
   // (e.g. The_heart_hoarder confined to Level_15). No-op for entities
   // spawned in inter-level whitespace where the rect lookup returns null.
   readonly stayInSpawnLevel?: boolean;
+  // If true, this enemy is treated as a boss for the auto-respawn system —
+  // i.e. it does NOT come back after the player kills it. Non-boss enemies
+  // re-spawn at their original LDtk position after ENEMY_RESPAWN_DELAY_MS,
+  // once the spawn point is off-camera. Independent of stayInSpawnLevel,
+  // encounterSoundId, etc. so a future "boss" that isn't arena-bound or
+  // doesn't get a sting can still opt out of respawning.
+  readonly isBoss?: boolean;
   // Single-attack shorthand. For enemies with one combat behavior. Mutually
   // exclusive with attackPool in practice — if both are set, attackPool wins
   // and attack is ignored (validator warns at boot).
@@ -474,7 +481,7 @@ export interface AnimatedEntityDropConfig {
 }
 
 export interface AnimatedEntityDropKindConfig {
-  readonly kind: 'gun1' | 'gun2' | 'magic';
+  readonly kind: 'gun1' | 'gun2' | 'magic' | 'coin';
   readonly weight: number;
 }
 

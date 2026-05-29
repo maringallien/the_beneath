@@ -1,7 +1,13 @@
 import Phaser from 'phaser';
 import { preloadAll as preloadAllSounds } from '../audio';
 import {
+  COIN_FILL_COLOR,
+  COIN_HIGHLIGHT_COLOR,
+  COIN_TEXTURE_KEY,
+  COIN_TEXTURE_SIZE_PX,
   FOREGROUND_GLOW_ENABLED,
+  LANDING_START_ASSET_PATH,
+  LANDING_START_TEXTURE_KEY,
   MAGIC_ORB_FILL_COLOR,
   MAGIC_ORB_TEXTURE_KEY,
   MAGIC_ORB_TEXTURE_SIZE_PX,
@@ -13,11 +19,13 @@ import {
   PAUSE_QUIT_ASSET_PATH,
   PAUSE_QUIT_TEXTURE_KEY,
   SCENE_KEYS,
+  TILESET_BRIGHTNESS_FACTORS,
 } from '../constants';
 import { ldtkRaw } from '../ldtk/ldtkData';
 import { parseLdtkProject } from '../ldtk/parseLdtk';
 import type { LdtkTilesetDef } from '../ldtk/types';
 import { bakeGlowAtlasForTileset } from '../level/GlowAtlasBaker';
+import { brightenTilesetTexture } from '../level/TilesetBrightnessPass';
 import {
   collectTilesetsForAllLevels,
   preloadTilesets,
@@ -94,6 +102,10 @@ export class PreloadScene extends Phaser.Scene {
     // displayed side-by-side by PauseScene.
     this.load.image(PAUSE_CONTINUE_TEXTURE_KEY, PAUSE_CONTINUE_ASSET_PATH);
     this.load.image(PAUSE_QUIT_TEXTURE_KEY, PAUSE_QUIT_ASSET_PATH);
+    // Landing-screen START banner. Same pattern as the pause-menu words —
+    // plain PNG, LINEAR-filtered in create() so the scaled-up letters stay
+    // smooth at any viewport size.
+    this.load.image(LANDING_START_TEXTURE_KEY, LANDING_START_ASSET_PATH);
   }
 
   create(): void {
@@ -103,10 +115,23 @@ export class PreloadScene extends Phaser.Scene {
     // have lots of empty space. PlayerHud references these frames by name.
     // Coords were measured from the source PNGs by pixel inspection; if the
     // assets are updated upstream, re-derive with `python -c "from PIL ..."`.
-    this.textures.get('hud_stamina').add('content', 0, 18, 21, 23, 3);
-    this.textures.get('hud_magic').add('content', 0, 13, 19, 23, 3);
+    //
+    // STA and MAG strips are each composed of three 7×3 segments separated by
+    // 1-pixel gaps, so the full strip spans 23 px (7+1+7+1+7). We register
+    // each segment as its own frame so PlayerHud can render them as three
+    // independent image sprites and toggle their visibility based on the
+    // current value (each resource maxes at 3, so segment-index = value − 1).
+    const staminaTex = this.textures.get('hud_stamina');
+    staminaTex.add('seg0', 0, 18, 21, 7, 3);
+    staminaTex.add('seg1', 0, 26, 21, 7, 3);
+    staminaTex.add('seg2', 0, 34, 21, 7, 3);
+    const magicTex = this.textures.get('hud_magic');
+    magicTex.add('seg0', 0, 13, 19, 7, 3);
+    magicTex.add('seg1', 0, 21, 19, 7, 3);
+    magicTex.add('seg2', 0, 29, 19, 7, 3);
     this.generateMagicOrbTexture();
     this.generateMistParticleTexture();
+    this.generateCoinTexture();
     // Force LINEAR sampling on the pause word banners so the scaled-up
     // letters render smoothly. The global pixelArt:true config would
     // otherwise nearest-sample them into jagged stair-stepped edges. Same
@@ -117,8 +142,28 @@ export class PreloadScene extends Phaser.Scene {
     this.textures
       .get(PAUSE_QUIT_TEXTURE_KEY)
       .setFilter(Phaser.Textures.FilterMode.LINEAR);
+    this.textures
+      .get(LANDING_START_TEXTURE_KEY)
+      .setFilter(Phaser.Textures.FilterMode.LINEAR);
+    this.applyTilesetBrightnessLifts();
     this.bakeForegroundGlowAtlases();
-    this.scene.start(SCENE_KEYS.GAME);
+    // startLanding:true triggers the landing-page overlay on first boot.
+    // PauseScene's Quit also routes back through this scene, so the
+    // landing re-shows on every fresh start of the run.
+    this.scene.start(SCENE_KEYS.GAME, { startLanding: true });
+  }
+
+  // Lifts the RGB channels of any tileset listed in TILESET_BRIGHTNESS_FACTORS
+  // so visually-darker source art reads at comparable brightness to its peers
+  // in the same level. Runs BEFORE the glow bake so the glow pass detects
+  // bright pixels on the already-lifted source — keeping the two passes in
+  // sync would otherwise require threading the factor into GlowAtlasBaker too.
+  private applyTilesetBrightnessLifts(): void {
+    for (const def of this.tilesetsForGlowBake) {
+      const factor = TILESET_BRIGHTNESS_FACTORS[def.uid];
+      if (factor === undefined) continue;
+      brightenTilesetTexture(this, def, factor);
+    }
   }
 
   // Pre-bakes a sibling "glow" atlas for every tileset that backs a level, so
@@ -153,6 +198,31 @@ export class PreloadScene extends Phaser.Scene {
     g.destroy();
     this.textures
       .get(MAGIC_ORB_TEXTURE_KEY)
+      .setFilter(Phaser.Textures.FilterMode.LINEAR);
+  }
+
+  // Procedural placeholder for the gold coin pickup: a small warm-gold disc
+  // with a brighter highlight ring inset off-center to give the disc a faint
+  // 3D read at small sizes. LINEAR filter (same as the orb) keeps the edge
+  // smooth instead of pixelating at CAMERA_ZOOM. Swap for a real PNG by
+  // loading at COIN_TEXTURE_KEY in preload() and removing this call.
+  private generateCoinTexture(): void {
+    const size = COIN_TEXTURE_SIZE_PX;
+    const cx = size / 2;
+    const cy = size / 2;
+    const g = this.make.graphics({ x: 0, y: 0 }, false);
+    g.fillStyle(COIN_FILL_COLOR, 1);
+    // 1px margin so the AA edge fades cleanly inside the texture bounds.
+    g.fillCircle(cx, cy, cx - 1);
+    // Highlight: a smaller filled disc inset toward the upper-left so the
+    // coin reads as catching a light source from above. Radius and offset
+    // scale with size — at the 8px default this yields a ~2px highlight.
+    g.fillStyle(COIN_HIGHLIGHT_COLOR, 1);
+    g.fillCircle(cx - size * 0.15, cy - size * 0.15, Math.max(1, size * 0.2));
+    g.generateTexture(COIN_TEXTURE_KEY, size, size);
+    g.destroy();
+    this.textures
+      .get(COIN_TEXTURE_KEY)
       .setFilter(Phaser.Textures.FilterMode.LINEAR);
   }
 
