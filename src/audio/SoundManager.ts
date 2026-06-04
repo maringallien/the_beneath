@@ -849,11 +849,18 @@ const PLAYER_SOUND_ACTIVE: Map<PlayerSoundSlot, boolean> = new Map();
 // first post-respawn frame that wants it fades it back up without
 // reinitializing.
 //
+// `fadeMs` overrides the crossfade duration for this transition. Defaults to
+// PLAYER_STATE_CROSSFADE_MS (snappy, for footsteps/movement/wall-slide). The
+// falling-whoosh slot passes a longer value on activation (a swell) and a
+// short one on deactivation (a quick cut when landing) — see Player's
+// updateFallingSound.
+//
 // No-op if the registry omits the slot.
 export function setPlayerStateSoundActive(
   scene: Phaser.Scene,
   slot: PlayerSoundSlot,
   active: boolean,
+  fadeMs: number = PLAYER_STATE_CROSSFADE_MS,
 ): void {
   if (PLAYER_SOUND_ACTIVE.get(slot) === active) return;
   const id = getPlayerStateSoundId(slot);
@@ -871,7 +878,7 @@ export function setPlayerStateSoundActive(
     ACTIVE.set(id, sound);
   }
   const target = active ? def.defaultVolume : 0;
-  fadeSoundDuration(scene, sound, target, PLAYER_STATE_CROSSFADE_MS);
+  fadeSoundDuration(scene, sound, target, fadeMs);
   PLAYER_SOUND_ACTIVE.set(slot, active);
 }
 

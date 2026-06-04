@@ -1,10 +1,13 @@
 import {
+  HEART_TEXTURE_KEY,
   MAGIC_ORB_TEXTURE_KEY,
   SHOP_GUN1_GRANT_PER_PURCHASE,
   SHOP_GUN2_GRANT_PER_PURCHASE,
+  SHOP_HEAL_GRANT_PER_PURCHASE,
   SHOP_MAGIC_GRANT_PER_PURCHASE,
   SHOP_PRICE_GUN1_AMMO,
   SHOP_PRICE_GUN2_AMMO,
+  SHOP_PRICE_HEAL_ITEM,
   SHOP_PRICE_MAGIC_ORB,
 } from '../../constants';
 import type { PickupKind } from '../Player';
@@ -65,6 +68,14 @@ export const MUSHROOM_SHOP_ITEMS: ReadonlyArray<ShopItem> = [
     price: SHOP_PRICE_MAGIC_ORB,
     iconTextureKey: MAGIC_ORB_TEXTURE_KEY,
     label: 'Magic Orb',
+  },
+  {
+    id: 'mushroom_heal',
+    pickupKind: 'heal',
+    grantAmount: SHOP_HEAL_GRANT_PER_PURCHASE,
+    price: SHOP_PRICE_HEAL_ITEM,
+    iconTextureKey: HEART_TEXTURE_KEY,
+    label: 'Healing Heart',
   },
 ];
 

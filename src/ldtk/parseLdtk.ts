@@ -195,6 +195,10 @@ export function getEntities(level: LdtkLevel): LdtkEntityInstance[] {
       // the owning level/layer to convert cell coords. Cell coords sit on the
       // entity's own layer, so the layer's gridSize is the right divisor.
       inst.loiterPath = resolveLoiterPath(inst, level, li.__gridSize);
+      // Stamp the source level identifier so EntityFactory can tell which level
+      // a flattened instance came from (the instances are merged across all
+      // levels before spawning). Used to mark key-locked doors by level.
+      inst.__levelId = level.identifier;
       out.push(inst);
     }
   }

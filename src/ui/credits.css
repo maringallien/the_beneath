@@ -1,0 +1,91 @@
+/* Credits panel — opened from the home screen's CREDITS button.
+ *
+ * The frame is shared with the merchant shop and options panel so it reads as
+ * the same piece of in-world UI: the backdrop (.shop-overlay) and the grey
+ * framed window (.shop-window) come from shop.css, which CreditsOverlay imports
+ * alongside this file. Everything below styles only the credits-specific
+ * content — a centered game title, a single author line, and an Esc footer. */
+
+.credits-window {
+  /* Narrower than the options panel — the content is just a title + one line,
+   * so the window hugs it rather than stretching wide. */
+  width: 420px;
+  max-width: 92vw;
+  padding: 32px 36px 26px;
+  text-align: center;
+}
+
+.credits-title {
+  font-family: 'Nosifer', 'Impact', cursive;
+  font-size: 30px;
+  font-weight: 400;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: #ffffff;
+  margin: 0 0 28px;
+  padding-bottom: 18px;
+  line-height: 1.3;
+  border-bottom: 1px solid #3a3a3a;
+}
+
+/* One block per credited party; the gap separates entries while each entry's
+ * own label/name/detail stay tightly grouped. */
+.credits-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+}
+
+.credits-entry {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.credits-label {
+  font-size: 14px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #9a9a9a;
+}
+
+.credits-name {
+  font-size: 22px;
+  color: #ffffff;
+}
+
+.credits-detail {
+  font-size: 14px;
+  color: #b9b9b9;
+}
+
+.credits-footer {
+  margin-top: 30px;
+  padding-top: 16px;
+  border-top: 1px solid #3a3a3a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #9a9a9a;
+}
+
+/* Key chip — matches the .options-key look so the Esc hint reads identically to
+ * the options panel's footer. Self-contained here since CreditsOverlay does not
+ * import options.css. */
+.credits-key {
+  display: inline-block;
+  background: #1a1a1a;
+  border: 1px solid #4a4a4a;
+  border-radius: 3px;
+  padding: 4px 9px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #e6e6e6;
+  min-width: 16px;
+  text-align: center;
+  font-family: 'Arial', 'Helvetica', sans-serif;
+}

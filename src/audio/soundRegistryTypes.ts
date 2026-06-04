@@ -59,11 +59,16 @@ export interface LevelAmbienceOverride {
 //   - wallSlide: scraping loop that plays while the player is wall-sliding
 //     (pressing into a wall while falling). Crossfades in/out on contact via
 //     the same PLAYER_STATE_CROSSFADE_MS path the other slots use.
+//   - falling: soft wind whoosh that swells in during a sustained free fall.
+//     Unlike the other slots, Player.ts gates it behind a short delay (so
+//     small hops never trigger it) and drives it with a longer fade-in and a
+//     quick fade-out via the optional fadeMs arg on setPlayerStateSoundActive.
 export interface PlayerStateSounds {
   readonly movement?: string;
   readonly footstepsGround?: string;
   readonly footstepsBridge?: string;
   readonly wallSlide?: string;
+  readonly falling?: string;
 }
 
 // Union of slot keys in PlayerStateSounds. Listed explicitly (rather than
@@ -73,7 +78,8 @@ export type PlayerSoundSlot =
   | 'movement'
   | 'footstepsGround'
   | 'footstepsBridge'
-  | 'wallSlide';
+  | 'wallSlide'
+  | 'falling';
 
 // Periodic one-shot binding for a moving creature (e.g. crow caw). The
 // SoundManager scheduler picks a uniformly-random delay in [minIntervalMs,

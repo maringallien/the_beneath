@@ -10,9 +10,12 @@ import type { ShopKind } from './shop/shopTypes';
 const TECH_SHOP_IDENTIFIER = 'Tech_shop_spawn';
 const TECH_SHOP_KIND: ShopKind = 'tech';
 
-// Source-px gap between the shop's body.top and the E icon anchor point.
-// Mirrors Chest/Save so the icon hovers a touch above the silhouette.
-const ICON_ANCHOR_GAP_PX = 2;
+// Source-px lift above the sprite's vertical center for the E icon anchor.
+// The 108×108 frame holds a tall shop with a 48×48 floor-anchored body, so
+// body.top sits in the lower-middle of the silhouette rather than its top.
+// Anchor at the sprite's vertical center (like MushroomMerchant) so the icon
+// sits centered on the shop instead of floating low.
+const ICON_BODY_CENTER_OFFSET_Y_PX = 4;
 
 // Interactable merchant that sells ammo. Implements the Interactable contract
 // in the same shape as Save/Chest: the InteractionManager owns the proximity
@@ -25,7 +28,7 @@ export class TechShop extends AnimatedEntity implements Interactable {
   }
 
   getInteractionAnchor(): { x: number; y: number } {
-    return { x: this.x, y: this.body.top - ICON_ANCHOR_GAP_PX };
+    return { x: this.x, y: this.y - ICON_BODY_CENTER_OFFSET_Y_PX };
   }
 
   getInteractionRangeSq(): number {

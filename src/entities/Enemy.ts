@@ -7,11 +7,18 @@ import {
   setEnemyWalkSoundEnabled,
   unregisterEntityAudio,
 } from '../audio';
-import { ENEMY_COMBAT_TIMEOUT_MS } from '../constants';
+import {
+  BOSS_DEFEATED_EVENT,
+  BOSS_ROUND_BREAK_MS,
+  ENEMY_COMBAT_TIMEOUT_MS,
+  ENEMY_HEALTH_MULTIPLIER,
+  HORIZONTAL_CHASE_STANDOFF_DEADZONE_PX,
+} from '../constants';
 import type { LoiterPathPoint } from '../ldtk/types';
 import { rollDrop } from './AmmoDrop';
 import type { AmmoDropSpawnerScene } from './AmmoDropSpawnerScene';
 import { AnimatedEntity } from './AnimatedEntity';
+import { roundForRatio } from './bossRounds';
 import { EnemyHealthBar } from './EnemyHealthBar';
 import type { EnemyProjectileSpawnOptions } from './EnemyProjectile';
 import {
@@ -88,12 +95,42 @@ const LOITER_ENGAGEMENT_CHASE_MULTIPLIER = 4;
 // upper-right, so loiter points sit above and around the player.
 const LOITER_ANGLE_MIN = -Math.PI * 0.75;
 const LOITER_ANGLE_MAX = -Math.PI * 0.25;
+// Home-anchored loiter (hive-tethered wasps) orbits a fixed world point rather
+// than the player. Unlike the player-anchored spread above — which keeps the
+// target in the upper hemisphere so the flyer hovers *above* the player — a
+// home anchor can sit on a ceiling, wall, or floor, so the target sweeps the
+// full circle [-π, π] around it for an even orbit.
+const HOME_LOITER_ANGLE_MIN = -Math.PI;
+const HOME_LOITER_ANGLE_MAX = Math.PI;
+// Hysteresis for the home chase-leash. A home-anchored enemy breaks off the
+// chase when the player passes the full leash radius, but only re-engages once
+// the player comes back within this fraction of it. The gap stops a player
+// hovering at exactly the radius from flipping the wasp between chase and
+// drift-home every frame.
+const HOME_LEASH_REENGAGE_FACTOR = 0.85;
 const LOITER_REFRESH_MIN_MS = 1500;
 const LOITER_REFRESH_MAX_MS = 3000;
 // World-pixel distance below which we treat the loiter target as reached
 // and repick early, so the crow doesn't stutter against a target it
 // already overshot.
 const LOITER_TARGET_REACHED_DIST = 12;
+// Per-instance chase variation. Reinforcement waves spawn many identical
+// enemies on the same frame; with one shared moveSpeed and pure straight-line
+// homing they chase the player as a single synchronized mass, which reads as a
+// rigid blob marching in lockstep. Each Enemy picks a fixed speed multiplier in
+// [1 - JITTER, 1 + JITTER] at construction, so faster ones pull ahead and
+// slower ones lag and a pack naturally spreads into a staggered formation
+// within a second or two. Fixed (not re-rolled per frame) so each enemy keeps a
+// stable personality rather than jittering in place.
+const CHASE_SPEED_JITTER = 0.18;
+// Airborne chasers (crows, wasps) additionally weave perpendicular to their
+// homing vector so a swarm flies in independent arcs instead of one straight
+// line. Each instance gets a random phase and angular frequency; the sideways
+// velocity is a fraction of its (preserved) forward closing speed, so they
+// still converge on the player at moveSpeed while weaving around the approach.
+const AIRBORNE_WEAVE_FRACTION = 0.4;
+const AIRBORNE_WEAVE_FREQ_MIN = 2.2; // rad/s
+const AIRBORNE_WEAVE_FREQ_MAX = 4.0; // rad/s
 
 // Animation key suffixes that should pause an entity's ambience sequence
 // (e.g. the heart hoarder's cloth flap) while playing, then resume when the
@@ -147,6 +184,26 @@ const INTGRID_BRIDGE_VALUE = 2;
 // inside the tile beneath.
 const FOOTSTEP_TILE_PROBE_OFFSET_Y = 4;
 
+// Per-spawn overrides applied at construction time, bypassing the registry
+// defaults for a single Enemy instance. Used by the boss self-copy system
+// (GameScene.spawnBossSelfCopies): a copy is built from the boss's own registry
+// entry — so it inherits every animation, attack, and AI behavior — but is
+// rendered harmless and given hand-set low HP.
+export interface EnemySpawnOverrides {
+  // When true the enemy deals no damage to the player and is invisible to the
+  // boss/round-fight systems: it never emits the boss-defeated event, is never
+  // selected as the active boss, shows no round HUD, and never round-breaks.
+  readonly harmless?: boolean;
+  // Overrides the computed max (and starting) health. Lets a copy be low-HP
+  // without needing a separate registry entry.
+  readonly maxHealth?: number;
+  // Signed horizontal offset (world px) added to the player's X when this enemy
+  // computes its chase target. Lets self-copies of a horizontal-movement-only
+  // boss hold distinct stand-off slots beside the player instead of all homing
+  // to the same player.x and stacking into one entity. 0 / unset = home dead-on.
+  readonly chaseStandoffX?: number;
+}
+
 // Animated entity that gains health, damage, and a behavior block. Owns the
 // AI state machine: when the player is within range, plays the configured
 // attack animation and applies damage on the configured frame — melee via a
@@ -173,6 +230,11 @@ export class Enemy extends AnimatedEntity {
   // moveSpeed / walkAnimation) are read from `attacks[0]` — multi-attack
   // bosses should put the chase-bearing entry first.
   private readonly attacks: ReadonlyArray<AnimatedEntityAttackConfig>;
+  // Effective max HP: authored behavior.health scaled by
+  // ENEMY_HEALTH_MULTIPLIER for regular enemies (bosses keep their authored
+  // value). Current health drains from here, the bar reads it as the
+  // denominator, and combat-reset/heal clamp to it.
+  private readonly maxHealth: number;
   private health: number;
   private enemyState: EnemyState = 'idle';
   // Wall-clock timestamp at which the post-attack recover window ends. Set
@@ -285,6 +347,27 @@ export class Enemy extends AnimatedEntity {
   private loiterTargetX = 0;
   private loiterTargetY = 0;
   private loiterRefreshAt = 0;
+  // World point this enemy loiters around and centers its chase leash on, or
+  // null for the legacy player-anchored drift + un-leashed chase. Set after
+  // spawn by GameScene for hive-tethered swarmers (wasps): the nearest hive's
+  // spawn point, or the wasp's own spawn point when its level has no hive.
+  // Survives respawns because GameScene re-applies it via the same post-spawn
+  // pass. A captured world point — so wasps keep orbiting even after the hive
+  // they were anchored to is destroyed.
+  private homeAnchorX: number | null = null;
+  private homeAnchorY: number | null = null;
+  // Latches true while a home-anchored enemy has broken off its chase because
+  // the player left the home leash radius. Drives the leash hysteresis: once
+  // set, the player must return within HOME_LEASH_REENGAGE_FACTOR of the radius
+  // to clear it and let the chase resume. Reset whenever the leash isn't in
+  // force (no anchor, or forced convergence) so a re-engaged enemy starts clean.
+  private leashBroken = false;
+  // Scene-time at which the hive-defense alarm lapses. While in the future, a
+  // home-anchored enemy ignores its leash and pursues the player no matter how
+  // far the player has strayed from the hive — raised when the player attacks
+  // the hive this wasp is anchored to (see raiseHomeAlarm). Decays like the
+  // aggro window, after which territorial leashing resumes.
+  private homeAlarmUntil = 0;
   // Authored patrol route in world-space px (LDtk Point-Array field
   // "loiterPath"). null = no path → fall back to the original player-anchored
   // random-drift loiter (airborne enemies) or plain idle (grounded). When
@@ -324,10 +407,55 @@ export class Enemy extends AnimatedEntity {
   // player-dealt damage event; once it elapses we restore HP and hide the
   // bar. Sentinel 0 == not in combat.
   private combatTimeoutAt = 0;
+  // Scene-time at which combat aggro lapses. Refreshed on every exchange of
+  // blows with the player — taking a player-dealt hit, committing an attack,
+  // or landing contact damage. While aggroed the entity is "in conflict": it
+  // abandons its loiter path / idle drift and pursues the player, chasing
+  // past its configured chaseRange and ignoring its `aggressive` flag, until
+  // the window lapses (ENEMY_COMBAT_TIMEOUT_MS after the last exchange) and
+  // it gives up and resumes patrolling. Decoupled from inCombat (which is
+  // gated on the floating HP bar) so it applies to every character —
+  // bar-less swarm minions and bosses included. Sentinel 0 == not aggroed.
+  private aggroUntil = 0;
+  // Scene-time until which this enemy ignores the chase line-of-sight gate and
+  // closes on the player through geometry. Opened by forceConverge() (the boss
+  // round-fight convergence) and refreshed each frame while the fight is live,
+  // so every enemy in the arena — including spiders stranded on a higher ledge
+  // with the arena floor between them and the player — pursues instead of
+  // idling behind cover. Lapses like the aggro window once the boss is gone;
+  // sentinel 0 == respect LOS (normal exploration behavior).
+  private convergeUntil = 0;
   // Latches true the moment the death-explosion AoE fires so the frame-
   // trigger path in onAnimUpdate and the no-anim fallback in enterDeadState
   // can't double-fire. No-op for entities without behavior.deathExplosion.
   private deathExplosionFired = false;
+  // Highest round this boss has reached, 1-based. Latched upward (never
+  // decreases) so a heal that pushes HP back across a threshold can't rewind
+  // the round or re-fire the banner. Only meaningful when behavior.roundFight
+  // is set; stays 1 otherwise. Recomputed from current HP in takeDamage.
+  private roundReached = 1;
+  // Scene-time at which the current round-transition freeze ends. While
+  // `now < roundBreakUntil` the boss holds position and is invulnerable (the
+  // cinematic "Round N" beat). Sentinel 0 == not in a break. Only ever set
+  // for round-fight bosses, so the gates that read it are no-ops elsewhere.
+  private roundBreakUntil = 0;
+  // Per-spawn "harmless copy" flag (see EnemySpawnOverrides). When set, this
+  // enemy deals no damage and reports isBoss()/isRoundFight() === false so the
+  // boss-encounter, win-condition, HUD, and round-break systems ignore it.
+  private readonly harmless: boolean;
+  // Signed horizontal stand-off (world px) added to the player's X when this
+  // enemy picks its chase target (see EnemySpawnOverrides.chaseStandoffX). Lets
+  // self-copies of a horizontal-movement-only boss flank the player on distinct
+  // X slots instead of all homing to the same point. 0 for everyone else.
+  private readonly chaseStandoffX: number;
+  // Fixed-at-construction movement "personality" that desynchronizes packs
+  // spawned on one frame (see CHASE_SPEED_JITTER / AIRBORNE_WEAVE_*). chaseSpeedMul
+  // scales chase speed per-instance; weavePhase/weaveFreq drive the airborne
+  // sideways weave. Bosses ignore both (mul forced to 1, weave to 0) so their
+  // hand-tuned movement is unaffected.
+  private readonly chaseSpeedMul: number;
+  private readonly weavePhase: number;
+  private readonly weaveFreq: number;
 
   constructor(
     scene: Phaser.Scene,
@@ -336,6 +464,7 @@ export class Enemy extends AnimatedEntity {
     identifier: string,
     iid: string,
     loiterPath: ReadonlyArray<LoiterPathPoint> | null = null,
+    spawnOverrides: EnemySpawnOverrides | null = null,
   ) {
     super(scene, x, y, identifier);
     this.iid = iid;
@@ -362,7 +491,29 @@ export class Enemy extends AnimatedEntity {
       );
     }
     this.behavior = behavior;
-    this.health = behavior.health;
+    // A "harmless copy" (boss self-clone, see EnemySpawnOverrides) keeps the
+    // source entry's animations/attacks/AI but deals no damage and is excluded
+    // from the boss/round-fight machinery (isBoss/isRoundFight return false).
+    this.harmless = spawnOverrides?.harmless === true;
+    this.chaseStandoffX = spawnOverrides?.chaseStandoffX ?? 0;
+    // Roll this instance's movement personality once. Math.random is used
+    // elsewhere in this class (attack selection) — no seeded RNG needed since
+    // the only goal is that sibling enemies differ from one another.
+    this.chaseSpeedMul = 1 + (Math.random() * 2 - 1) * CHASE_SPEED_JITTER;
+    this.weavePhase = Math.random() * Math.PI * 2;
+    this.weaveFreq =
+      AIRBORNE_WEAVE_FREQ_MIN +
+      Math.random() * (AIRBORNE_WEAVE_FREQ_MAX - AIRBORNE_WEAVE_FREQ_MIN);
+    // An explicit per-spawn health override wins; otherwise bosses are exempt
+    // from the global health bump (their HP is hand-tuned around the round-fight
+    // thresholds) and everyone else scales by the global multiplier. Rounded so
+    // HP stays integer (clean boss thirds / HUD reads).
+    this.maxHealth =
+      spawnOverrides?.maxHealth ??
+      (behavior.isBoss === true
+        ? behavior.health
+        : Math.round(behavior.health * ENEMY_HEALTH_MULTIPLIER));
+    this.health = this.maxHealth;
     // attackPool wins when both are set — the schema treats `attack` as the
     // single-attack shorthand. Empty list is valid (passive enemies).
     this.attacks =
@@ -400,9 +551,22 @@ export class Enemy extends AnimatedEntity {
     // swarm wasps, anything authoring hideHealthBar:true) and for purely
     // passive entities with no attacks — those technically have HP but aren't
     // "combat" in any meaningful sense, so a bar would just litter the world.
-    // The bar starts hidden; the player's first hit on this enemy flips
-    // inCombat on and setVisible follows.
-    if (behavior.hideHealthBar !== true && this.attacks.length > 0) {
+    // Also skipped for round-fight bosses: their HP is shown on the screen-
+    // wide BossHud bar instead, and suppressing the floating bar here also
+    // disables the 20 s combat-timeout heal (enterCombat early-returns with no
+    // bar, so inCombat never flips and maybeExitCombat never resets HP) —
+    // exactly what a persistent boss fight needs. The bar starts hidden; the
+    // player's first hit on a normal enemy flips inCombat on and setVisible
+    // follows.
+    // Harmless self-copies are the exception to the round-fight skip: they're
+    // built from a round-fight boss's entry (so behavior.roundFight is true) but
+    // are excluded from the BossHud, so without a floating bar they'd show no HP
+    // at all. The `|| this.harmless` keeps them reading like a regular enemy.
+    if (
+      behavior.hideHealthBar !== true &&
+      (behavior.roundFight !== true || this.harmless) &&
+      this.attacks.length > 0
+    ) {
       this.healthBar = new EnemyHealthBar(scene, behavior.healthBarOffsetY ?? 0);
     } else {
       this.healthBar = null;
@@ -482,9 +646,71 @@ export class Enemy extends AnimatedEntity {
   }
 
   // True when the registry flags this entity as a boss. Bosses opt out of
-  // the auto-respawn system entirely.
+  // the auto-respawn system entirely. Harmless copies report false so a copy's
+  // death never emits BOSS_DEFEATED_EVENT (which would record the real boss as
+  // defeated and could trigger a premature victory).
   isBoss(): boolean {
-    return this.behavior.isBoss === true;
+    return this.behavior.isBoss === true && !this.harmless;
+  }
+
+  // True when this boss uses the 3-round fight system (screen-wide segmented
+  // bar + "Round N" banner + per-threshold freeze). Drives GameScene/BossHud.
+  isRoundFight(): boolean {
+    return this.behavior.roundFight === true && !this.harmless;
+  }
+
+  // Max HP — the registry's authored health scaled by ENEMY_HEALTH_MULTIPLIER
+  // (bosses exempt; see the constructor). Current health drains from here; the
+  // round-fight bar reads both to compute its fill ratio.
+  getMaxHealth(): number {
+    return this.maxHealth;
+  }
+
+  // Current latched round (1-based). Stays at 1 for non-round-fight enemies.
+  getRound(): number {
+    return this.roundReached;
+  }
+
+  // True once the boss-encounter trigger has fired (player entered the arena /
+  // encounter radius). GameScene uses this to decide when the round UI shows.
+  hasEncountered(): boolean {
+    return this.encounterTriggered;
+  }
+
+  // True while this enemy is in active conflict — blows have been traded with
+  // the player (it took or dealt damage) or it committed an attack, and the
+  // aggro window hasn't lapsed. Distinct from hasEncountered() (mere room
+  // entry): the boss round-fight convergence keys off this so arena enemies
+  // only swarm once the fight is actually joined, not the instant the player
+  // steps into the room. For a round-fight boss, inCombat never flips (the
+  // floating health bar is suppressed), so the aggro window is the only
+  // reliable "fight is live" signal.
+  isInConflict(): boolean {
+    return this.isAggro();
+  }
+
+  // True during a round-transition freeze: the boss is parked and invulnerable
+  // while the "Round N" banner plays. GameScene's projectile overlap skips
+  // impacts during this window (mirrors the teleport-blink pass-through).
+  isInRoundBreak(): boolean {
+    return this.roundBreakUntil > this.scene.time.now;
+  }
+
+  // Human-readable name for the round-fight bar. Prefers the registry's
+  // displayName; falls back to a name derived from the entity identifier
+  // (strip a trailing "_spawn", underscores → spaces, capitalize).
+  getDisplayName(): string {
+    return this.behavior.displayName ?? this.deriveDisplayName();
+  }
+
+  private deriveDisplayName(): string {
+    const words = this.getIdentifier()
+      .replace(/_spawn$/, '')
+      .replace(/_/g, ' ')
+      .trim();
+    return words.length > 0
+      ? words.charAt(0).toUpperCase() + words.slice(1)
+      : 'Boss';
   }
 
   // True while the boss is mid-teleport blink (disappear or appear clip
@@ -547,6 +773,22 @@ export class Enemy extends AnimatedEntity {
 
     if (this.enemyState === 'dead' || this.enemyState === 'hurt') return;
 
+    // Round-transition freeze: while the break timer is live the boss is
+    // parked and invulnerable (takeDamage gates on the same field). Hold
+    // position and skip all AI until it lapses, then resume from idle. Only
+    // round-fight bosses ever set roundBreakUntil, so this is inert otherwise.
+    if (this.roundBreakUntil > 0) {
+      if (this.scene.time.now < this.roundBreakUntil) {
+        if (!this.behavior.immovable) {
+          this.body.setVelocityX(0);
+          if (!this.body.allowGravity) this.body.setVelocityY(0);
+        }
+        return;
+      }
+      this.roundBreakUntil = 0;
+      this.enterIdle();
+    }
+
     const dx = player.x - this.x;
     const dy = player.y - this.y;
     const dist = Math.hypot(dx, dy);
@@ -582,7 +824,9 @@ export class Enemy extends AnimatedEntity {
         : dist <=
           (this.behavior.encounterRadius ?? DEFAULT_ENCOUNTER_RADIUS);
       if (inZone) {
-        if (this.behavior.encounterSoundId !== undefined) {
+        // Harmless copies share the boss's encounterSoundId but must stay
+        // silent — otherwise each copy re-blares the boss encounter sting.
+        if (this.behavior.encounterSoundId !== undefined && !this.harmless) {
           playOneShot(this.scene, this.behavior.encounterSoundId);
         }
         if (this.behavior.engageDelayMs !== undefined) {
@@ -612,11 +856,22 @@ export class Enemy extends AnimatedEntity {
 
     if (this.enemyState === 'recover') {
       if (this.scene.time.now < this.cooldownUntil) {
-        // Keep loiter-capable entities drifting during the cooldown so a
-        // crow that just landed an attack continues hovering visibly
-        // instead of freezing mid-air for ~1s. Animation is already set
-        // to walk by onAnimComplete's recover transition.
-        if (this.canLoiter()) this.updateLoiter(player);
+        // A path-walker in conflict holds position through the post-attack
+        // cooldown rather than stepping back onto its patrol route — it has
+        // abandoned the loiter path to focus on the player and resumes the
+        // chase as soon as the cooldown ends. Out of conflict (or with no
+        // authored path) loiter-capable entities keep drifting so a crow
+        // that just landed an attack hovers visibly instead of freezing
+        // mid-air for ~1s. Animation is already set to walk by
+        // onAnimComplete's recover transition.
+        if (this.isAggro() && this.loiterPath) {
+          if (!this.behavior.immovable) {
+            this.body.setVelocityX(0);
+            if (!this.body.allowGravity) this.body.setVelocityY(0);
+          }
+        } else if (this.canLoiter()) {
+          this.updateLoiter(player);
+        }
         return;
       }
       this.enterIdle();
@@ -673,33 +928,96 @@ export class Enemy extends AnimatedEntity {
       // through walls: the hitbox is short and usually can't reach the
       // player through a 16 px tile, and short-circuiting melee here would
       // make wall-hugging trivially exploitable.
-      if (pick.type === 'ranged' || pick.type === 'magic') {
-        const helper = this.scene as unknown as EnemyHelperScene;
-        if (helper.isLineBlocked(this.x, this.y, player.x, player.y)) {
-          this.enterIdleOrLoiter(player);
-          return;
-        }
+      const losBlocked =
+        (pick.type === 'ranged' || pick.type === 'magic') &&
+        (this.scene as unknown as EnemyHelperScene).isLineBlocked(
+          this.x,
+          this.y,
+          player.x,
+          player.y,
+        );
+      if (!losBlocked) {
+        this.enterAttackState(pick);
+        return;
       }
-      this.enterAttackState(pick);
-      return;
+      // The shot is walled off. Out of conflict the entity just holds /
+      // loiters. In conflict it falls through to the chase block below so it
+      // repositions toward the player for a clear line rather than standing
+      // there or wandering back onto its patrol.
+      if (!this.isAggro()) {
+        this.enterIdleOrLoiter(player);
+        return;
+      }
     }
 
-    // No eligible attack — try to chase. Chase fields live on attacks[0]
-    // (the lead/default attack); pool-based bosses authoring multiple
-    // attacks should put the chase-bearing entry first.
+    // No usable attack right now — try to chase. Chase fields live on
+    // attacks[0] (the lead/default attack); pool-based bosses authoring
+    // multiple attacks should put the chase-bearing entry first.
     const chaseLead = this.attacks[0];
-    const canChase =
-      chaseLead.aggressive &&
+    const canMove =
+      chaseLead.moveSpeed != null && !this.behavior.immovable;
+    // Two ways into the chase: (1) the entity is flagged aggressive and the
+    // player sits inside its configured chaseRange (the original behavior),
+    // or (2) the entity is in conflict (aggroed) — once the player has drawn
+    // it into a fight it pursues regardless of the aggressive flag or
+    // chaseRange, abandoning any loiter path to focus on attacking. The aggro
+    // window is the leash, so a player who fully disengages is eventually
+    // dropped and the entity resumes patrolling.
+    const inConfiguredChaseRange =
+      chaseLead.aggressive === true &&
       chaseLead.chaseRange != null &&
-      chaseLead.moveSpeed != null &&
-      !this.behavior.immovable;
+      dist <= chaseLead.chaseRange;
 
-    if (canChase && dist <= chaseLead.chaseRange!) {
+    // Home leash: a hive-tethered swarmer (wasp) only pursues while the player
+    // is within homeLeashRange of its home anchor (the hive). Past that it
+    // breaks off — even mid-aggro — and falls through to enterEngagedFallback,
+    // which drifts it back to loiter around home. Gated on a home anchor +
+    // leash range actually being set, so every other enemy is unaffected.
+    // Forced convergence (boss round-fight) overrides the leash so arena
+    // scripting can still pull reinforcement wasps onto the player. A
+    // break-off/re-engage hysteresis gap (leashBroken) keeps a player loitering
+    // at the radius from toggling chase on and off every frame.
+    const leashRange = this.behavior.homeLeashRange;
+    let beyondLeash = false;
+    if (
+      this.homeAnchorX != null &&
+      this.homeAnchorY != null &&
+      leashRange != null &&
+      !this.isConverging() &&
+      !this.isHomeAlarmed()
+    ) {
+      const distPlayerToHome = Math.hypot(
+        player.x - this.homeAnchorX,
+        player.y - this.homeAnchorY,
+      );
+      if (this.leashBroken) {
+        if (distPlayerToHome <= leashRange * HOME_LEASH_REENGAGE_FACTOR) {
+          this.leashBroken = false;
+        }
+      } else if (distPlayerToHome > leashRange) {
+        this.leashBroken = true;
+      }
+      beyondLeash = this.leashBroken;
+    } else {
+      // Leash not in force (no home anchor, forced convergence, or hive-defense
+      // alarm raised) — clear the latch so the enemy re-evaluates from a clean
+      // state next time leashing applies.
+      this.leashBroken = false;
+    }
+
+    if (canMove && !beyondLeash && (this.isAggro() || inConfiguredChaseRange)) {
       const helper = this.scene as unknown as EnemyHelperScene;
-      // Chase is gated on line-of-sight so enemies don't pathologically
-      // shove against walls between them and the player.
-      if (helper.isLineBlocked(this.x, this.y, player.x, player.y)) {
-        this.enterIdleOrLoiter(player);
+      // Chase is gated on line-of-sight so enemies don't pathologically shove
+      // against walls between them and the player. Converging enemies (boss-room
+      // round fight) skip the gate and close on the player through geometry, so
+      // a spider on a higher ledge walks off and drops down to engage instead of
+      // idling behind the arena floor. The gate still stands during normal
+      // exploration, where wall-grinding pursuit would look broken.
+      if (
+        !this.isConverging() &&
+        helper.isLineBlocked(this.x, this.y, player.x, player.y)
+      ) {
+        this.enterEngagedFallback(player);
         return;
       }
       if (this.enemyState !== 'chase') {
@@ -713,19 +1031,31 @@ export class Enemy extends AnimatedEntity {
       // silences surface anchors while still letting `'always'` anchors play
       // (e.g. ghoul mud footsteps stay audible even mid-hop).
       setEnemyWalkSoundEnabled(this, true, this.currentWalkSurface());
+      // Per-instance chase-speed spread so a same-frame swarm desyncs instead
+      // of chasing in lockstep. Bosses keep their exact hand-tuned speed.
+      const speedMul = this.isBoss() ? 1 : this.chaseSpeedMul;
       if (this.body.allowGravity) {
         // Ground-bound chase: drive horizontally, hop short walls
         // (≤ 2 tiles) so the chaser can follow the player up small steps.
         if (this.shouldJumpOverObstacle()) {
           this.setVelocityY(ENEMY_JUMP_VELOCITY);
         }
-        this.setVelocityX(chaseLead.moveSpeed! * this.facingDirection);
+        this.setVelocityX(chaseLead.moveSpeed! * speedMul * this.facingDirection);
       } else if (this.behavior.horizontalMovementOnly) {
         // Airborne but horizontal-locked (heart hoarder): chase along X only.
         // Y stays parked so the boss glides on a fixed line and only changes
         // elevation through its own attack-driven repositioning (teleport).
+        // chaseStandoffX offsets the target X so self-copies hold distinct slots
+        // beside the player instead of all homing to player.x and stacking (0
+        // for the boss itself). A deadzone parks the enemy on its slot rather
+        // than flip-flopping velocity sign every frame once it arrives.
         const speed = chaseLead.moveSpeed!;
-        this.setVelocityX(Math.sign(dx) * speed);
+        const targetDx = dx + this.chaseStandoffX;
+        this.setVelocityX(
+          Math.abs(targetDx) < HORIZONTAL_CHASE_STANDOFF_DEADZONE_PX
+            ? 0
+            : Math.sign(targetDx) * speed,
+        );
         this.setVelocityY(0);
       } else {
         // Airborne chase (crows, wasps): home in on the player in 2D.
@@ -734,9 +1064,22 @@ export class Enemy extends AnimatedEntity {
         // overlapping the player (rare, but possible with contact attackers).
         const len = Math.hypot(dx, dy);
         if (len > 0) {
-          const speed = chaseLead.moveSpeed!;
-          this.setVelocityX((dx / len) * speed);
-          this.setVelocityY((dy / len) * speed);
+          const speed = chaseLead.moveSpeed! * speedMul;
+          const nx = dx / len;
+          const ny = dy / len;
+          // Perpendicular weave: add a sideways oscillation so each flyer arcs
+          // on its own rhythm instead of homing dead-straight alongside its
+          // packmates. The forward (radial) component stays exactly `speed`, so
+          // the closing rate is unchanged — only the lateral path differs.
+          // Bosses get weave = 0, preserving their straight 2D homing.
+          const weave = this.isBoss()
+            ? 0
+            : Math.sin(
+                (this.scene.time.now / 1000) * this.weaveFreq + this.weavePhase,
+              ) * AIRBORNE_WEAVE_FRACTION;
+          // (-ny, nx) is the unit vector perpendicular to the homing direction.
+          this.setVelocityX((nx - ny * weave) * speed);
+          this.setVelocityY((ny + nx * weave) * speed);
         } else {
           this.body.setVelocity(0, 0);
         }
@@ -744,7 +1087,7 @@ export class Enemy extends AnimatedEntity {
       return;
     }
 
-    this.enterIdleOrLoiter(player);
+    this.enterEngagedFallback(player);
   }
 
   // Public damage entry point. Called by GameScene's projectile-overlap
@@ -762,14 +1105,23 @@ export class Enemy extends AnimatedEntity {
     options: { skipKnockback?: boolean; sourceIsPlayer?: boolean } = {},
   ): void {
     if (this.enemyState === 'dead') return;
+    // Invulnerable during a round-transition beat. The hit that STARTS the
+    // break still lands (the break is armed below, after HP is applied), so
+    // this only ignores SUBSEQUENT hits during the cinematic freeze. Covers
+    // every damage source (projectile, melee, trap, fall) since they all
+    // funnel through here.
+    if (this.roundBreakUntil > this.scene.time.now) return;
     this.health = Math.max(0, this.health - damage);
     if (options.sourceIsPlayer !== false) {
       this.enterCombat();
+      // A player-dealt hit puts the entity into conflict: it drops whatever
+      // it was loitering at and pursues until the aggro window lapses.
+      this.refreshAggro();
     }
     // Push the new HP value into the bar regardless of source — if the
     // player already engaged this enemy, a trap finishing it off should
     // drain the bar visibly. Hidden bars dedup the redraw internally.
-    this.healthBar?.setHealth(this.health, this.behavior.health);
+    this.healthBar?.setHealth(this.health, this.maxHealth);
 
     // Once the disappear/appear blink clip has started it plays to
     // completion — the boss is mid-blink and the body position is owned
@@ -800,6 +1152,21 @@ export class Enemy extends AnimatedEntity {
     if (this.health <= 0) {
       this.enterDeadState();
       return;
+    }
+
+    // Round-fight: did this non-lethal hit cross into a higher (latched)
+    // round? If so, enter the cinematic round-break — freeze + invulnerable +
+    // "Round N" banner (GameScene polls getRound()) — instead of the normal
+    // hurt/knockback flow. Latched via roundReached so a later self-heal can't
+    // rewind the round. Lethal hits returned at enterDeadState above, so the
+    // final section's killing blow ends the fight rather than "advancing".
+    if (this.isRoundFight()) {
+      const computedRound = roundForRatio(this.health / this.maxHealth);
+      if (computedRound > this.roundReached) {
+        this.roundReached = computedRound;
+        this.beginRoundBreak();
+        return;
+      }
     }
 
     if (midBlink) {
@@ -865,9 +1232,39 @@ export class Enemy extends AnimatedEntity {
     if (this.scene.time.now < this.combatTimeoutAt) return;
     this.inCombat = false;
     this.combatTimeoutAt = 0;
-    this.health = this.behavior.health;
-    this.healthBar?.setHealth(this.health, this.behavior.health);
+    this.health = this.maxHealth;
+    this.healthBar?.setHealth(this.health, this.maxHealth);
     this.healthBar?.setVisible(false);
+  }
+
+  // Begins a round-transition beat: freeze the boss in place and make it
+  // invulnerable for BOSS_ROUND_BREAK_MS while the "Round N" banner plays;
+  // update() resumes it from idle when the window lapses. Mirrors the
+  // hurt-block cleanup so an in-flight swing or teleport is fully cancelled
+  // before the freeze. Called from takeDamage when a non-lethal hit crosses a
+  // round threshold.
+  private beginRoundBreak(): void {
+    this.roundBreakUntil = this.scene.time.now + BOSS_ROUND_BREAK_MS;
+    this.enemyState = 'idle';
+    this.attackFired = false;
+    this.firedMeleeHitboxes.clear();
+    this.firedAoeDamageFrames.clear();
+    this.currentAttack = null;
+    // Restores gravity + clears the teleport phase if the crossing hit landed
+    // mid-teleport, so the boss doesn't freeze mid-blink.
+    this.endTeleport();
+    setEnemyWalkSoundEnabled(this, false);
+    if (this.hurtTimer) {
+      this.hurtTimer.remove(false);
+      this.hurtTimer = null;
+    }
+    if (!this.behavior.immovable) {
+      this.body.setVelocityX(0);
+      if (!this.body.allowGravity) this.body.setVelocityY(0);
+    }
+    // Hold a neutral pose for the beat rather than freezing on a mid-attack
+    // frame.
+    this.playAmbientAnimation();
   }
 
   // IntGrid value under the enemy's feet, mapped to the surface tag used by
@@ -905,7 +1302,7 @@ export class Enemy extends AnimatedEntity {
       if (now < readyAt) continue;
       if (attack.type === 'heal') {
         const threshold = attack.healThreshold ?? 0.5;
-        if (this.health / this.behavior.health >= threshold) continue;
+        if (this.health / this.maxHealth >= threshold) continue;
         eligible.push(attack);
         continue;
       }
@@ -940,6 +1337,10 @@ export class Enemy extends AnimatedEntity {
 
   private enterAttackState(attack: AnimatedEntityAttackConfig): void {
     this.enemyState = 'attack';
+    // Committing an attack means the entity is engaged — sustain the aggro
+    // window so it keeps pursuing between swings (chasing past chaseRange,
+    // not drifting back to its patrol) for the whole fight.
+    this.refreshAggro();
     this.attackFired = false;
     this.firedMeleeHitboxes.clear();
     this.firedAoeDamageFrames.clear();
@@ -993,6 +1394,35 @@ export class Enemy extends AnimatedEntity {
     if (attack.animation != null) {
       this.playLogical(attack.animation);
     }
+  }
+
+  // Combo chaining: after `attack` completes, with `comboChancePct` probability
+  // launch its paired follow-up (`comboNextAnimation`) directly, bypassing the
+  // recover/cooldown gap so the pair reads as one 1-2 combo. Returns true when a
+  // follow-up was launched (caller must then skip the recover transition).
+  // Bounded because the follow-up itself has no comboNextAnimation.
+  private tryEnterComboFollowup(attack: AnimatedEntityAttackConfig): boolean {
+    const nextAnim = attack.comboNextAnimation;
+    if (nextAnim == null) return false;
+    if (Math.random() * 100 >= (attack.comboChancePct ?? 0)) return false;
+    const next = this.attacks.find(
+      (a) => a !== attack && a.animation === nextAnim,
+    );
+    if (!next) return false;
+    // Respect the follow-up's own per-attack recast lockout.
+    if (this.scene.time.now < (this.attackReadyAt.get(next) ?? 0)) return false;
+    const player = this.playerRef;
+    if (player) {
+      const dist = Math.hypot(player.x - this.x, player.y - this.y);
+      // Don't chain into empty space if the player left the lead attack's reach.
+      if (attack.range != null && dist > attack.range) return false;
+      // Facing locks during 'attack', so update() won't re-orient us between
+      // swings — re-face the player here so the follow-up points the right way.
+      this.facingDirection = player.x >= this.x ? 1 : -1;
+      this.setFacing(this.facingDirection === -1);
+    }
+    this.enterAttackState(next);
+    return true;
   }
 
   // Resets gravity to the pre-teleport state and clears the phase flag.
@@ -1257,6 +1687,109 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
+  // True while the entity is actively in conflict with the player — it has
+  // traded blows recently and hasn't yet timed out. Drives the "abandon the
+  // loiter path and focus on the player" behavior in update(): aggroed
+  // entities chase past their configured chaseRange (and even without the
+  // aggressive flag) and hold ground facing the player instead of resuming
+  // a patrol.
+  private isAggro(): boolean {
+    return this.scene.time.now < this.aggroUntil;
+  }
+
+  // (Re)starts the aggro window. Called on every exchange of blows with the
+  // player so a sustained fight keeps the entity engaged; the window lapses
+  // ENEMY_COMBAT_TIMEOUT_MS after the last exchange, at which point the
+  // entity gives up the chase and returns to its loiter path / idle.
+  private refreshAggro(): void {
+    this.aggroUntil = this.scene.time.now + ENEMY_COMBAT_TIMEOUT_MS;
+  }
+
+  // External trigger to force this entity into pursuit without a blow having
+  // landed — used by the boss round-fight system to make every enemy in the
+  // arena abandon its loiter path and converge on the player when a round
+  // starts. Same effect as trading a blow: it (re)opens the aggro window, so
+  // update() chases the player regardless of the aggressive flag or chaseRange.
+  // GameScene calls this each frame while the fight is live, so pursuit never
+  // lapses mid-fight; it decays normally once the boss is gone.
+  forcePursue(): void {
+    this.refreshAggro();
+  }
+
+  // forcePursue plus a line-of-sight bypass: the enemy not only chases (aggro
+  // window) but closes on the player even through walls/floors. Used by the boss
+  // round-fight convergence so every enemy in the arena reaches the player —
+  // most visibly a reinforcement spider spawned on a higher ledge, which under
+  // plain forcePursue would idle because the arena floor blocks LOS. GameScene
+  // calls this each frame while the fight is live, so both the aggro and
+  // converge windows stay open; they decay together once the boss is gone and
+  // the enemy resumes normal, LOS-respecting behavior.
+  forceConverge(): void {
+    this.forcePursue();
+    this.convergeUntil = this.scene.time.now + ENEMY_COMBAT_TIMEOUT_MS;
+  }
+
+  // World point this enemy was constructed at. Exposed so GameScene can tether
+  // hive-anchored swarmers (wasps) to a hive's spawn point and fall back to the
+  // wasp's own spawn when its level has no hive.
+  getSpawnPoint(): { readonly x: number; readonly y: number } {
+    return { x: this.spawnX, y: this.spawnY };
+  }
+
+  // Sets the world point this enemy orbits while loitering and centers its
+  // chase leash on (see homeAnchorX/Y, homeLeashRange). Called post-spawn by
+  // GameScene; idempotent, so re-applying it on respawn is safe.
+  setHomeAnchor(x: number, y: number): void {
+    this.homeAnchorX = x;
+    this.homeAnchorY = y;
+  }
+
+  // World point this enemy currently orbits / leashes to, or null when it uses
+  // the legacy player-anchored behavior. Exposed so GameScene can match a wasp
+  // to the hive it's anchored to when that hive is attacked.
+  getHomeAnchor(): { readonly x: number; readonly y: number } | null {
+    return this.homeAnchorX != null && this.homeAnchorY != null
+      ? { x: this.homeAnchorX, y: this.homeAnchorY }
+      : null;
+  }
+
+  // Raises the hive-defense alarm: the entity drops its home leash and pursues
+  // the player for one combat window, regardless of how far the player has
+  // strayed from the hive. Called when the player attacks the hive this wasp is
+  // anchored to, so shooting the hive immediately turns its whole swarm on the
+  // player. Opens the aggro window too, so the chase fires this tick.
+  raiseHomeAlarm(): void {
+    this.homeAlarmUntil = this.scene.time.now + ENEMY_COMBAT_TIMEOUT_MS;
+    this.refreshAggro();
+  }
+
+  private isHomeAlarmed(): boolean {
+    return this.scene.time.now < this.homeAlarmUntil;
+  }
+
+  // True while the converge window (opened by forceConverge) is live. Read by
+  // the chase LOS gate to let arena enemies pursue through geometry.
+  private isConverging(): boolean {
+    return this.scene.time.now < this.convergeUntil;
+  }
+
+  // Routes the "can't attack or reach the player right now" outcome while in
+  // conflict. An aggroed path-walker holds its ground (facing the player,
+  // updated each tick in update()) rather than walking back onto its patrol
+  // route — it stays here only because it can't currently close on the
+  // player (no move speed, or line-of-sight blocked). Airborne drifters with
+  // no authored path keep their anti-freeze drift via the normal routing, and
+  // out-of-conflict entities fall through to the regular idle/loiter.
+  private enterEngagedFallback(player: Player): void {
+    if (this.isAggro() && this.loiterPath) {
+      if (this.enemyState !== 'idle') {
+        this.enterIdle();
+      }
+      return;
+    }
+    this.enterIdleOrLoiter(player);
+  }
+
   // Routes the "nothing to commit to right now" outcome. Airborne enemies
   // with a walkAnimation enter loiter (drift around the player playing
   // walk) so they don't freeze in a grounded idle pose mid-air; everything
@@ -1314,8 +1847,14 @@ export class Enemy extends AnimatedEntity {
       return;
     }
     const lead = this.attacks[0];
+    const homeAnchored = this.homeAnchorX != null && this.homeAnchorY != null;
     const chaseRange = lead?.chaseRange;
-    if (chaseRange != null) {
+    // Player-anchored drifters hover in place once the player wanders past
+    // engagement range (their target is anchored to the player, so without this
+    // they'd converge from across the map). Home-anchored enemies orbit a fixed
+    // point, so they keep drifting toward it regardless of where the player is —
+    // this is what flies a wasp back to its hive after a chase breaks off.
+    if (!homeAnchored && chaseRange != null) {
       const engagementRange = chaseRange * LOITER_ENGAGEMENT_CHASE_MULTIPLIER;
       const distToPlayer = Math.hypot(
         player.x - this.x,
@@ -1450,11 +1989,17 @@ export class Enemy extends AnimatedEntity {
     const radius =
       LOITER_TARGET_MIN_RADIUS +
       Math.random() * (LOITER_TARGET_MAX_RADIUS - LOITER_TARGET_MIN_RADIUS);
-    const angle =
-      LOITER_ANGLE_MIN +
-      Math.random() * (LOITER_ANGLE_MAX - LOITER_ANGLE_MIN);
-    this.loiterTargetX = player.x + Math.cos(angle) * radius;
-    this.loiterTargetY = player.y + Math.sin(angle) * radius;
+    // Home-anchored enemies (wasps) orbit a fixed point (their hive) across the
+    // full circle; player-anchored drifters keep the upper-hemisphere spread so
+    // they hover above the player.
+    const homeAnchored = this.homeAnchorX != null && this.homeAnchorY != null;
+    const anchorX = homeAnchored ? this.homeAnchorX! : player.x;
+    const anchorY = homeAnchored ? this.homeAnchorY! : player.y;
+    const angleMin = homeAnchored ? HOME_LOITER_ANGLE_MIN : LOITER_ANGLE_MIN;
+    const angleMax = homeAnchored ? HOME_LOITER_ANGLE_MAX : LOITER_ANGLE_MAX;
+    const angle = angleMin + Math.random() * (angleMax - angleMin);
+    this.loiterTargetX = anchorX + Math.cos(angle) * radius;
+    this.loiterTargetY = anchorY + Math.sin(angle) * radius;
     this.loiterRefreshAt =
       this.scene.time.now +
       LOITER_REFRESH_MIN_MS +
@@ -1464,6 +2009,21 @@ export class Enemy extends AnimatedEntity {
   private enterDeadState(): void {
     this.enemyState = 'dead';
     this.currentAttack = null;
+    // Announce boss deaths on the scene bus so GameScene can record the defeat
+    // (persistent run-progress), clear the boss's arena, and fire the victory
+    // flow when the final boss falls. The boss's world position rides along so
+    // GameScene can resolve the level whose enemies should be wiped. Emitted once
+    // here — enterDeadState runs a single time per death, before either the
+    // animation-complete or no-anim drop path — so the signal fires regardless
+    // of which death path the corpse takes.
+    if (this.isBoss()) {
+      this.scene.events.emit(
+        BOSS_DEFEATED_EVENT,
+        this.getIdentifier(),
+        this.x,
+        this.y,
+      );
+    }
     // Same teleport-state cleanup as enterHurtState — a killing blow during
     // a teleport leaves the corpse falling under restored gravity instead
     // of hovering at the appear position.
@@ -1555,6 +2115,9 @@ export class Enemy extends AnimatedEntity {
   // position survives even if the call site destroys this sprite immediately
   // after.
   private maybeSpawnAmmoDrop(): void {
+    // Harmless copies (boss self-clones) drop nothing — otherwise killing them
+    // would yield the source boss's full loot table and be farmable.
+    if (this.harmless) return;
     const drops = this.config.drops;
     if (!drops || drops.length === 0) return;
     const spawnX = this.body.center.x;
@@ -1769,6 +2332,12 @@ export class Enemy extends AnimatedEntity {
         if (attack.type === 'teleport') {
           this.endTeleport();
         }
+        // Combo follow-up: chance to chain directly into the paired attack,
+        // skipping the recover/cooldown gap. Bounded — the follow-up has no
+        // comboNextAnimation, so it ends in recover normally.
+        if (this.tryEnterComboFollowup(attack)) {
+          return;
+        }
         this.enemyState = 'recover';
         this.cooldownUntil = this.scene.time.now + attack.cooldownMs;
         this.currentAttack = null;
@@ -1832,7 +2401,7 @@ export class Enemy extends AnimatedEntity {
     const damage = attack.damage;
     if (damage == null) return;
     if (!this.scene.physics.world.overlap(this, player)) return;
-    player.hurt(damage, this.x, this.y);
+    if (!this.harmless) player.hurt(damage, this.x, this.y);
     this.attackFired = true;
   }
 
@@ -1979,12 +2548,14 @@ export class Enemy extends AnimatedEntity {
       const hurtSource = attack.hurtSource;
       for (const body of overlaps) {
         if (body.gameObject === playerRef) {
-          playerRef.hurt(
-            damage,
-            strikeX,
-            strikeY,
-            hurtSource ? { source: hurtSource } : undefined,
-          );
+          if (!this.harmless) {
+            playerRef.hurt(
+              damage,
+              strikeX,
+              strikeY,
+              hurtSource ? { source: hurtSource } : undefined,
+            );
+          }
           return;
         }
       }
@@ -2033,12 +2604,14 @@ export class Enemy extends AnimatedEntity {
         playerRef,
         () => {
           if (damageDealt) return;
-          playerRef.hurt(
-            damage,
-            strikeX,
-            strikeY,
-            hurtSource ? { source: hurtSource } : undefined,
-          );
+          if (!this.harmless) {
+            playerRef.hurt(
+              damage,
+              strikeX,
+              strikeY,
+              hurtSource ? { source: hurtSource } : undefined,
+            );
+          }
           damageDealt = true;
         },
       );
@@ -2134,7 +2707,9 @@ export class Enemy extends AnimatedEntity {
     for (const body of overlaps) {
       const obj = body.gameObject;
       if (obj instanceof Player) {
-        obj.hurt(damage, this.x, this.y);
+        // Harmless copies still "connect" (return true so the strike resolves
+        // and this hitbox isn't re-fired) but deal no damage or knockback.
+        if (!this.harmless) obj.hurt(damage, this.x, this.y);
         return true;
       }
     }
@@ -2181,12 +2756,12 @@ export class Enemy extends AnimatedEntity {
   }
 
   // Self-cast HP restore on the heal animation's configured frame. Clamps
-  // to behavior.health (max). Mirrors the takeDamage clamp at the bottom
-  // edge so the boss can't over-heal beyond its registered cap.
+  // to maxHealth. Mirrors the takeDamage clamp at the bottom edge so the
+  // enemy can't over-heal beyond its (scaled) cap.
   private applyHeal(attack: AnimatedEntityAttackConfig): void {
     const amount = attack.heal;
     if (amount == null) return;
-    this.health = Math.min(this.behavior.health, this.health + amount);
+    this.health = Math.min(this.maxHealth, this.health + amount);
   }
 
   // Iterates every contact-type entry and applies damage to the player on
@@ -2201,7 +2776,10 @@ export class Enemy extends AnimatedEntity {
       const ready = this.contactCooldowns.get(attack) ?? 0;
       if (this.scene.time.now < ready) continue;
       if (!this.scene.physics.world.overlap(this, player)) continue;
-      player.hurt(damage, this.x, this.y);
+      if (!this.harmless) player.hurt(damage, this.x, this.y);
+      // Landing contact damage counts as an exchange of blows — keep the
+      // entity engaged so it pursues a player who backs out of touch range.
+      this.refreshAggro();
       this.contactCooldowns.set(
         attack,
         this.scene.time.now + attack.cooldownMs,

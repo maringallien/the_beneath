@@ -7,6 +7,7 @@ import {
   type ShopKind,
 } from '../entities/shop/shopTypes';
 import { COIN_TEXTURE_KEY } from '../constants';
+import { frameCanvas } from './textureCanvas';
 import './shop.css';
 
 // Icon texture keys that ship as pixel art (spritesheets loaded as PNGs) and
@@ -236,7 +237,7 @@ export class ShopOverlay {
   }
 
   private buildItemIcon(item: ShopItem): HTMLCanvasElement {
-    const canvas = this.frameCanvas(item.iconTextureKey, item.iconFrame);
+    const canvas = frameCanvas(this.scene, item.iconTextureKey, item.iconFrame);
     canvas.className = 'shop-item-icon';
     if (!PIXEL_ART_TEXTURE_KEYS.has(item.iconTextureKey)) {
       canvas.classList.add('shop-item-icon--smooth');
@@ -245,42 +246,8 @@ export class ShopOverlay {
   }
 
   private buildCoinIcon(): HTMLCanvasElement {
-    const canvas = this.frameCanvas(COIN_TEXTURE_KEY);
+    const canvas = frameCanvas(this.scene, COIN_TEXTURE_KEY);
     canvas.className = 'shop-coin';
-    return canvas;
-  }
-
-  // Renders a Phaser texture frame onto a freshly-created HTMLCanvasElement
-  // sized to the frame's source dimensions. Returns a canvas the DOM can
-  // embed directly — CSS width/height scales the canvas via the browser's
-  // own sampler. For pixel-art textures we set image-rendering: pixelated
-  // via the .shop-item-icon class; smooth textures fall back to default
-  // bilinear sampling, which matches how they read in-game.
-  private frameCanvas(
-    key: string,
-    frameIndex?: number | string,
-  ): HTMLCanvasElement {
-    const frameId = frameIndex === undefined ? '__BASE' : frameIndex;
-    const frame = this.scene.textures.getFrame(key, frameId);
-    const source = frame.source.image as CanvasImageSource;
-    const canvas = document.createElement('canvas');
-    canvas.width = frame.cutWidth;
-    canvas.height = frame.cutHeight;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(
-        source,
-        frame.cutX,
-        frame.cutY,
-        frame.cutWidth,
-        frame.cutHeight,
-        0,
-        0,
-        frame.cutWidth,
-        frame.cutHeight,
-      );
-    }
     return canvas;
   }
 

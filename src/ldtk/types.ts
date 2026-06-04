@@ -66,6 +66,12 @@ export interface LdtkEntityInstance {
   // / empty. Not part of LDtk's native schema; this is an internal
   // enrichment so downstream code doesn't need the level worldX/Y/gridSize.
   loiterPath?: ReadonlyArray<LoiterPathPoint> | null;
+  // Populated by parseLdtk.getEntities — the identifier of the level this
+  // instance was spawned from (e.g. "Level_6"). Not part of LDtk's native
+  // schema; entities are flattened across all levels before spawning, so this
+  // is how EntityFactory knows which level a Door belongs to (used to mark the
+  // Level_6 / Level_12 doors as key-locked via LOCKED_DOOR_KEYS).
+  __levelId?: string;
 }
 
 export interface LdtkLayerInstance {

@@ -1,9 +1,10 @@
 import Phaser from 'phaser';
+import { LOCKED_DOOR_KEYS } from '../constants';
 import type { LdtkEntityInstance, LoiterPathPoint } from '../ldtk/types';
 import { AnimatedEntity } from './AnimatedEntity';
 import { Chest } from './Chest';
 import { Door } from './Door';
-import { Enemy } from './Enemy';
+import { Enemy, type EnemySpawnOverrides } from './Enemy';
 import { getEntityRegistryEntry, listEntityRegistryEntries } from './entityRegistryLoader';
 import type { AnimatedEntityConfig } from './entityRegistryTypes';
 import { MushroomMerchant } from './MushroomMerchant';
@@ -29,10 +30,16 @@ const SPECIAL_FACTORIES: Readonly<Record<string, EntityFactoryFn>> = {
   // Door is a static, immovable wall. The Door subclass extends
   // AnimatedEntity so the registry still drives its sprite/body; the
   // hand-written factory exists so the player↔doors collider can be
-  // wired up against a concrete subclass.
+  // wired up against a concrete subclass. Doors spawned in a level listed in
+  // LOCKED_DOOR_KEYS are created key-locked (no proximity auto-open; opened by
+  // a hold-E with the matching boss key); every other door stays a plain
+  // proximity door. __levelId is stamped on the instance by parseLdtk.getEntities.
   Door_spawn: (scene, instance) => {
     const { x, y } = pivotCenter(instance);
-    return new Door(scene, x, y);
+    const requiredKey = instance.__levelId
+      ? LOCKED_DOOR_KEYS[instance.__levelId] ?? null
+      : null;
+    return new Door(scene, x, y, requiredKey);
   },
   // Save crystal needs a custom factory because its sequence
   // (start_up → idle hold → down → repeat) can't be expressed by the
@@ -48,20 +55,28 @@ const SPECIAL_FACTORIES: Readonly<Record<string, EntityFactoryFn>> = {
   // the registry, so it settles on the last frame).
   Chest1_spawn: (scene, instance) => {
     const { x, y } = pivotCenter(instance);
-    return new Chest(scene, x, y, 'Chest1_spawn');
+    return new Chest(scene, x, y, 'Chest1_spawn', instance.iid);
   },
   Chest2_spawn: (scene, instance) => {
     const { x, y } = pivotCenter(instance);
-    return new Chest(scene, x, y, 'Chest2_spawn');
+    return new Chest(scene, x, y, 'Chest2_spawn', instance.iid);
   },
   // Merchants override the auto-factory's plain-AnimatedEntity path so they
   // can implement Interactable and emit SHOP_REQUESTED_EVENT on hold-E commit.
   // Same pattern as Save: the registry drives sprite/body/animation while
-  // hand-written code owns the interaction. pivotCenter mirrors the Save /
-  // Chest entries; gravity (mushroom merchant only) settles the body on the
-  // floor via the staticEntities collider wired in GameScene.
+  // hand-written code owns the interaction.
+  //
+  // The tech shop is gravity:false (a fixed structure), so it can't settle on
+  // the staticEntities collider the way the gravity-driven mushroom merchant
+  // does. Spawn it via floorAlignedSpawnPosition instead of bare pivotCenter so
+  // the pivotY=1 (bottom-anchored) LDtk placement lands the frame bottom — the
+  // shop's base — on the placement line, matching the editor (bare pivotCenter
+  // would center the oversized 108px frame in the 90px box and sit it ~9px low).
   Tech_shop_spawn: (scene, instance) => {
-    const { x, y } = pivotCenter(instance);
+    const config = getEntityRegistryEntry('Tech_shop_spawn');
+    const { x, y } = config
+      ? floorAlignedSpawnPosition(instance, config)
+      : pivotCenter(instance);
     return new TechShop(scene, x, y);
   },
   Mushroom_merchant_spawn: (scene, instance) => {
@@ -357,8 +372,9 @@ export function respawnEnemyAt(
   y: number,
   iid: string,
   loiterPath: ReadonlyArray<LoiterPathPoint> | null,
+  spawnOverrides: EnemySpawnOverrides | null = null,
 ): Enemy | null {
   const entry = getEntityRegistryEntry(identifier);
   if (!entry || !entry.behavior) return null;
-  return new Enemy(scene, x, y, identifier, iid, loiterPath);
+  return new Enemy(scene, x, y, identifier, iid, loiterPath, spawnOverrides);
 }

@@ -75,6 +75,7 @@ const MODE_RESOLVERS: Record<CharacterModeId, ModeResolverTable> = {
     dash: { registryKey: 'dash' },
     roll: { registryKey: 'roll' },
     block: { registryKey: 'block' },
+    block_idle: { registryKey: 'block_idle' },
     ledge_climb: { registryKey: 'ledge_climb' },
     jump: null,
     death: { registryKey: 'death' },
@@ -101,6 +102,7 @@ const MODE_RESOLVERS: Record<CharacterModeId, ModeResolverTable> = {
     dash: null,
     roll: { registryKey: 'roll' },
     block: null,
+    block_idle: null,
     ledge_climb: { registryKey: 'ledge_grab' },
     jump: { registryKey: 'jump', sourceMode: 'gunslinger_body' },
     death: { registryKey: 'death' },
@@ -120,6 +122,7 @@ const MODE_RESOLVERS: Record<CharacterModeId, ModeResolverTable> = {
     dash: null,
     roll: { registryKey: 'roll' },
     block: null,
+    block_idle: null,
     ledge_climb: { registryKey: 'ledge_grab' },
     jump: { registryKey: 'jump', sourceMode: 'gunslinger_body' },
     death: { registryKey: 'death' },
@@ -448,12 +451,17 @@ export function registerAllCharacterAnimations(
   const fps = options.defaultFps ?? DEFAULT_CHARACTER_FPS;
   for (const [fullKey, anim] of animationByFullKey) {
     if (scene.anims.exists(fullKey)) continue;
+    // A poseFrame pins the anim to a single static frame of the sheet (e.g.
+    // block_idle holds frame 5 of the 6-frame block strip). repeat:-1 on a
+    // 1-frame anim just holds it and never emits ANIMATION_COMPLETE.
+    const pose = anim.frames.poseFrame;
+    const range =
+      pose !== undefined
+        ? { start: pose, end: pose }
+        : { start: 0, end: anim.frames.frameCount - 1 };
     scene.anims.create({
       key: fullKey,
-      frames: scene.anims.generateFrameNumbers(fullKey, {
-        start: 0,
-        end: anim.frames.frameCount - 1,
-      }),
+      frames: scene.anims.generateFrameNumbers(fullKey, range),
       frameRate: fps,
       repeat: anim.loops ? -1 : 0,
     });

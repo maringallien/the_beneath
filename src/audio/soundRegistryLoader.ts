@@ -150,6 +150,7 @@ const PLAYER_SOUND_SLOTS: ReadonlyArray<keyof PlayerStateSounds> = [
   'footstepsGround',
   'footstepsBridge',
   'wallSlide',
+  'falling',
 ];
 
 function validatePlayerStateSounds(

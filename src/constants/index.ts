@@ -69,27 +69,51 @@ export const GUNSLINGER_GUN1_FIRE_RATE_MULTIPLIER = 1.3;
 export const PROJECTILE_GUN1_DAMAGE = 10;
 export const PROJECTILE_GUN2_DAMAGE = 15;
 
-// Ammo capacity and starting values. INITIAL == MAX so the player spawns with
-// a full magazine. Gun2's smaller capacity reflects its heavier shells.
-export const INITIAL_GUN1_AMMO = 30;
-export const MAX_GUN1_AMMO = 30;
-export const INITIAL_GUN2_AMMO = 10;
-export const MAX_GUN2_AMMO = 10;
-// Per-pickup grant. Gun2 grants fewer to compensate for the smaller magazine
-// and to keep heavier ammo scarce.
-export const AMMO_PICKUP_GUN1_AMOUNT = 5;
-export const AMMO_PICKUP_GUN2_AMOUNT = 2;
+// Ammo capacity and starting values. Deliberately scarce: guns out-DPS and
+// out-range the sword, so without tight caps the player can just shoot through
+// every fight. Low MAX stops hoarding (you can't bank a run's worth of ammo)
+// and INITIAL spawns BELOW max so guns read as an emergency burst to be saved
+// for trouble, with melee as the default. Gun2's smaller capacity reflects its
+// heavier shells. Tune these (with the 25% regular-enemy ammo drop chance in
+// entityRegistry.json and the per-pickup grants below) to set how gun-reliant
+// a run can be.
+export const INITIAL_GUN1_AMMO = 8;
+export const MAX_GUN1_AMMO = 10;
+export const INITIAL_GUN2_AMMO = 3;
+export const MAX_GUN2_AMMO = 5;
+// Per-pickup grant — also the per-purchase shop grant (SHOP_GUN*_GRANT aliases
+// these). Kept small so a single drop/buy tops you up by a couple of shots
+// rather than refilling the magazine, reinforcing the scarcity above. Gun2
+// grants fewer to keep heavier ammo scarce.
+export const AMMO_PICKUP_GUN1_AMOUNT = 3;
+export const AMMO_PICKUP_GUN2_AMOUNT = 1;
 // Ammo consumed per gunshot. Same for both guns — capacity differences
 // already encode the relative scarcity.
 export const AMMO_COST_PER_SHOT = 1;
 
-// Magic resource: discrete 3-bar meter. Each magic sword swing costs one bar
-// (MAGIC_COST_PER_SWING). No regen — refilled only by MAGIC_ORB pickups, which
-// grant one bar per pickup. HUD renders this as three independent segments.
+// Magic resource: a counted orb inventory (like coins / heal items), capped at
+// MAX_MAGIC carried orbs. Each magic sword swing spends one orb
+// (MAGIC_COST_PER_SWING). No regen — orbs are gained only from MAGIC_ORB
+// pickups (chest2 and boss drops, plus the shop), one orb per pickup. The HUD
+// renders this as an orb icon + carried count (see PlayerHudOverlay), matching
+// the coin and heal counters rather than the old three-segment bar.
 export const INITIAL_MAGIC = 3;
-export const MAX_MAGIC = 3;
+export const MAX_MAGIC = 10;
 export const MAGIC_PICKUP_AMOUNT = 1;
 export const MAGIC_COST_PER_SWING = 1;
+
+// Healing item: a counted consumable. Pickups (chest/enemy drops, mushroom
+// merchant) raise the carried count up to MAX_HEAL_ITEMS; pressing Q spends
+// one to restore HEAL_ITEM_RESTORE_AMOUNT health (clamped to PLAYER_MAX_HEALTH).
+// Mirrors the magic resource's "stockpile then consume" shape, so it rides the
+// same PickupKind / addPickup / shop-purchase seams. HEAL_ITEM_USE_COOLDOWN_MS
+// is a light anti-spam guard so key-repeat can't dump the whole stash in one
+// frame. HUD renders this as a heart icon + count (see PlayerHud).
+export const INITIAL_HEAL_ITEMS = 0;
+export const MAX_HEAL_ITEMS = 5;
+export const HEAL_ITEM_RESTORE_AMOUNT = 25;
+export const HEAL_PICKUP_AMOUNT = 1;
+export const HEAL_ITEM_USE_COOLDOWN_MS = 400;
 
 // Stamina resource: discrete 3-bar meter, mirrors the magic shape. Each dash
 // costs one bar (DASH_STAMINA_COST). Stamina regenerates one bar every
@@ -109,20 +133,20 @@ export const COIN_PICKUP_AMOUNT = 1;
 // double as the gold value of each kill. Tuned per-entity in
 // entityRegistry.json as N independent `chancePct: 100` drop entries — these
 // constants document the tiers, the JSON is the source of truth.
-//   Weakest mook (Ghoul) ............... 3
-//   Regular enemy / bandit ............. 5
-//   Small chest (Chest1) ............... 10
-//   Large chest (Chest2) ............... 20
-//   Boss ............................... 50
-// Against shop prices (gun1 pack 10, gun2 pack 15, magic orb 25): a single
-// bandit funds half a gun1 pack, two bandits fund a gun1 pack, a small chest
-// = a magic orb almost, a large chest = a magic orb + ammo, a boss = 2
-// magic orbs.
-export const COIN_DROP_WEAK_ENEMY_COUNT = 3;
-export const COIN_DROP_REGULAR_ENEMY_COUNT = 5;
-export const COIN_DROP_CHEST_SMALL_COUNT = 10;
-export const COIN_DROP_CHEST_LARGE_COUNT = 20;
-export const COIN_DROP_BOSS_COUNT = 50;
+//   Weakest mook (Ghoul) ............... 1
+//   Regular enemy / bandit ............. 2
+//   Small chest (Chest1) ............... 4
+//   Large chest (Chest2) ............... 8
+//   Boss ............................... 20
+// Deliberately lean (~⅓ of the original tiers) so the player can't buy their
+// way past every fight. Against shop prices (gun1 pack 10, gun2 pack 15, magic
+// orb 25): ~3 regular kills fund a gun1 pack, a small chest is most of one, a
+// large chest ≈ a gun1 pack, and a boss ≈ one magic orb (was two).
+export const COIN_DROP_WEAK_ENEMY_COUNT = 1;
+export const COIN_DROP_REGULAR_ENEMY_COUNT = 2;
+export const COIN_DROP_CHEST_SMALL_COUNT = 4;
+export const COIN_DROP_CHEST_LARGE_COUNT = 8;
+export const COIN_DROP_BOSS_COUNT = 20;
 
 // Gold coin placeholder: generated procedurally in PreloadScene as a small
 // gold disc with an inset highlight ring. Mirrors the magic orb pattern —
@@ -156,6 +180,45 @@ export const COIN_DRAG_X = 90;
 export const COIN_FILL_COLOR = 0xffcc33;
 export const COIN_HIGHLIGHT_COLOR = 0xfff2a8;
 
+// Healing-heart placeholder: generated procedurally in PreloadScene as a small
+// red heart (two lobes + a tapered base) with an off-center highlight — the
+// same idiom as the coin/orb. LINEAR-filtered so it stays smooth at CAMERA_ZOOM
+// and renders smoothly in the DOM shop (it is intentionally excluded from
+// ShopOverlay's PIXEL_ART_TEXTURE_KEYS). Swap for a real PNG by loading at
+// HEART_TEXTURE_KEY in preload() and removing the generator call.
+export const HEART_TEXTURE_KEY = 'heal_heart';
+// Source-pixel size, authored larger than the world-drop footprint so LINEAR
+// sampling has the resolution to keep the curved edges smooth.
+export const HEART_TEXTURE_SIZE_PX = 16;
+// World-drop scale: 16 × 0.5 = 8 world units, a touch larger than ammo/orb so
+// the rarer healing pickup reads as more important at a glance.
+export const HEART_DROP_DISPLAY_SCALE = 0.5;
+// Warm red body + a brighter pink highlight inset toward the upper-left, same
+// faux-3D read as the coin's highlight ring.
+export const HEART_FILL_COLOR = 0xff3b5c;
+export const HEART_HIGHLIGHT_COLOR = 0xffa6b6;
+
+// Boss-key placeholder: generated procedurally in PreloadScene as a small gold
+// key (round bow + shaft + two teeth) with a brighter highlight on the bow —
+// the same faux-3D idiom as the coin/heart. LINEAR-filtered so it stays smooth
+// at CAMERA_ZOOM. Both boss keys share one texture (they're visually identical;
+// the door-matching is by pickup kind, not appearance). Swap for a real PNG by
+// loading at KEY_TEXTURE_KEY in preload() and removing the generator call.
+export const KEY_TEXTURE_KEY = 'boss_key';
+// Source-pixel size, authored larger than the world-drop footprint so LINEAR
+// sampling keeps the bow's curve and the teeth crisp at zoom.
+export const KEY_TEXTURE_SIZE_PX = 16;
+// World-drop scale: 16 × 0.5 = 8 world units, matching the heart so the rare
+// key reads as an important pickup at a glance.
+export const KEY_DROP_DISPLAY_SCALE = 0.5;
+// Each successful key drop grants exactly one key (it's a unique unlock, not a
+// stackable resource). Kept as a constant for parity with the other pickups.
+export const KEY_PICKUP_AMOUNT = 1;
+// Warm gold body + a brighter highlight, mirroring the coin's palette so the
+// key reads as the same "treasure" material family.
+export const KEY_FILL_COLOR = 0xffcc33;
+export const KEY_HIGHLIGHT_COLOR = 0xfff2a8;
+
 // Magic orb placeholder: generated procedurally in PreloadScene as a pure
 // black smooth circle. No highlight, no pulse — the visual "magic" comes from
 // the mist particle emitter that follows each spawned orb (see below). Swap
@@ -167,9 +230,10 @@ export const MAGIC_ORB_TEXTURE_KEY = 'magic_orb';
 // resolution to keep the edge smooth. Reduced from 16 → 12 so the orb reads
 // as slightly smaller than ammo drops.
 export const MAGIC_ORB_TEXTURE_SIZE_PX = 12;
-// Gold-yellow body. The orb itself carries no detail — the mist emitter is
-// what makes it read as magical rather than as a plain dot.
-export const MAGIC_ORB_FILL_COLOR = 0xffd700;
+// Cyan body. The orb itself carries no detail — the mist emitter is
+// what makes it read as magical rather than as a plain dot. Keep
+// MIST_PARTICLE_COLOR in sync so the orb's aura matches its body.
+export const MAGIC_ORB_FILL_COLOR = 0x00ffff;
 
 // Magic orbs don't fall — they loiter near their spawn point with a slow
 // sinusoidal drift on both axes. Different X/Y periods produce an open
@@ -192,7 +256,8 @@ export const MIST_PARTICLE_TEXTURE_KEY = 'magic_mist';
 // 6x6 source pixels: small enough to feel like a discrete particle, large
 // enough for LINEAR filtering to soften the edge into something mist-like.
 export const MIST_PARTICLE_TEXTURE_SIZE_PX = 6;
-export const MIST_PARTICLE_COLOR = 0xffd700;
+// Cyan to match MAGIC_ORB_FILL_COLOR so the orb's mist aura reads as one piece.
+export const MIST_PARTICLE_COLOR = 0x00ffff;
 // Lifespan window per particle (ms). Random within range so the cloud doesn't
 // pulse in a uniform rhythm.
 export const MIST_PARTICLE_LIFESPAN_MIN_MS = 900;
@@ -239,6 +304,12 @@ export const AMMO_DROP_LIFETIME_MS = 30_000;
 // Sword melee damage per swing. Melee is close-range, so the per-hit value
 // is higher than a single projectile to compensate for the increased risk.
 export const SWORD_ATTACK_DAMAGE = 15;
+// Magic sword swing damage. A magic swing spends one orb (MAGIC_COST_PER_SWING)
+// from the capped orb inventory, so it hits substantially harder than a free
+// regular swing — 2× here. When the player has no orb to spend the swing
+// downgrades to a regular hit (see startAttackAnim) and deals
+// SWORD_ATTACK_DAMAGE instead.
+export const SWORD_MAGIC_ATTACK_DAMAGE = 30;
 // Forward reach of the sword hitbox in source pixels (player frame is 90x37
 // with a 16px-wide physics body, so 40px forward covers a generous swing).
 export const SWORD_ATTACK_REACH_X = 40;
@@ -285,17 +356,21 @@ export const SCENE_KEYS = {
   GAME: 'GameScene',
   PAUSE: 'PauseScene',
   LANDING: 'LandingScene',
+  VICTORY: 'VictoryScene',
 } as const;
 
 // LDtk level identifier rendered by GameScene. The PreloadScene must inspect
 // the same identifier when picking which tilesets to load — keep them aligned.
 export const CURRENT_LEVEL_IDENTIFIER = 'Level_5';
 
-// LDtk level the player spawns into on a fresh boot. Triggers the landing
-// page overlay (LandingScene) at first launch so the player is framed for
-// the start screen. Distinct from CURRENT_LEVEL_IDENTIFIER so the legacy
-// reference can still point at the prior testing level if needed.
-export const STARTING_LEVEL_IDENTIFIER = 'Level_3';
+// LDtk level the player spawns into on a fresh boot. buildWorld selects the
+// PLAYER_SPAWN_IDENTIFIER marker in THIS level as the player and ignores spawn
+// markers in any other level, so this constant is the single source of truth
+// for the start location. Triggers the landing page overlay (LandingScene) at
+// first launch so the player is framed for the start screen.
+// TEMP: pointed at Level_14 to test the Sword_master_spawn placed there.
+// Restore to 'Level_3' to ship the normal start location.
+export const STARTING_LEVEL_IDENTIFIER = 'Level_14';
 
 // Render depth for the player and other dynamic entities. Tile layers occupy
 // depth 0..N (back→front) using their LDtk layer position; this sits above
@@ -308,27 +383,44 @@ export const ENTITY_DEPTH = 100;
 // entity processing order and put the shop in front.
 export const PLAYER_DEPTH = ENTITY_DEPTH + 1;
 
+// Global multiplier applied to every non-boss enemy's authored
+// behavior.health to set its effective max HP (Enemy computes
+// round(health × this) at construction). A single knob to make regular
+// fights tougher without re-tuning all ~40 registry entries. Bosses
+// (behavior.isBoss) are exempt — their health is hand-tuned around the
+// round-fight thresholds. Set to 1 to disable the bump.
+export const ENEMY_HEALTH_MULTIPLIER = 1.5;
+
 // Time window (ms) an enemy stays "in combat" after its last player-dealt
-// damage. Once the window lapses, HP snaps back to behavior.health (max) and
-// the floating health bar hides. Trap/fall damage does not refresh the timer.
+// damage. Once the window lapses, HP snaps back to its max and the floating
+// health bar hides. Trap/fall damage does not refresh the timer.
 export const ENEMY_COMBAT_TIMEOUT_MS = 20_000;
 
-// Time after death before a non-boss enemy is eligible to respawn at its
-// original spawn point. Bosses (behavior.isBoss === true) opt out entirely.
-// Two minutes lands between "fresh encounter" and "you've moved on" — short
-// enough that backtracking through cleared rooms isn't empty, long enough
-// that the player isn't fighting refilled spawns mid-exploration.
-export const ENEMY_RESPAWN_DELAY_MS = 120_000;
+// Respawn is gated on BOTH a time cooldown and a travel distance: a killed
+// non-boss enemy comes back only once at least ENEMY_RESPAWN_MIN_TIME_MS has
+// elapsed since its death AND the player is at least
+// ENEMY_RESPAWN_MIN_DISTANCE_PX (source px) from the enemy's original spawn
+// point. Whichever gate clears last wins, so the two compound into a strictly
+// less-frequent respawn. Bosses (behavior.isBoss === true) opt out entirely.
+//
+// Distance ~3600 px ≈ eight screens at the 28-tile-wide view (gridSize 16,
+// CAMERA_ZOOM 3): you must clearly leave the region, not just step into the
+// next room. The manager compares squared distance, so there is no sqrt per
+// scan. Keep this comfortably above the on-screen half-extent (~225 px) so a
+// respawn can never materialize within view. Tradeoff: in a small/enclosed
+// area where the player can't get this far, those enemies effectively never
+// respawn — lower it if that proves too strict.
+export const ENEMY_RESPAWN_MIN_DISTANCE_PX = 3600;
+// Minimum time (ms) after death before a killed non-boss enemy is eligible to
+// respawn, enforced together with ENEMY_RESPAWN_MIN_DISTANCE_PX. Five minutes
+// keeps a cleared area cleared even if the player sprints out of range —
+// without a time floor, crossing the distance threshold quickly made enemies
+// feel like they returned instantly.
+export const ENEMY_RESPAWN_MIN_TIME_MS = 300_000;
 // Throttle (ms) for the respawn manager's per-tick scan. 1Hz is enough to
 // notice the threshold within a perceptible window without burning CPU on a
 // per-frame Map iteration that almost always returns "not yet".
 export const ENEMY_RESPAWN_CHECK_INTERVAL_MS = 1000;
-// Camera-rect padding (source px) added when checking whether a respawn point
-// is off-screen. A spawn point inside (camera rect + this padding) defers
-// the respawn so the player never sees an enemy materialize at the edge of
-// view. 64 ≈ four tiles — comfortably outside the visible band even on the
-// frame the player turns the camera.
-export const ENEMY_RESPAWN_OFFSCREEN_PADDING_PX = 64;
 // Floating health-bar visuals. Width sized so the bar reads cleanly above
 // small bandit-sized bodies (~16-32 px wide) and doesn't overpower tall boss
 // frames; height kept thin so the bar feels like UI overlay rather than part
@@ -347,41 +439,126 @@ export const ENEMY_HEALTH_BAR_OUTLINE_COLOR = 0x000000;
 // of world geometry too.
 export const ENEMY_HEALTH_BAR_DEPTH = ENTITY_DEPTH + 2;
 
-// Player HUD: two stacked groups. HP/STA/MAG anchor top-left; G1/G2 ammo
-// anchor top-right with the row's right edge against the margin. HP/STA/MAG
-// render art assets; G1/G2 render an ammo icon + count. ORIGIN_*_PX and
-// ROW_PITCH_PX are CANVAS pixels (final screen coords).
-// Margin from the viewport edge to the HUD content's left/top. Sized so the
-// frame's outer corner accents (which extend ~10 canvas px past the content
-// edge at CAMERA_ZOOM=3) still have a few canvas px of clearance from the
-// viewport border instead of clipping into the corner.
-export const PLAYER_HUD_ORIGIN_X_PX = 18;
-export const PLAYER_HUD_ORIGIN_Y_PX = 18;
-// Vertical pitch between HP and the row below it. Sized for the tallest
-// asset (HP slider ~37 canvas px tall at HP_SLIDER_SCALE=0.78) with a small
-// gap below.
-export const PLAYER_HUD_ROW_PITCH_PX = 44;
-// Tighter pitch for the STA→MAG gap. The stamina and magic bars are short
-// (~9 canvas px) so they can sit closer together than HP's row.
-export const PLAYER_HUD_STA_MAG_PITCH_PX = 22;
-// World-unit gap between a row's label and its content sprite/icon, used by
-// the right-aligned ammo group (each row is sized to its own label).
-export const PLAYER_HUD_LABEL_CONTENT_GAP_WORLD_UNITS = 1;
-// World-unit padding between the widest label in the left group and the bar
-// column. All three bars (HP/STA/MAG) are pinned to the same X by computing
-// `worldX + maxLabelWidth + this padding`, so they line up regardless of
-// per-row label size differences.
-export const PLAYER_HUD_LEFT_BAR_INDENT_WORLD_UNITS = 4;
-// Matches the depth the legacy healthText used so the HUD reliably renders on
-// top of every gameplay object including the enemy health bars.
+// Player HUD: now a DOM/HTML overlay (src/ui/PlayerHudOverlay.ts) styled in
+// src/ui/playerHud.css, so its layout and typography live in CSS rather than
+// here. Only the depth anchor remains — the boss HUD (still canvas-rendered)
+// stacks BOSS_HUD_DEPTH / BOSS_BANNER_DEPTH relative to it, and the value sits
+// above every gameplay object including enemy health bars.
 export const PLAYER_HUD_DEPTH = 10_000;
-export const PLAYER_HUD_LABEL_FONT_FAMILY = 'monospace';
-// Default font size for HUD text (HP label, G1/G2 labels, ammo counts).
-export const PLAYER_HUD_LABEL_FONT_SIZE_PX = 6;
-// Smaller font for STA/MAG labels so they read closer to the short 3-source-
-// pixel bar height and don't tower over their content.
-export const PLAYER_HUD_SMALL_LABEL_FONT_SIZE_PX = 4;
-export const PLAYER_HUD_LABEL_COLOR = '#ffffff';
+
+// ── Boss round-fight system ─────────────────────────────────────────────
+// The round/section count (BOSS_ROUND_COUNT) lives in entities/bossRounds.ts
+// next to the pure round math; the presentation + timing constants below
+// live here.
+// How long the boss freezes + is invulnerable while the "Round N" banner
+// plays on each round transition. The banner's fade-in + hold + fade-out
+// below sum to this so the boss resumes exactly as the banner clears.
+export const BOSS_ROUND_BREAK_MS = 1200;
+
+// ── Boss round-fight reinforcements ─────────────────────────────────────
+// LDtk marker entity identifier whose placed instances mark where a round-
+// fight boss's reinforcement waves spawn. The markers carry no game logic
+// (no factory) — GameScene reads their world positions at world-build time
+// and the LevelRenderer skips drawing them. Place them on the arena floor.
+export const GENERAL_ENEMY_SPAWN_IDENTIFIER = 'General_enemy_spawn';
+// LDtk entity identifier for the player's spawn marker. buildWorld keeps only
+// the one in STARTING_LEVEL_IDENTIFIER, so test markers placed in other levels
+// are ignored rather than tripping the "multiple players" guard in spawnEntities.
+export const PLAYER_SPAWN_IDENTIFIER = 'Sword_master_spawn';
+// Fallback reinforcement roster, used for any round-fight boss/round NOT listed
+// in src/entities/bossWaves.ts (the per-boss source of truth). Registry
+// identifier of the enemy spawned at each marker per wave.
+export const BOSS_ROUND_REINFORCEMENT_IDENTIFIER = 'Ghoul_spawn';
+// Fallback count: how many reinforcements spawn at each marker per wave when the
+// boss/round has no explicit roster in bossWaves.ts.
+export const BOSS_ROUND_REINFORCEMENTS_PER_SITE = 2;
+// First round whose start triggers a reinforcement wave. Round 1 is the
+// arena's pre-placed enemies; waves begin at round 2 so each threshold the
+// player crosses brings fresh pressure.
+export const BOSS_ROUND_FIRST_REINFORCED_ROUND = 2;
+// Horizontal spacing (world px) between the multiple reinforcements spawned
+// at one marker so they don't materialize stacked on the same pixel.
+export const REINFORCEMENT_SPAWN_SPACING_PX = 18;
+// How far (world px) above the projected floor a reinforcement is placed at
+// spawn. Small, so it settles onto the floor in a frame or two without the
+// fall registering as fall damage even when its marker sits high in the arena.
+export const REINFORCEMENT_SPAWN_LIFT_PX = 20;
+// Delay (ms) between one spawn site's wave and the next when a round's
+// reinforcements go out. Enemies at a single site still all appear together;
+// only the sites are staggered, so a round doesn't dump the whole arena's
+// reinforcements in one frame.
+export const REINFORCEMENT_SITE_STAGGER_MS = 350;
+
+// ── Boss self-copies (round-fight "split" mechanic) ─────────────────────
+// Some round-fight bosses split on a later round into harmless copies of
+// themselves (see src/entities/bossSelfCopies.ts and
+// GameScene.spawnBossSelfCopies). The copies inherit the boss's animations,
+// attacks, and AI but deal no damage and use a hand-set low max HP.
+// The Heart Hoarder's round-3 copies' max HP (the boss itself has 900). Kept
+// low so a copy reads as a regular enemy — a few hits with its floating bar
+// visible — rather than a damage sponge.
+export const HEART_HOARDER_COPY_HEALTH = 40;
+// Horizontal distance (world px) between adjacent self-copy slots when a boss
+// splits, so the copies flank the boss instead of overlapping it.
+export const BOSS_SELF_COPY_SPAWN_OFFSET_PX = 90;
+// Horizontal stand-off (world px) each self-copy holds from the player while
+// converging. Without it every horizontal-movement-only copy homes to the exact
+// same player.x and the whole family collapses into one visual blob; with it
+// each copy parks on its own X slot beside the player. Slightly wider than the
+// spawn offset so the oversized hoarder frames stay clearly distinct.
+export const BOSS_SELF_COPY_CHASE_STANDOFF_PX = 110;
+// Settle band (world px) around a horizontal-chase target: once the enemy is
+// this close to its target X it parks (velocityX = 0) instead of flip-flopping
+// Math.sign(dx) every frame, which would jitter a copy sitting on its slot.
+export const HORIZONTAL_CHASE_STANDOFF_DEADZONE_PX = 10;
+
+// Screen-wide boss health bar pinned to the top of the viewport. Like
+// PlayerHud, positions/sizes are authored in SCREEN px and converted to world
+// space at CAMERA_ZOOM each frame, so these read as on-screen pixels.
+// Distance from the viewport top to the boss NAME (the bar sits below it).
+export const BOSS_BAR_TOP_MARGIN_PX = 12;
+// Bar width as a fraction of the viewport width (centered horizontally).
+export const BOSS_BAR_WIDTH_FRACTION = 0.6;
+export const BOSS_BAR_HEIGHT_PX = 8;
+// Gap between the name's bottom and the bar's top.
+export const BOSS_BAR_NAME_GAP_PX = 3;
+export const BOSS_BAR_BG_COLOR = 0x1a0d0d;
+export const BOSS_BAR_BG_ALPHA = 0.85;
+export const BOSS_BAR_FRAME_COLOR = 0xffffff;
+export const BOSS_BAR_FRAME_STROKE_PX = 1;
+// Section dividers drawn at each 1/BOSS_ROUND_COUNT mark.
+export const BOSS_BAR_DIVIDER_COLOR = 0x000000;
+export const BOSS_BAR_DIVIDER_WIDTH_PX = 1;
+// Fill color per round (index 0 = round 1). Crimson → amber → blood-red, so
+// the bar visibly shifts as the player breaks each section.
+export const BOSS_BAR_ROUND_COLORS: ReadonlyArray<number> = [
+  0xc81e1e, 0xe0860d, 0x7a0a0a,
+];
+export const BOSS_BAR_NAME_FONT_SIZE_PX = 7;
+export const BOSS_BAR_NAME_FONT_FAMILY = 'Arial, Helvetica, sans-serif';
+export const BOSS_BAR_NAME_COLOR = '#f5e6c8';
+
+// "Round N" banner — big centered text that fades in, holds, and fades out.
+// Uses the apocalyptic Nosifer display face (self-hosted via @font-face in
+// index.html) to match the landing title and options headers. Single-weight
+// font, so weight stays 'normal' — fake-bold would smear the dripping glyphs.
+export const BOSS_BANNER_FONT_SIZE_PX = 20;
+export const BOSS_BANNER_FONT_FAMILY = "'Nosifer', 'Impact', cursive";
+export const BOSS_BANNER_FONT_WEIGHT = 'normal';
+export const BOSS_BANNER_COLOR = '#f5e6c8';
+export const BOSS_BANNER_STROKE_COLOR = '#3a0a0a';
+export const BOSS_BANNER_STROKE_PX = 2;
+// Vertical placement as a fraction of viewport height (above center so it
+// doesn't cover the player during the fight).
+export const BOSS_BANNER_VIEWPORT_FRACTION_Y = 0.34;
+// Lifecycle timings (sum == BOSS_ROUND_BREAK_MS).
+export const BOSS_BANNER_FADE_IN_MS = 200;
+export const BOSS_BANNER_HOLD_MS = 700;
+export const BOSS_BANNER_FADE_OUT_MS = 300;
+// Depths: above the player HUD so the boss UI always reads on top; the
+// banner sits above the bar.
+export const BOSS_HUD_DEPTH = PLAYER_HUD_DEPTH + 10;
+export const BOSS_BANNER_DEPTH = PLAYER_HUD_DEPTH + 11;
 
 // Default proximity range (source px) at which an interactable advertises its
 // E icon. Chests are small (14-22 px wide bodies) — at 36 px the icon appears
@@ -463,6 +640,118 @@ export const SAVE_TOAST_RISE_PX = 6;
 // is in proximity still reads cleanly.
 export const SAVE_TOAST_DEPTH = INTERACTION_ICON_DEPTH + 1;
 
+// ── Boss-key progression system ──────────────────────────────────────────
+//
+// The game is won by defeating all three bosses. Two of them (Shadow of Storms,
+// The Tarnished Widow) drop a key on death that unlocks a specific key-locked
+// door; the third (The Heart Hoarder) drops no key but must be defeated to win.
+// Run progress (collected keys, defeated bosses) lives in src/state/runProgress
+// so it survives death/respawn — bosses don't auto-respawn, so a key lost on
+// death would otherwise soft-lock the run.
+
+// Identifiers of the bosses that must all be defeated to win. Order is
+// irrelevant — the win check is "every one of these is in the defeated set".
+export const REQUIRED_BOSS_IDENTIFIERS = [
+  'Shadow_of_storms_spawn',
+  'The_tarnished_widow_spawn',
+  'The_heart_hoarder_spawn',
+] as const;
+
+// The final boss. Its defeat ends the run and triggers the victory screen on
+// its own — it's reached only after the other two (behind their key-locked
+// doors), so killing it is the win, no separate all-bosses check required.
+export const FINAL_BOSS_IDENTIFIER = 'The_heart_hoarder_spawn';
+
+// Maps a key-locked door's LDtk level identifier to the pickup kind that opens
+// it. A Door spawned in one of these levels is created locked and only opens on
+// a hold-E interaction once the player holds the matching key; every other door
+// keeps the default proximity auto-open behavior. Each of these levels contains
+// exactly one door (verified against the_beneath.ldtk). The values mirror the
+// PickupKind string literals (kept inline rather than imported to avoid a
+// constants→Player import cycle).
+export const LOCKED_DOOR_KEYS: Readonly<Record<string, 'key_storms' | 'key_widow'>> = {
+  Level_6: 'key_storms',
+  Level_12: 'key_widow',
+};
+
+// Maps a boss's LDtk identifier to the key its defeat grants. On defeat the key
+// is recorded in run-progress directly (in addition to the physical key the boss
+// still drops) so the matching key-locked door stays openable even if the player
+// dies before walking over the drop — defeated bosses never respawn, so that
+// dropped key would otherwise be the run's only copy. Bosses with no entry (The
+// Heart Hoarder) grant no key.
+export const BOSS_KEYS: Readonly<Record<string, 'key_storms' | 'key_widow'>> = {
+  Shadow_of_storms_spawn: 'key_storms',
+  The_tarnished_widow_spawn: 'key_widow',
+};
+
+// Emitted on the GameScene event bus by Enemy.enterDeadState when a boss dies,
+// with the boss's LDtk identifier as payload. GameScene records the defeat and
+// fires the victory flow once all REQUIRED_BOSS_IDENTIFIERS are down.
+export const BOSS_DEFEATED_EVENT = 'boss-defeated';
+
+// Emitted on the GameScene event bus by a key-locked Door when the player
+// completes a hold-E without the matching key. GameScene shows the fade message.
+export const KEY_DOOR_LOCKED_EVENT = 'key-door-locked';
+
+// Source-px gap above a key-locked door's body.top for the E icon anchor —
+// mirrors Chest's ICON_ANCHOR_GAP_PX so the prompt floats clear of the lintel.
+export const KEY_DOOR_ICON_ANCHOR_GAP_PX = 2;
+// Slightly wider interaction range than the default (door bodies are 21×24 and
+// the player stands flush against the solid leaf) so the E prompt reliably
+// appears when the player is pressed up to the locked door.
+export const KEY_DOOR_INTERACTION_RANGE_PX = 44;
+export const KEY_DOOR_INTERACTION_RANGE_SQ =
+  KEY_DOOR_INTERACTION_RANGE_PX * KEY_DOOR_INTERACTION_RANGE_PX;
+
+// Bottom-of-screen fade message shown when the player tries a locked door
+// without its key. World-anchored to the camera's view (like SAVE_TOAST) and
+// rendered at CAMERA_ZOOM resolution so it stays crisp; fades in, holds, fades
+// out, then destroys.
+export const KEY_DOOR_MESSAGE_TEXT = 'You must find the key to open this door';
+export const KEY_DOOR_MESSAGE_FONT_FAMILY = 'Arial, Helvetica, sans-serif';
+export const KEY_DOOR_MESSAGE_FONT_SIZE_PX = 7;
+export const KEY_DOOR_MESSAGE_COLOR = '#ffffff';
+// Source-px gap from the camera view's bottom edge so the line sits just inside
+// the frame rather than flush against it.
+export const KEY_DOOR_MESSAGE_BOTTOM_MARGIN_PX = 18;
+export const KEY_DOOR_MESSAGE_FADE_IN_MS = 200;
+export const KEY_DOOR_MESSAGE_HOLD_MS = 1500;
+export const KEY_DOOR_MESSAGE_FADE_OUT_MS = 400;
+export const KEY_DOOR_MESSAGE_DEPTH = SAVE_TOAST_DEPTH + 1;
+
+// ── Victory screen ───────────────────────────────────────────────────────
+// Shown (full-screen, over the frozen game) when the final boss (the Heart
+// Hoarder) dies: the screen fades to solid black, "YOU WON" reveals in big
+// white letters, and after a short hold the run returns to the home/title page
+// (a click / Enter / Space skips the wait).
+export const VICTORY_DIM_COLOR = 0x000000;
+// Solid black — the win screen fully hides the frozen world behind it.
+export const VICTORY_DIM_ALPHA = 1;
+// Beat held between the final boss's death (which also clears its arena, so
+// every other enemy in the level dies at the same moment) and the victory flow
+// freezing the world to fade to black. Without it the screen would cut to black
+// on the same frame the boss/adds start dying, so their death animations are
+// never seen. The actual hold is derived from the boss's death-animation length
+// at runtime (see GameScene.onBossDefeated) so it always covers the full clip;
+// this constant is only the fallback used when that duration can't be resolved.
+export const VICTORY_DELAY_MS = 3000;
+// The boss reaps its own corpse the instant its death animation completes
+// (Enemy.onAnimComplete → destroy). So the victory flow freezes the world this
+// many ms BEFORE that completion — the boss stays visible on a late death frame
+// under the win fade instead of the screen cutting to black over an empty arena.
+// ~2.5 frames at the 12fps character rate: enough margin that the freeze always
+// wins the race against the self-reap, while the near-final pose reads as done.
+export const VICTORY_FREEZE_MARGIN_MS = 200;
+export const VICTORY_FADE_IN_MS = 900;
+// How long "YOU WON" holds on the black screen before auto-returning home.
+export const VICTORY_HOLD_MS = 2500;
+export const VICTORY_TITLE_TEXT = 'YOU WON';
+export const VICTORY_TITLE_COLOR = '#ffffff';
+export const VICTORY_TITLE_FONT_SIZE_PX = 64;
+// Centered vertically on the black screen.
+export const VICTORY_TITLE_VIEWPORT_FRACTION_Y = 0.5;
+
 // Pause menu. Lives in its own scene (SCENE_KEYS.PAUSE) launched on top of
 // GameScene via scene.launch + scene.pause — the idiomatic Phaser pause
 // pattern halts physics, tweens, timers, and update() in one call. Word
@@ -470,9 +759,15 @@ export const SAVE_TOAST_DEPTH = INTERACTION_ICON_DEPTH + 1;
 // InteractionIcon and the magic orb) so they render smoothly at zoom rather
 // than nearest-sampled by the global pixelArt:true config.
 export const PAUSE_CONTINUE_TEXTURE_KEY = 'pause_word_continue';
+export const PAUSE_NEW_GAME_TEXTURE_KEY = 'pause_word_new_game';
+export const PAUSE_OPTIONS_TEXTURE_KEY = 'pause_word_options';
 export const PAUSE_QUIT_TEXTURE_KEY = 'pause_word_quit';
 export const PAUSE_CONTINUE_ASSET_PATH =
   '/DarkSpriteLib/general/ui/words/words_with_bg/ui_-_words1.png';
+export const PAUSE_NEW_GAME_ASSET_PATH =
+  '/DarkSpriteLib/general/ui/words/words_with_bg/ui_-_words2.png';
+export const PAUSE_OPTIONS_ASSET_PATH =
+  '/DarkSpriteLib/general/ui/words/words_with_bg/ui_-_words9.png';
 export const PAUSE_QUIT_ASSET_PATH =
   '/DarkSpriteLib/general/ui/words/words_with_bg/ui_-_words3.png';
 
@@ -502,6 +797,29 @@ export const PAUSE_FRAME_CORNER_ACCENT_OFFSET_PX = 6;
 export const PAUSE_SELECTED_TINT = 0xffffff;
 export const PAUSE_UNSELECTED_TINT = 0x808080;
 
+// Options panel, opened from the pause menu's OPTIONS button. Rendered as a DOM
+// overlay that reuses the merchant shop's grey framed-panel idiom (see
+// src/ui/OptionsOverlay + shop.css) so it reads as the same piece of in-world
+// UI. Lists the game's controls and exposes a music on/off toggle. The toggle
+// swaps between a speaker icon (music on) and a muted-speaker icon (music off);
+// both ship in /public and are referenced as plain <img>, so unlike the pause
+// word banners they need no Phaser texture preloading.
+export const OPTIONS_SOUND_ON_ICON_PATH =
+  '/DarkSpriteLib/general/ui/icons/ui_-_icons6.png';
+export const OPTIONS_SOUND_OFF_ICON_PATH =
+  '/DarkSpriteLib/general/ui/icons/ui_-_icons7.png';
+
+// Menu / UI feedback sound ids. Registered in soundRegistry.json as
+// non-spatial sfx one-shots and played via playOneShot from the menu scenes
+// and the player. Shared here (rather than defined locally per scene) because
+// each is referenced from more than one call site:
+//   - UI_BUTTON_HOVER_SOUND_ID: a digital click that fires on pointer-over of
+//     any menu button (landing START, pause Continue/Quit).
+//   - UI_BOOM_SOUND_ID: a heavy low-impact stinger played when the player
+//     commits to Start on the landing page and when the player dies.
+export const UI_BUTTON_HOVER_SOUND_ID = 'button_hover';
+export const UI_BOOM_SOUND_ID = 'boom_low_hit';
+
 // Merchant shops. Tech_shop_spawn sells ammo; Mushroom_merchant_spawn sells
 // magic orbs. The merchant entity emits SHOP_REQUESTED_EVENT on hold-E commit
 // and GameScene shows a DOM-based ShopOverlay (src/ui/ShopOverlay) over the
@@ -516,6 +834,10 @@ export const SHOP_REQUESTED_EVENT = 'shop-requested';
 export const SHOP_PRICE_GUN1_AMMO = 10;
 export const SHOP_PRICE_GUN2_AMMO = 15;
 export const SHOP_PRICE_MAGIC_ORB = 25;
+// Healing heart: priced between an ammo pack and a magic orb. Each heart
+// restores HEAL_ITEM_RESTORE_AMOUNT (25) health, so a full top-up from near
+// death costs ~3-4 hearts — a meaningful coin sink without being punishing.
+export const SHOP_PRICE_HEAL_ITEM = 20;
 
 // Per-purchase grant. Aliased to the existing pickup amounts so buying a
 // gun1 magazine grants the same N bullets as walking into a gun1 drop —
@@ -523,6 +845,7 @@ export const SHOP_PRICE_MAGIC_ORB = 25;
 export const SHOP_GUN1_GRANT_PER_PURCHASE = AMMO_PICKUP_GUN1_AMOUNT;
 export const SHOP_GUN2_GRANT_PER_PURCHASE = AMMO_PICKUP_GUN2_AMOUNT;
 export const SHOP_MAGIC_GRANT_PER_PURCHASE = MAGIC_PICKUP_AMOUNT;
+export const SHOP_HEAL_GRANT_PER_PURCHASE = HEAL_PICKUP_AMOUNT;
 
 // Landing page. Shown on first boot via a LandingScene overlay launched on
 // top of GameScene. The START word sprite uses the same word-banner pattern
@@ -555,16 +878,57 @@ export const LANDING_BUTTON_TWEEN_MS = 120;
 // (LANDING_BUTTON_VIEWPORT_FRACTION_Y) — keep some clearance between
 // them or the title and button will visually merge.
 export const LANDING_TITLE_TEXT = 'THE BENEATH';
-export const LANDING_TITLE_FONT_FAMILY = 'Arial, Helvetica, sans-serif';
-export const LANDING_TITLE_FONT_SIZE_PX = 48;
-export const LANDING_TITLE_FONT_WEIGHT = 'bold';
+// Internal family name of the self-hosted apocalyptic display face (declared
+// via @font-face in index.html). Phaser rasterizes canvas Text synchronously
+// at creation, so a font still downloading at that moment bakes in the
+// fallback face. PreloadScene gates the game boot on the Font Loading API
+// reporting THIS family ready (see bootGameWhenFontReady), and LandingScene
+// re-renders the title against it as a fallback. Kept separate from
+// LANDING_TITLE_FONT_FAMILY (which carries the fallback stack) so the Font
+// Loading API is asked for exactly the family it should fetch.
+export const DISPLAY_FONT_NAME = 'Nosifer';
+// Hard cap on how long PreloadScene waits for DISPLAY_FONT_NAME before booting
+// anyway, so a slow or failed font download can never hang startup. The woff2
+// is a tiny (~15 KB) self-hosted latin subset, so this only matters on a cold
+// cache or an outright load failure (then the title shows its fallback face).
+export const FONT_BOOT_TIMEOUT_MS = 2000;
+// Apocalyptic display font (self-hosted via @font-face in index.html). Falls
+// back to Impact, then a generic display face, if the woff2 fails to load.
+// Single-weight font, so the title renders at normal weight (fake-bold would
+// smear the dripping glyphs).
+export const LANDING_TITLE_FONT_FAMILY = "'Nosifer', 'Impact', cursive";
+export const LANDING_TITLE_FONT_SIZE_PX = 55;
+export const LANDING_TITLE_FONT_WEIGHT = 'normal';
 export const LANDING_TITLE_COLOR = '#ffffff';
 export const LANDING_TITLE_VIEWPORT_FRACTION_Y = 0.18;
+
+// Home-screen menu banners stacked beneath START: OPTIONS (opens the same
+// OptionsOverlay the pause menu uses) and CREDITS (opens CreditsOverlay). The
+// OPTIONS word reuses the pause menu's already-loaded PAUSE_OPTIONS texture;
+// CREDITS loads its own banner (ui_-_words6 = the "CREDITS" word), LINEAR-
+// filtered in PreloadScene like the other word banners.
+export const LANDING_CREDITS_TEXTURE_KEY = 'landing_word_credits';
+export const LANDING_CREDITS_ASSET_PATH =
+  '/DarkSpriteLib/general/ui/words/words_with_bg/ui_-_words6.png';
+// OPTIONS + CREDITS render smaller than START so the primary action stays
+// visually dominant; GAP_PX is the canvas-pixel gap between stacked banners.
+export const LANDING_MENU_BUTTON_DISPLAY_SCALE = 1.0;
+export const LANDING_MENU_BUTTON_GAP_PX = 22;
+
+// Credits panel title (CreditsOverlay). Reuses the game name; the individual
+// credit lines are presentation data defined alongside the overlay itself
+// (mirroring OptionsOverlay's CATEGORIES).
+export const CREDITS_TITLE_TEXT = LANDING_TITLE_TEXT;
 
 // Fade durations for the click → black → gameplay transition. Matched in
 // and out so the visible pulse feels symmetric.
 export const LANDING_FADE_OUT_MS = 600;
 export const LANDING_FADE_IN_MS = 600;
+// Dwell on full black between the fade-out landing and the fade-in starting.
+// gameplay is set up under the black at the start of this hold (ambience kicks
+// in), then the world reveals once it elapses — a beat of darkness that makes
+// the descent into the level feel more dramatic.
+export const LANDING_BLACK_HOLD_MS = 1400;
 
 // Viewport fractions for the landing-page layout. Player is anchored at 25%
 // from the left of the screen; START button at BUTTON_FRACTION_X across and
@@ -597,10 +961,72 @@ export const LANDING_SCREEN_BRACKET_LENGTH_PX = 72;
 // the viewport edge to transparent at THICKNESS_PX inward, painted by the
 // LandingScene above the world but below the START button and screen
 // frame. Reads as soft darkening at the edges so the eye is drawn toward
-// the player + button composition.
+// the player + button composition. The same config drives the in-game
+// vignette (src/ui/EdgeVignette.ts) so gameplay matches the home screen.
 export const LANDING_VIGNETTE_COLOR = 0x000000;
 export const LANDING_VIGNETTE_THICKNESS_PX = 380;
 export const LANDING_VIGNETTE_EDGE_ALPHA = 0.8;
+
+// Depth for the in-game edge vignette (src/ui/EdgeVignette.ts). Sits just
+// below PLAYER_HUD_DEPTH so it darkens every world object at the screen edges
+// (tiles, entities, health bars, icons) while leaving the player + boss HUD
+// fully legible on top — the gameplay analog of the landing vignette sitting
+// behind the START button and frame.
+export const VIGNETTE_DEPTH = PLAYER_HUD_DEPTH - 1;
+
+// ── Dynamic vignette (terrain-density driven) ───────────────────────────
+// The vignette grows in tight, rock-filled spaces (less light) and shrinks in
+// open caverns (more light). The driver (GameScene.updateVignette) samples the
+// solid-tile fraction of a fixed cell window centered on the camera each frame
+// and maps it to a strip thickness + edge alpha around the landing-screen
+// set point.
+//
+// Sample window: a FIXED number of cells (not the live viewport) so the
+// calibration below is independent of the player's window size. 14×8 half-
+// extents → a 28×16-cell window, matching a ~1366×768 viewport at CAMERA_ZOOM=3
+// (gridSize 16) — the window the reference density was measured against.
+export const VIGNETTE_SAMPLE_HALF_W_CELLS = 14;
+export const VIGNETTE_SAMPLE_HALF_H_CELLS = 8;
+
+// The neutral solid-fraction set point: the vignette renders at exactly the
+// landing-screen values (LANDING_VIGNETTE_THICKNESS_PX / _EDGE_ALPHA) when the
+// camera window is this dense. Measured as Level_3's camera-local average
+// (Level_3 was the original STARTING_LEVEL_IDENTIFIER), so Level 3 reads as the reference and
+// tighter levels (~0.46–0.66) grow while open rooms shrink. Tunable by feel.
+export const VIGNETTE_REFERENCE_DENSITY = 0.37;
+
+// Thickness mapping: thickness = clamp(BASE + (density − REFERENCE) × SLOPE,
+// MIN, MAX), where BASE = LANDING_VIGNETTE_THICKNESS_PX. Slope is px of strip
+// per unit of solid-fraction; the clamps bound how far the vignette can open
+// or close so it never fully vanishes or swallows the play area.
+export const VIGNETTE_THICKNESS_DENSITY_SLOPE_PX = 800;
+export const VIGNETTE_MIN_THICKNESS_PX = 180;
+export const VIGNETTE_MAX_THICKNESS_PX = 640;
+
+// Alpha mapping: a MILD coupled darkening so tight spaces also read a touch
+// darker, not just wider. Same shape as the thickness map around the same set
+// point (BASE = LANDING_VIGNETTE_EDGE_ALPHA), kept subtle via a small slope and
+// tight clamps so Level 3 stays at the landing alpha.
+export const VIGNETTE_ALPHA_DENSITY_SLOPE = 0.3;
+export const VIGNETTE_MIN_EDGE_ALPHA = 0.7;
+export const VIGNETTE_MAX_EDGE_ALPHA = 0.92;
+
+// Per-frame exponential smoothing toward the density target. Lower = slower,
+// dreamier breathing; higher = snappier. ~0.05 gives a ~0.3s response so the
+// vignette eases as the player moves between spaces instead of jittering as
+// individual tiles scroll in and out of the sample window.
+export const VIGNETTE_SMOOTH_LERP = 0.05;
+
+// Protected clear zone: the central fraction of EACH axis where the vignette is
+// guaranteed to be exactly 0 — no shading at all — so it never interferes with
+// gameplay. 0.4 keeps the central 40% of the width AND 40% of the height fully
+// clear; the four edge strips are confined to the outer border outside it, each
+// reaching at most (1 − fraction)/2 of its axis inward and fading to zero right
+// at the clear-zone boundary. Density grows the strips toward (but never into)
+// that boundary, so denser areas darken the border more while the center stays
+// pristine. Raise toward 1 for a larger clear center (thinner border); lower for
+// a thicker border that reaches closer to center.
+export const VIGNETTE_CLEAR_FRACTION = 0.4;
 
 // Per-tileset brightness lift applied at preload (RGB multiplier on each
 // opaque pixel, clamped to 255). Used to compensate for tilesets whose source
@@ -628,9 +1054,9 @@ export const LAYER_BRIGHTNESS_FACTORS: Readonly<Record<string, number>> = {
 // luminance exceeds FOREGROUND_GLOW_LUMINANCE_THRESHOLD has a soft radial halo
 // painted at its position in the glow atlas. LevelRenderer then draws a second
 // Image per foreground tile from that atlas with ADD blend, so bright dots
-// emit a halo while the surrounding tile pixels stay unchanged. Combined with
-// WORLD_DIM_* below, the contrast pulls focus to the lit dots. Toggle this
-// flag to disable the effect entirely (no bake, no extra draw calls).
+// emit a halo while the surrounding tile pixels stay unchanged against the
+// darker background art. Toggle this flag to disable the effect entirely (no
+// bake, no extra draw calls).
 export const FOREGROUND_GLOW_ENABLED = true;
 // LDtk layer identifier prefix that opts a layer into the glow pass. Matches
 // "Foreground1", "Foreground2", "Foreground3" in the_beneath.ldtk. Other
@@ -727,76 +1153,3 @@ export const SIGN_PULSATE_MAX_ALPHA = 1.0;
 // drift over time; narrower = more uniform breathing.
 export const SIGN_PULSATE_DURATION_MIN_MS = 550;
 export const SIGN_PULSATE_DURATION_MAX_MS = 1300;
-
-// World dim overlay. Camera-pinned black Rectangle drawn at a depth below
-// the lowest IntGrid/Foreground* layer, so background + parallax visuals are
-// darkened but ground (IntGrid) and foreground tiles (and their glow) are
-// not. IntGrid is kept bright alongside Foreground* because they share a
-// tileset — splitting them across the dim makes the same source pixel render
-// at two different brightnesses where Foreground1 tiles overlay IntGrid
-// ground. Entities (ENTITY_DEPTH=100) sit above the dim, so the
-// player/enemies/HUD render at full brightness too.
-//
-// Alpha is dynamic when LIGHTING_ENABLED is true: GameScene samples openness
-// at the player's position and lerps the dim alpha between
-// WORLD_DIM_ALPHA_OPEN (in wide caves) and WORLD_DIM_ALPHA_ENCLOSED (in
-// tight tunnels). When LIGHTING_ENABLED is false, the dim stays at the
-// static WORLD_DIM_ALPHA value. Set WORLD_DIM_ALPHA=0 and LIGHTING_ENABLED
-// =false to disable the dim entirely without removing the wiring.
-export const WORLD_DIM_COLOR = 0x000000;
-export const WORLD_DIM_ALPHA = 0.15;
-
-// Openness-based dynamic lighting. For each walkable IntGrid cell in a
-// level, the system walks outward in 8 directions until it hits a solid
-// cell (or the level edge), takes the min distance, and normalizes it to a
-// 0..1 "openness" score. Each frame GameScene samples openness at the
-// player's current world position and modulates the screen-wide dim alpha
-// between OPEN and ENCLOSED. Net effect: the whole screen brightens in
-// open caves and dims in tight corridors. Set ENABLED=false to disable
-// the modulation (dim stays at static WORLD_DIM_ALPHA).
-export const LIGHTING_ENABLED = true;
-// Cells beyond this radius are treated as fully open. Lower = small rooms
-// also register as "fully open". 4 cells (64 px at 16-px gridSize) means
-// roughly an 8×8 px room counts as fully open. Higher pushes the bright end
-// further toward genuinely large caves.
-export const OPENNESS_SATURATION_CELLS = 4;
-// Half-extent (in cells) of the region-averaging kernel applied after the
-// per-cell raycast. Every cell's final openness = mean openness of the
-// walkable cells within this radius. The point is that screen brightness
-// reflects the surrounding *region's* openness, not the player's exact
-// tile — so standing next to a wall inside a big room still reads as
-// "big room" rather than "next to a wall". Larger = more uniform within
-// rooms but smears across multiple rooms (and on small levels can collapse
-// the entire level into one uniform value); smaller = more variation
-// within rooms but sharper room-to-room contrast. 5 cells ≈ an 11×11 cell
-// window (176 px) which captures local region without swallowing an
-// entire small level.
-export const OPENNESS_REGION_RADIUS_CELLS = 5;
-// Contrast power applied to the openness score after smoothing. Values < 1
-// lift mid-range openness toward 1.0 — i.e. modestly open rooms register as
-// "very open" and the brightness gap between corridor and cave widens. At
-// 0.4 a 50%-open room reads as ~76% open. Set to 1.0 to disable the curve.
-// Tune lower (e.g. 0.25) for an even more dramatic gap; higher (e.g. 0.8)
-// for a gentler ramp. Type-annotated as `number` so the consumer can
-// compare against 1 to short-circuit the no-op case without TS narrowing
-// the constant to its literal value.
-export const OPENNESS_CONTRAST_POWER: number = 0.25;
-// Dim alpha when the player is in a fully-open area (openness = 1). 0.15
-// leaves the brightest areas slightly tinted rather than at full asset
-// brightness — sets a darker floor for the whole range.
-export const WORLD_DIM_ALPHA_OPEN = 0.15;
-// Dim alpha when the player is in a fully-enclosed area (openness = 0).
-// Tracks the OPEN endpoint at a constant +0.4 offset so the dynamic range
-// stays the same; raising both endpoints by 0.15 from the previous pair
-// (0.0 / 0.55) makes the world uniformly 15% darker.
-export const WORLD_DIM_ALPHA_ENCLOSED = 0.7;
-// Lerp rate (per second) used to ease the current alpha toward the
-// openness-derived target. 4.0 ≈ ~250 ms to traverse most of the gap. Lower
-// = slower fade (more cinematic); higher = snappier response to crossing a
-// doorway. The smoothing is what keeps screen brightness from flickering as
-// the player walks between cells of different openness scores.
-export const LIGHTING_LERP_RATE_PER_SEC = 4.0;
-// Camera-pinned text overlay showing live lighting state (raw openness
-// sample, target alpha, smoothed alpha) for diagnostics during tuning.
-// Disable once the lighting curve feels right.
-export const LIGHTING_DEBUG_HUD = true;

@@ -175,6 +175,19 @@ export interface AnimatedEntityAttackConfig {
   // chosen more often; e.g., weight 3 vs 1 makes this attack ~3× as likely
   // as the other. Has no effect when only one attack is eligible.
   readonly weight?: number;
+  // Combo chaining: when this attack's animation completes, with
+  // `comboChancePct` probability immediately launch the pool attack whose
+  // `animation` key equals `comboNextAnimation`, skipping the usual
+  // recover/cooldown gap so the pair reads as one 1-2 combo. The follow-up
+  // runs its own full swing (damage frame, hitbox, then its own recover +
+  // cooldown). Only chains while the player is within this (lead) attack's
+  // `range` so the follow-up doesn't whiff into empty space, and only if the
+  // follow-up isn't on its own recastCooldownMs. melee/ranged/magic only.
+  // `comboNextAnimation` must match another pool entry's `animation` key.
+  readonly comboNextAnimation?: string;
+  // Probability (0 < n <= 100) of chaining into comboNextAnimation. Required
+  // when comboNextAnimation is set; ignored otherwise.
+  readonly comboChancePct?: number;
   readonly aggressive: boolean;
   // Optional chase fields. If chaseRange is set, the entity moves toward
   // the player when within that range. Absent = stationary attacker.
@@ -365,13 +378,36 @@ export interface AnimatedEntityBehaviorConfig {
   // (e.g. The_heart_hoarder confined to Level_15). No-op for entities
   // spawned in inter-level whitespace where the rect lookup returns null.
   readonly stayInSpawnLevel?: boolean;
+  // Pixel radius of a chase "leash" centered on the entity's home anchor (set
+  // at spawn by GameScene — for wasps, the nearest hive's position, or the
+  // wasp's own spawn point when its level has no hive). The entity only chases
+  // while the player is within this distance of the home anchor; beyond it it
+  // breaks off — even mid-aggro — and drifts back to loiter around home. Makes
+  // hive-tethered swarmers defend a territory instead of trailing the player
+  // across the map. No effect on entities that never receive a home anchor
+  // (the leash check is gated on one being set). Forced convergence (boss
+  // round-fight) overrides the leash so arena scripting still pulls them in.
+  readonly homeLeashRange?: number;
   // If true, this enemy is treated as a boss for the auto-respawn system —
   // i.e. it does NOT come back after the player kills it. Non-boss enemies
-  // re-spawn at their original LDtk position after ENEMY_RESPAWN_DELAY_MS,
-  // once the spawn point is off-camera. Independent of stayInSpawnLevel,
+  // re-spawn at their original LDtk position once ENEMY_RESPAWN_MIN_TIME_MS has
+  // passed AND the player is ENEMY_RESPAWN_MIN_DISTANCE_PX away. Independent of stayInSpawnLevel,
   // encounterSoundId, etc. so a future "boss" that isn't arena-bound or
   // doesn't get a sting can still opt out of respawning.
   readonly isBoss?: boolean;
+  // Opt this boss into the 3-round fight system. When true: the floating
+  // combat health bar is suppressed in favor of a screen-wide segmented bar
+  // at the top of the UI (GameScene/BossHud), the "Round N" banner fires on
+  // engage and at each threshold, and the boss freezes + is invulnerable for
+  // BOSS_ROUND_BREAK_MS each time it loses 1/BOSS_ROUND_COUNT of its health.
+  // Independent of `isBoss` so a boss can exist without the round treatment
+  // (e.g. The_blood_king). The HP pool is split into BOSS_ROUND_COUNT equal
+  // sections — set `health` to a value divisible by it for clean thirds.
+  readonly roundFight?: boolean;
+  // Human-readable name shown on the boss round-fight bar (e.g. "Shadow of
+  // Storms"). Only consumed when roundFight is true. Falls back to a name
+  // derived from the entity identifier when omitted.
+  readonly displayName?: string;
   // Single-attack shorthand. For enemies with one combat behavior. Mutually
   // exclusive with attackPool in practice — if both are set, attackPool wins
   // and attack is ignored (validator warns at boot).
@@ -481,7 +517,14 @@ export interface AnimatedEntityDropConfig {
 }
 
 export interface AnimatedEntityDropKindConfig {
-  readonly kind: 'gun1' | 'gun2' | 'magic' | 'coin';
+  readonly kind:
+    | 'gun1'
+    | 'gun2'
+    | 'magic'
+    | 'coin'
+    | 'heal'
+    | 'key_storms'
+    | 'key_widow';
   readonly weight: number;
 }
 

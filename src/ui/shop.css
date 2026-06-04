@@ -73,8 +73,12 @@
 }
 
 .shop-title {
+  /* Apocalyptic display face (self-hosted @font-face in index.html), matching
+   * the landing title and options headers. Nosifer is single-weight, so we
+   * keep weight normal — fake-bold smears its dripping glyphs. */
+  font-family: 'Nosifer', 'Impact', cursive;
   font-size: 18px;
-  font-weight: 700;
+  font-weight: 400;
   letter-spacing: 2px;
   text-transform: uppercase;
   color: #ffffff;

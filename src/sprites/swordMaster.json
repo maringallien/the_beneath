@@ -158,7 +158,7 @@
       "key": "block",
       "file": "assets/characters/sword_master/regular_animations/block.png",
       "category": "state",
-      "loops": true,
+      "loops": false,
       "frames": {
         "sheetWidth": 540,
         "sheetHeight": 37,
@@ -169,6 +169,24 @@
         "anchorX": 42
       },
       "originalName": "block"
+    },
+    "block_idle": {
+      "type": "simple",
+      "key": "block_idle",
+      "file": "assets/characters/sword_master/regular_animations/block.png",
+      "category": "state",
+      "loops": true,
+      "frames": {
+        "sheetWidth": 540,
+        "sheetHeight": 37,
+        "frameWidth": 90,
+        "frameHeight": 37,
+        "frameCount": 6,
+        "anchorY": 34,
+        "anchorX": 42,
+        "poseFrame": 5
+      },
+      "originalName": "block_idle"
     },
     "dash": {
       "type": "simple",

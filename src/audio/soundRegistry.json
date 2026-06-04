@@ -77,6 +77,24 @@
       "loop": false,
       "defaultVolume": 0.7
     },
+    "button_hover": {
+      "path": "assets/audio/sfx/button_hover.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.52
+    },
+    "boom_low_hit": {
+      "path": "assets/audio/sfx/boom_low_hit.wav",
+      "category": "sfx",
+      "loop": false,
+      "defaultVolume": 0.91
+    },
+    "falling_whoosh": {
+      "path": "assets/audio/sfx/falling_whoosh.wav",
+      "category": "sfx",
+      "loop": true,
+      "defaultVolume": 0.55
+    },
     "player_cloth_movement": {
       "path": "assets/audio/player/player_cloth_movement.ogg",
       "category": "sfx",
@@ -808,6 +826,7 @@
     "movement": "player_cloth_movement",
     "footstepsGround": "player_footsteps_pebbles",
     "footstepsBridge": "player_footsteps_metal_stairs",
-    "wallSlide": "player_wall_slide"
+    "wallSlide": "player_wall_slide",
+    "falling": "falling_whoosh"
   }
 }

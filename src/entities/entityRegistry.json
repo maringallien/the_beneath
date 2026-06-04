@@ -8,10 +8,10 @@
     "gravity": true,
     "drops": [
       {
-        "chancePct": 100,
+        "chancePct": 15,
         "kinds": [
           {
-            "kind": "coin",
+            "kind": "heal",
             "weight": 1
           }
         ]
@@ -35,25 +35,7 @@
         ]
       },
       {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 50,
+        "chancePct": 25,
         "kinds": [
           {
             "kind": "gun1",
@@ -161,34 +143,7 @@
         ]
       },
       {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 50,
+        "chancePct": 25,
         "kinds": [
           {
             "kind": "gun1",
@@ -356,7 +311,7 @@
   "Caged_shocker_spawn": {
     "defaultAnimation": "idle",
     "physicsBody": {
-      "width": 48,
+      "width": 11,
       "height": 21
     },
     "gravity": true,
@@ -380,34 +335,7 @@
         ]
       },
       {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 50,
+        "chancePct": 25,
         "kinds": [
           {
             "kind": "gun1",
@@ -423,24 +351,44 @@
     "behavior": {
       "health": 25,
       "hurtAnimation": "take_hit",
-      "attack": {
-        "type": "melee",
-        "animation": "attack1",
-        "frame": 3,
-        "damage": 10,
-        "range": 100,
-        "cooldownMs": 1500,
-        "aggressive": true,
-        "hitbox": {
-          "offsetX": 30,
-          "offsetY": 0,
-          "width": 80,
-          "height": 25
+      "attackPool": [
+        {
+          "type": "melee",
+          "animation": "attack1",
+          "frame": 3,
+          "damage": 10,
+          "range": 60,
+          "cooldownMs": 1500,
+          "aggressive": true,
+          "hitbox": {
+            "offsetX": 11,
+            "offsetY": 13,
+            "width": 48,
+            "height": 16,
+            "frame": 1
+          },
+          "chaseRange": 120,
+          "moveSpeed": 60,
+          "walkAnimation": "walk",
+          "comboNextAnimation": "attack2",
+          "comboChancePct": 35
         },
-        "chaseRange": 120,
-        "moveSpeed": 60,
-        "walkAnimation": "walk"
-      }
+        {
+          "type": "melee",
+          "animation": "attack2",
+          "frame": 6,
+          "damage": 10,
+          "range": 60,
+          "cooldownMs": 2000,
+          "aggressive": true,
+          "hitbox": {
+            "offsetX": 17,
+            "offsetY": 13,
+            "width": 51,
+            "height": 15
+          }
+        }
+      ]
     },
     "animations": {
       "attack1": {
@@ -575,55 +523,10 @@
     "gravity": false,
     "drops": [
       {
-        "chancePct": 100,
+        "chancePct": 35,
         "kinds": [
           {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
+            "kind": "heal",
             "weight": 1
           }
         ]
@@ -684,10 +587,10 @@
     "gravity": false,
     "drops": [
       {
-        "chancePct": 100,
+        "chancePct": 50,
         "kinds": [
           {
-            "kind": "coin",
+            "kind": "heal",
             "weight": 1
           }
         ]
@@ -768,7 +671,7 @@
         "chancePct": 100,
         "kinds": [
           {
-            "kind": "coin",
+            "kind": "magic",
             "weight": 1
           }
         ]
@@ -777,88 +680,7 @@
         "chancePct": 100,
         "kinds": [
           {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
+            "kind": "magic",
             "weight": 1
           }
         ]
@@ -973,34 +795,7 @@
         ]
       },
       {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 50,
+        "chancePct": 25,
         "kinds": [
           {
             "kind": "gun1",
@@ -1128,34 +923,7 @@
         ]
       },
       {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 50,
+        "chancePct": 25,
         "kinds": [
           {
             "kind": "gun1",
@@ -1294,34 +1062,7 @@
         ]
       },
       {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 50,
+        "chancePct": 25,
         "kinds": [
           {
             "kind": "gun1",
@@ -1691,34 +1432,7 @@
         ]
       },
       {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 50,
+        "chancePct": 25,
         "kinds": [
           {
             "kind": "gun1",
@@ -1845,10 +1559,10 @@
     "gravity": true,
     "drops": [
       {
-        "chancePct": 100,
+        "chancePct": 12,
         "kinds": [
           {
-            "kind": "coin",
+            "kind": "heal",
             "weight": 1
           }
         ]
@@ -1863,16 +1577,7 @@
         ]
       },
       {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 50,
+        "chancePct": 25,
         "kinds": [
           {
             "kind": "gun1",
@@ -1903,7 +1608,7 @@
           "height": 20
         },
         "chaseRange": 80,
-        "moveSpeed": 60,
+        "moveSpeed": 30,
         "walkAnimation": "walk"
       }
     },
@@ -1986,34 +1691,7 @@
         ]
       },
       {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 50,
+        "chancePct": 25,
         "kinds": [
           {
             "kind": "gun1",
@@ -2162,34 +1840,7 @@
         ]
       },
       {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 50,
+        "chancePct": 25,
         "kinds": [
           {
             "kind": "gun1",
@@ -2398,268 +2049,7 @@
         "chancePct": 100,
         "kinds": [
           {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
+            "kind": "key_storms",
             "weight": 1
           }
         ]
@@ -2861,13 +2251,42 @@
             "weight": 1
           }
         ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "magic",
+            "weight": 1
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "magic",
+            "weight": 1
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "magic",
+            "weight": 1
+          }
+        ]
       }
     ],
     "behavior": {
-      "health": 50,
+      "health": 450,
       "hurtAnimation": "take_hit",
       "encounterSoundId": "boss_encounter",
       "isBoss": true,
+      "roundFight": true,
+      "displayName": "Shadow of Storms",
       "attackPool": [
         {
           "type": "melee",
@@ -3160,34 +2579,7 @@
         ]
       },
       {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 50,
+        "chancePct": 25,
         "kinds": [
           {
             "kind": "gun1",
@@ -3541,276 +2933,6 @@
         "chancePct": 100,
         "kinds": [
           {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
             "kind": "gun1",
             "weight": 1
           }
@@ -3821,6 +2943,33 @@
         "kinds": [
           {
             "kind": "gun2",
+            "weight": 1
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "magic",
+            "weight": 1
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "magic",
+            "weight": 1
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "magic",
             "weight": 1
           }
         ]
@@ -4148,276 +3297,6 @@
         "chancePct": 100,
         "kinds": [
           {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
             "kind": "gun1",
             "weight": 1
           }
@@ -4431,16 +3310,45 @@
             "weight": 1
           }
         ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "magic",
+            "weight": 1
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "magic",
+            "weight": 1
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "magic",
+            "weight": 1
+          }
+        ]
       }
     ],
     "behavior": {
-      "health": 200,
+      "health": 30,
       "hurtAnimation": "take_hit",
       "encounterSoundId": "boss_encounter",
       "engageDelayMs": 3000,
       "horizontalMovementOnly": true,
       "stayInSpawnLevel": true,
       "isBoss": true,
+      "roundFight": true,
+      "displayName": "The Heart Hoarder",
       "healthBarOffsetY": 10,
       "dodgeOnProjectile": {
         "triggerRangePx": 600,
@@ -4852,268 +3760,7 @@
         "chancePct": 100,
         "kinds": [
           {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
-            "weight": 1
-          }
-        ]
-      },
-      {
-        "chancePct": 100,
-        "kinds": [
-          {
-            "kind": "coin",
+            "kind": "key_widow",
             "weight": 1
           }
         ]
@@ -5315,12 +3962,41 @@
             "weight": 1
           }
         ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "magic",
+            "weight": 1
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "magic",
+            "weight": 1
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
+            "kind": "magic",
+            "weight": 1
+          }
+        ]
       }
     ],
     "behavior": {
-      "health": 128,
+      "health": 600,
       "encounterSoundId": "widow_whistle_1",
       "isBoss": true,
+      "roundFight": true,
+      "displayName": "The Tarnished Widow",
       "attackPool": [
         {
           "type": "melee",
@@ -5331,10 +4007,10 @@
           "cooldownMs": 2200,
           "aggressive": true,
           "hitbox": {
-            "offsetX": 18,
-            "offsetY": 18,
-            "width": 30,
-            "height": 38
+            "offsetX": 30,
+            "offsetY": 36,
+            "width": 28,
+            "height": 20
           },
           "chaseRange": 260,
           "moveSpeed": 110,
@@ -5368,10 +4044,10 @@
           "aggressive": true,
           "targetOffsetY": 0,
           "hitbox": {
-            "offsetX": -30,
+            "offsetX": -33,
             "offsetY": 35,
-            "width": 60,
-            "height": 95
+            "width": 49,
+            "height": 24
           }
         }
       ]
@@ -5459,12 +4135,13 @@
     "behavior": {
       "health": 5,
       "hurtAnimation": "take_hit",
+      "homeLeashRange": 180,
       "attack": {
         "type": "contact",
         "damage": 4,
         "cooldownMs": 600,
         "aggressive": true,
-        "chaseRange": 50,
+        "chaseRange": 40,
         "moveSpeed": 80,
         "walkAnimation": "walk"
       }

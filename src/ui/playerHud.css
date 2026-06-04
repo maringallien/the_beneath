@@ -1,0 +1,134 @@
+/* In-game player HUD — a DOM overlay rendered over the Phaser canvas inside the
+ * same #game parent as the shop/options overlays, sharing their visual idiom:
+ * a dark flat panel, a thin frame, and four small pixel-light corner accents
+ * (the pause-menu / old-canvas-HUD decoration, recreated in CSS). Two clusters
+ * pinned to the top corners — HP / STA (left) and the G1 / G2 / orb / coin /
+ * heal counters (right).
+ *
+ * The root is pointer-events:none so it never intercepts gameplay mouse input
+ * (L-click to fire, etc.); GameScene toggles its visibility on scene pause so
+ * the HUD is covered by the pause/shop dim instead of floating above it. It
+ * sits well below the modal shop/options overlays (z-index 10000) in the
+ * stacking order. */
+
+.player-hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  user-select: none;
+  z-index: 50;
+  font-family: 'Arial', 'Helvetica', sans-serif;
+  color: #e6e6e6;
+}
+
+/* Flat dark panel matching the shop window's body, framed by a thin stroke
+ * plus four corner accents. The accents are four small squares painted via
+ * positioned background gradients (no extra DOM) just inside each corner. */
+.hud-panel {
+  position: absolute;
+  top: 16px;
+  padding: 9px 12px;
+  background-color: rgba(18, 18, 18, 0.55);
+  border: 1px solid #4a4a4a;
+  background-image:
+    linear-gradient(#cfcfcf, #cfcfcf),
+    linear-gradient(#cfcfcf, #cfcfcf),
+    linear-gradient(#cfcfcf, #cfcfcf),
+    linear-gradient(#cfcfcf, #cfcfcf);
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  background-position:
+    3px 3px,
+    calc(100% - 3px) 3px,
+    3px calc(100% - 3px),
+    calc(100% - 3px) calc(100% - 3px);
+}
+
+.hud-panel--left {
+  left: 16px;
+}
+
+.hud-panel--right {
+  right: 16px;
+}
+
+/* Shared row grid. Left: [label | content]; right: [label | icon | count].
+ * The auto columns keep every row's content aligned across the cluster with no
+ * hard-coded widths; justify-items:start stops single-cell content (the HP
+ * canvas) from being stretched to fill its column. */
+.hud-grid {
+  display: grid;
+  align-items: center;
+  justify-items: start;
+  row-gap: 8px;
+  column-gap: 10px;
+}
+
+.hud-grid--left {
+  grid-template-columns: auto auto;
+}
+
+.hud-grid--right {
+  grid-template-columns: auto auto auto;
+}
+
+.hud-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #b8b8b8;
+}
+
+/* STA/MAG labels are a touch smaller so they read closer to their short bars
+ * without towering over them. */
+.hud-label--small {
+  font-size: 9px;
+}
+
+.hud-count {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+}
+
+/* HP slider art (33×16 source) scaled up ~2.25× with crisp pixel edges
+ * (50% larger than the previous ~1.5× to read more clearly at a glance). */
+.hud-bar--hp {
+  width: 75px;
+  height: 36px;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.hud-segments {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* STA segment art (7×3 source) at 4.5× (50% larger than the previous 3× so it
+ * reads more clearly). Drained segments fade rather than vanish (see
+ * SEGMENT_EMPTY_OPACITY) so the meter's footprint stays put. */
+.hud-seg {
+  width: 31.5px;
+  height: 13.5px;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  transition: opacity 120ms linear;
+}
+
+/* Right-column resource icons. Pixel-art ammo icons stay nearest-neighbour;
+ * the procedural (LINEAR-filtered) coin and heart sample smoothly via the
+ * --smooth modifier, matching how they read in-game and in the shop. */
+.hud-icon {
+  width: 20px;
+  height: 20px;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  transition: opacity 120ms linear;
+}
+
+.hud-icon--smooth {
+  image-rendering: auto;
+}

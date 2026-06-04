@@ -5,9 +5,22 @@ import {
   COIN_HIGHLIGHT_COLOR,
   COIN_TEXTURE_KEY,
   COIN_TEXTURE_SIZE_PX,
+  DISPLAY_FONT_NAME,
+  FONT_BOOT_TIMEOUT_MS,
   FOREGROUND_GLOW_ENABLED,
+  HEART_FILL_COLOR,
+  HEART_HIGHLIGHT_COLOR,
+  HEART_TEXTURE_KEY,
+  HEART_TEXTURE_SIZE_PX,
+  KEY_FILL_COLOR,
+  KEY_HIGHLIGHT_COLOR,
+  KEY_TEXTURE_KEY,
+  KEY_TEXTURE_SIZE_PX,
+  LANDING_CREDITS_ASSET_PATH,
+  LANDING_CREDITS_TEXTURE_KEY,
   LANDING_START_ASSET_PATH,
   LANDING_START_TEXTURE_KEY,
+  LANDING_TITLE_FONT_SIZE_PX,
   MAGIC_ORB_FILL_COLOR,
   MAGIC_ORB_TEXTURE_KEY,
   MAGIC_ORB_TEXTURE_SIZE_PX,
@@ -16,6 +29,10 @@ import {
   MIST_PARTICLE_TEXTURE_SIZE_PX,
   PAUSE_CONTINUE_ASSET_PATH,
   PAUSE_CONTINUE_TEXTURE_KEY,
+  PAUSE_NEW_GAME_ASSET_PATH,
+  PAUSE_NEW_GAME_TEXTURE_KEY,
+  PAUSE_OPTIONS_ASSET_PATH,
+  PAUSE_OPTIONS_TEXTURE_KEY,
   PAUSE_QUIT_ASSET_PATH,
   PAUSE_QUIT_TEXTURE_KEY,
   SCENE_KEYS,
@@ -98,14 +115,18 @@ export class PreloadScene extends Phaser.Scene {
       },
     );
     // Pause-menu word banners. Each is a small black-background PNG with the
-    // word "CONTINUE" / "QUIT" rendered in white. Loaded as plain images and
-    // displayed side-by-side by PauseScene.
+    // word ("CONTINUE", "NEW GAME", "OPTIONS", "QUIT") rendered in white.
+    // Loaded as plain images and displayed in a row by PauseScene.
     this.load.image(PAUSE_CONTINUE_TEXTURE_KEY, PAUSE_CONTINUE_ASSET_PATH);
+    this.load.image(PAUSE_NEW_GAME_TEXTURE_KEY, PAUSE_NEW_GAME_ASSET_PATH);
+    this.load.image(PAUSE_OPTIONS_TEXTURE_KEY, PAUSE_OPTIONS_ASSET_PATH);
     this.load.image(PAUSE_QUIT_TEXTURE_KEY, PAUSE_QUIT_ASSET_PATH);
-    // Landing-screen START banner. Same pattern as the pause-menu words —
-    // plain PNG, LINEAR-filtered in create() so the scaled-up letters stay
-    // smooth at any viewport size.
+    // Landing-screen START + CREDITS banners. Same pattern as the pause-menu
+    // words — plain PNG, LINEAR-filtered in create() so the scaled-up letters
+    // stay smooth at any viewport size. (The home-screen OPTIONS button reuses
+    // the pause menu's PAUSE_OPTIONS texture, loaded just above.)
     this.load.image(LANDING_START_TEXTURE_KEY, LANDING_START_ASSET_PATH);
+    this.load.image(LANDING_CREDITS_TEXTURE_KEY, LANDING_CREDITS_ASSET_PATH);
   }
 
   create(): void {
@@ -132,25 +153,71 @@ export class PreloadScene extends Phaser.Scene {
     this.generateMagicOrbTexture();
     this.generateMistParticleTexture();
     this.generateCoinTexture();
+    this.generateHeartTexture();
+    this.generateKeyTexture();
     // Force LINEAR sampling on the pause word banners so the scaled-up
     // letters render smoothly. The global pixelArt:true config would
     // otherwise nearest-sample them into jagged stair-stepped edges. Same
     // override pattern used for magic_orb and InteractionIcon's letter.
-    this.textures
-      .get(PAUSE_CONTINUE_TEXTURE_KEY)
-      .setFilter(Phaser.Textures.FilterMode.LINEAR);
-    this.textures
-      .get(PAUSE_QUIT_TEXTURE_KEY)
-      .setFilter(Phaser.Textures.FilterMode.LINEAR);
-    this.textures
-      .get(LANDING_START_TEXTURE_KEY)
-      .setFilter(Phaser.Textures.FilterMode.LINEAR);
+    for (const key of [
+      PAUSE_CONTINUE_TEXTURE_KEY,
+      PAUSE_NEW_GAME_TEXTURE_KEY,
+      PAUSE_OPTIONS_TEXTURE_KEY,
+      PAUSE_QUIT_TEXTURE_KEY,
+    ]) {
+      this.textures.get(key).setFilter(Phaser.Textures.FilterMode.LINEAR);
+    }
+    for (const key of [LANDING_START_TEXTURE_KEY, LANDING_CREDITS_TEXTURE_KEY]) {
+      this.textures.get(key).setFilter(Phaser.Textures.FilterMode.LINEAR);
+    }
     this.applyTilesetBrightnessLifts();
     this.bakeForegroundGlowAtlases();
-    // startLanding:true triggers the landing-page overlay on first boot.
-    // PauseScene's Quit also routes back through this scene, so the
-    // landing re-shows on every fresh start of the run.
-    this.scene.start(SCENE_KEYS.GAME, { startLanding: true });
+    // Gate the boot on the self-hosted display font being ready. Phaser
+    // rasterizes canvas Text to a GPU texture synchronously at creation, so if
+    // Nosifer is still downloading when LandingScene paints "THE BENEATH" the
+    // title bakes in the fallback face — and the WebGL texture cache means it
+    // often never updates even after a later re-render. Waiting here so the
+    // title's FIRST paint already has the real glyphs is the reliable fix.
+    this.bootGameWhenFontReady();
+  }
+
+  // Starts the GAME scene (landing overlay) once DISPLAY_FONT_NAME has loaded,
+  // or after FONT_BOOT_TIMEOUT_MS if the Font Loading API is unavailable or the
+  // download stalls/fails — a missing font must never block startup; the title
+  // just falls back to its fallback stack in that case. The `booted` guard makes
+  // the timeout and the load-promise mutually exclusive so GAME starts once.
+  private bootGameWhenFontReady(): void {
+    const boot = (): void => {
+      // startLanding:true triggers the landing-page overlay on first boot.
+      // PauseScene's Quit also routes back through this scene, so the
+      // landing re-shows on every fresh start of the run.
+      this.scene.start(SCENE_KEYS.GAME, { startLanding: true });
+    };
+
+    const fonts = document.fonts;
+    if (!fonts) {
+      boot();
+      return;
+    }
+
+    let booted = false;
+    const bootOnce = (): void => {
+      if (booted) return;
+      booted = true;
+      boot();
+    };
+
+    const timeout = this.time.delayedCall(FONT_BOOT_TIMEOUT_MS, bootOnce);
+    fonts
+      .load(`${LANDING_TITLE_FONT_SIZE_PX}px "${DISPLAY_FONT_NAME}"`)
+      .then(() => {
+        timeout.remove(false);
+        bootOnce();
+      })
+      .catch(() => {
+        timeout.remove(false);
+        bootOnce();
+      });
   }
 
   // Lifts the RGB channels of any tileset listed in TILESET_BRIGHTNESS_FACTORS
@@ -223,6 +290,93 @@ export class PreloadScene extends Phaser.Scene {
     g.destroy();
     this.textures
       .get(COIN_TEXTURE_KEY)
+      .setFilter(Phaser.Textures.FilterMode.LINEAR);
+  }
+
+  // Procedural placeholder for the healing item: a small red heart built from
+  // two overlapping lobe circles plus a downward triangle for the tapered base,
+  // with an off-center pink highlight on the left lobe (same faux-3D idiom as
+  // the coin). Lobes are inset ~1.3px from the texture edge so the LINEAR AA
+  // ring fades cleanly inside bounds. Same LINEAR filter as the orb/coin so the
+  // curves stay smooth at CAMERA_ZOOM and in the DOM shop. Swap for a real PNG
+  // by loading at HEART_TEXTURE_KEY in preload() and removing this call.
+  private generateHeartTexture(): void {
+    const size = HEART_TEXTURE_SIZE_PX;
+    const g = this.make.graphics({ x: 0, y: 0 }, false);
+    g.fillStyle(HEART_FILL_COLOR, 1);
+    const lobeR = size * 0.24;
+    const lobeY = size * 0.34;
+    const leftLobeX = size * 0.32;
+    const rightLobeX = size * 0.68;
+    g.fillCircle(leftLobeX, lobeY, lobeR);
+    g.fillCircle(rightLobeX, lobeY, lobeR);
+    // Tapered base: from the outer edges of the lobe row down to the bottom tip.
+    g.fillTriangle(
+      size * 0.08,
+      lobeY,
+      size * 0.92,
+      lobeY,
+      size * 0.5,
+      size * 0.9,
+    );
+    // Highlight: a small disc on the upper-left lobe so the heart reads as
+    // catching light from above-left, matching the coin's highlight direction.
+    g.fillStyle(HEART_HIGHLIGHT_COLOR, 1);
+    g.fillCircle(
+      leftLobeX - lobeR * 0.2,
+      lobeY - lobeR * 0.3,
+      Math.max(1, lobeR * 0.4),
+    );
+    g.generateTexture(HEART_TEXTURE_KEY, size, size);
+    g.destroy();
+    this.textures
+      .get(HEART_TEXTURE_KEY)
+      .setFilter(Phaser.Textures.FilterMode.LINEAR);
+  }
+
+  // Procedural placeholder for the boss-key pickup: a small gold key built from
+  // a ring bow (outer disc with a punched-out center), a vertical shaft, and two
+  // teeth jutting off the lower shaft — plus an off-center highlight on the bow
+  // (same faux-3D idiom as the coin/heart). Shared by both boss keys; they're
+  // visually identical and matched to doors by pickup kind, not appearance.
+  // LINEAR-filtered like the orb/coin/heart so the bow's curve stays smooth at
+  // CAMERA_ZOOM. Swap for a real PNG by loading at KEY_TEXTURE_KEY in preload()
+  // and removing this call.
+  private generateKeyTexture(): void {
+    const size = KEY_TEXTURE_SIZE_PX;
+    const g = this.make.graphics({ x: 0, y: 0 }, false);
+    const cx = size * 0.5;
+    g.fillStyle(KEY_FILL_COLOR, 1);
+    // Bow (the round grip) at the top: outer disc with a punched-out hole so it
+    // reads as a ring rather than a lollipop. The hole is "punched" by redrawing
+    // a transparent disc — graphics fills are opaque, so instead draw the ring
+    // as the outer disc then overlay a smaller disc in the background color is
+    // not possible on a transparent texture; use an annulus via two arcs.
+    const bowCy = size * 0.3;
+    const bowOuterR = size * 0.22;
+    g.fillCircle(cx, bowCy, bowOuterR);
+    // Shaft: a thin vertical bar from just under the bow down to near the base.
+    const shaftW = Math.max(1, size * 0.1);
+    const shaftTop = bowCy + bowOuterR * 0.6;
+    const shaftBottom = size * 0.92;
+    g.fillRect(cx - shaftW / 2, shaftTop, shaftW, shaftBottom - shaftTop);
+    // Teeth: two short horizontal nubs off the right side of the lower shaft.
+    const toothW = size * 0.2;
+    const toothH = Math.max(1, size * 0.09);
+    g.fillRect(cx + shaftW / 2, shaftBottom - toothH, toothW, toothH);
+    g.fillRect(cx + shaftW / 2, shaftBottom - toothH * 3, toothW * 0.7, toothH);
+    // Punch the bow hole by stamping a background-transparent disc. generateTexture
+    // captures alpha, and erasing via a destination-out blend isn't exposed on
+    // Graphics, so approximate the ring look with a smaller highlight-colored
+    // disc instead — reads as a lit bevel on the bow at this size.
+    g.fillStyle(KEY_HIGHLIGHT_COLOR, 1);
+    g.fillCircle(cx, bowCy, bowOuterR * 0.5);
+    g.fillStyle(KEY_FILL_COLOR, 1);
+    g.fillCircle(cx, bowCy, bowOuterR * 0.28);
+    g.generateTexture(KEY_TEXTURE_KEY, size, size);
+    g.destroy();
+    this.textures
+      .get(KEY_TEXTURE_KEY)
       .setFilter(Phaser.Textures.FilterMode.LINEAR);
   }
 

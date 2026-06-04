@@ -33,6 +33,12 @@ export {
   getTriggersFor,
   listAllTriggers,
 } from './animationSoundTriggersLoader';
+export {
+  isMusicEnabled,
+  setMusicEnabled,
+  toggleMusicEnabled,
+  onMusicEnabledChange,
+} from './musicSettings';
 export type {
   SoundCategory,
   SoundDefinition,

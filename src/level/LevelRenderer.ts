@@ -6,6 +6,7 @@ import {
   FOREGROUND_GLOW_FLICKER_MAX_ALPHA,
   FOREGROUND_GLOW_FLICKER_MIN_ALPHA,
   FOREGROUND_GLOW_LAYER_PREFIX,
+  GENERAL_ENEMY_SPAWN_IDENTIFIER,
   LAYER_BRIGHTNESS_FACTORS,
   SIGN_FLICKER_BURST_SIZE_MAX,
   SIGN_FLICKER_BURST_SIZE_MIN,
@@ -28,6 +29,7 @@ import {
   type RenderableEntityTile,
 } from '../ldtk/parseLdtk';
 import type {
+  LdtkAutoLayerTile,
   LdtkLayerType,
   LdtkLevel,
   LdtkProject,
@@ -44,24 +46,44 @@ const FLIP_VERTICAL = 2;
 // non-overlapping masks.
 const MASK_OVERLAP_PX = 1;
 
+// A rendered layer is either a baked RenderTexture (static tile layers — one
+// draw call instead of one Image per tile) or a Container of live Images
+// (animated layers: foreground glow, neon signs, decoration entities). Both
+// expose the GameObject members the consumers touch — visible/setVisible
+// (culling), depth (dim-overlay sandwiching), setMask/clearMask, destroy.
+type RenderedDrawable =
+  | Phaser.GameObjects.Container
+  | Phaser.GameObjects.RenderTexture;
+
 export interface RenderedLayer {
   identifier: string;
   type: LdtkLayerType;
-  // One Container per LDtk layer. Children are added in autoLayerTiles order
-  // so stacked tiles paint bottom-to-top, matching LDtk's editor behavior.
-  container: Phaser.GameObjects.Container;
+  container: RenderedDrawable;
+}
+
+// Looping tweens that must keep running for the level's lifetime (foreground
+// glow flicker). Collected per level so cullOffscreenLevels can pause them
+// while the level is off-camera — otherwise every level's glow tweens tick
+// every frame regardless of visibility. Sign flicker/pulsate tweens are
+// intentionally NOT collected: there are only a handful of signs in the whole
+// world, so their per-frame cost is noise and their self-rescheduling chains
+// are awkward to pause cleanly.
+export interface LevelAnimations {
+  tweens: Phaser.Tweens.Tween[];
 }
 
 export interface RenderedLevel {
   widthPx: number;
   heightPx: number;
   layers: ReadonlyArray<RenderedLayer>;
-  // Hidden Graphics that backs a per-level GeometryMask, applied to every
-  // layer container so visuals never render outside the level's rect. With
-  // the camera now allowed to scroll into adjacent levels, any LDtk-authored
-  // spillage (parallax tiles, decoration entities placed past the level
-  // bounds) would otherwise become visible in inter-level gaps.
-  maskGraphics: Phaser.GameObjects.Graphics;
+  // Hidden Graphics that backs a per-level GeometryMask, applied to the
+  // Image-based layers (glow, decoration entities) so any LDtk-authored
+  // spillage past the level rect doesn't show in inter-level gaps. Baked
+  // tile layers don't use it — their RenderTexture is level-sized, so it
+  // clips spillage intrinsically. Null when a level has no Image layers.
+  maskGraphics: Phaser.GameObjects.Graphics | null;
+  // See LevelAnimations.
+  animations: LevelAnimations;
 }
 
 // Renders each LDtk tile as an individual Image at its exact px position.
@@ -79,6 +101,10 @@ export function renderLevel(
   const tilesetDefs = getTilesetDefs(project);
   const renderable = getRenderableLayers(level);
   const out: RenderedLayer[] = [];
+  // Image-based containers (glow, decoration entities) that need the per-level
+  // GeometryMask. Baked tile RenderTextures are omitted — they self-clip.
+  const maskTargets: Phaser.GameObjects.Container[] = [];
+  const animations: LevelAnimations = { tweens: [] };
 
   for (const src of renderable) {
     const tilesetDef = tilesetDefs.get(src.tilesetUid);
@@ -94,22 +120,18 @@ export function renderLevel(
       );
     }
 
-    // Place each level's container at its world coordinates so multiple
-    // levels rendered in the same scene line up like LDtk's world view.
-    const container = scene.add.container(level.worldX, level.worldY);
-    // Depth comes from the layer's position in level.layerInstances so
-    // layers stack at the LDtk-authored position.
-    container.setDepth(src.depth);
-
-    for (const t of src.tiles) {
-      const img = scene.add.image(t.px[0], t.px[1], textureKey, t.t);
-      img.setOrigin(0, 0);
-      if ((t.f & FLIP_HORIZONTAL) !== 0) img.setFlipX(true);
-      if ((t.f & FLIP_VERTICAL) !== 0) img.setFlipY(true);
-      container.add(img);
-    }
-
-    out.push({ identifier: src.identifier, type: src.type, container });
+    // Bake the whole layer into ONE RenderTexture instead of one Image per
+    // tile. A single level-layer is hundreds of tiles; across the handful of
+    // levels visible while the camera scrolls that put tens of thousands of
+    // Image GameObjects into the per-frame display-list walk — the dominant
+    // frame-time cost (felt as choppiness once the camera moves). Baking
+    // collapses each layer to a single draw call. Depth comes from the layer's
+    // position in level.layerInstances so layers stack at the LDtk-authored
+    // position; ties resolve by display-list insertion order (base, then the
+    // brightness overlay, then glow — all created below in that order).
+    const baseRt = bakeTileLayer(scene, level, src.tiles, textureKey);
+    baseRt.setDepth(src.depth);
+    out.push({ identifier: src.identifier, type: src.type, container: baseRt });
 
     // Per-layer brightness lift: for any layer whose identifier opts in via
     // LAYER_BRIGHTNESS_FACTORS, draw an ADD-blended sibling of each tile so
@@ -120,22 +142,21 @@ export function renderLevel(
     // differentiate them, since both pull from the same source pixels).
     const brightnessFactor = LAYER_BRIGHTNESS_FACTORS[src.identifier];
     if (brightnessFactor !== undefined && brightnessFactor > 1.0) {
+      // Bake the same tiles into a second RenderTexture composited ADD-blended
+      // at (factor - 1) alpha. For the normal one-tile-per-cell case this is
+      // identical to the old per-tile ADD overlay: framebuffer += alpha ×
+      // tileColor. Stacked overlay cells (Stamp rules emitting multiple tiles
+      // into one cell) lose their double-add, an imperceptible difference on a
+      // subtle brightness lift.
       const overlayAlpha = brightnessFactor - 1.0;
-      const overlayContainer = scene.add.container(level.worldX, level.worldY);
-      overlayContainer.setDepth(src.depth);
-      for (const t of src.tiles) {
-        const img = scene.add.image(t.px[0], t.px[1], textureKey, t.t);
-        img.setOrigin(0, 0);
-        img.setBlendMode(Phaser.BlendModes.ADD);
-        img.setAlpha(overlayAlpha);
-        if ((t.f & FLIP_HORIZONTAL) !== 0) img.setFlipX(true);
-        if ((t.f & FLIP_VERTICAL) !== 0) img.setFlipY(true);
-        overlayContainer.add(img);
-      }
+      const overlayRt = bakeTileLayer(scene, level, src.tiles, textureKey);
+      overlayRt.setDepth(src.depth);
+      overlayRt.setBlendMode(Phaser.BlendModes.ADD);
+      overlayRt.setAlpha(overlayAlpha);
       out.push({
         identifier: src.identifier,
         type: src.type,
-        container: overlayContainer,
+        container: overlayRt,
       });
     }
 
@@ -176,9 +197,11 @@ export function renderLevel(
           // foreground layer flicker in lockstep — losing the candlelight
           // illusion. The per-image cost is bounded by the bright-frame
           // skip above; in practice only a small fraction of foreground
-          // tiles carry bright pixels.
-          startGlowFlicker(scene, img);
+          // tiles carry bright pixels. The tween is collected so culling can
+          // pause it while this level is off-camera.
+          startGlowFlicker(scene, img, animations);
         }
+        maskTargets.push(glowContainer);
         out.push({
           identifier: src.identifier,
           type: src.type,
@@ -193,9 +216,13 @@ export function renderLevel(
   // per-layer + depth-by-layer-index scheme as the tile layers above, so the
   // user's LDtk-authored stacking between tile layers and decoration layers
   // is preserved.
+  // Skip both the dynamically-spawned entities (rendered as live sprites by
+  // gameplay code) and the General_enemy_spawn markers (editor-only spawn
+  // sites with no in-game visual — and whose preview tile may reference a
+  // tileset not present in this project, which would otherwise throw below).
   const entityLayers = getRenderableEntityLayers(
     level,
-    DYNAMIC_ENTITY_IDENTIFIERS,
+    new Set([...DYNAMIC_ENTITY_IDENTIFIERS, GENERAL_ENEMY_SPAWN_IDENTIFIER]),
   );
   for (const src of entityLayers) {
     const container = scene.add.container(level.worldX, level.worldY);
@@ -258,31 +285,40 @@ export function renderLevel(
       const img = createEntityTileImage(scene, textureKey, dec);
       container.add(img);
     }
+    maskTargets.push(container);
     out.push({ identifier: src.identifier, type: 'Entities', container });
   }
 
-  // Build a rectangular world-space mask matching the level's bounds and
-  // apply it to every layer container. scene.make.graphics() (vs add) keeps
-  // the mask source off the display list — its geometry is consumed by the
-  // GeometryMask without rendering on its own. Color choice (white) is
-  // arbitrary; geometry masks ignore color and use only fill coverage.
+  // Build a rectangular world-space mask matching the level's bounds and apply
+  // it to the Image-based layers (glow, decoration entities). scene.make.graphics()
+  // (vs add) keeps the mask source off the display list — its geometry is
+  // consumed by the GeometryMask without rendering on its own. Color choice
+  // (white) is arbitrary; geometry masks ignore color and use only fill coverage.
+  //
+  // Baked tile layers are NOT masked: their RenderTexture is exactly the level
+  // rect (inflated by MASK_OVERLAP_PX, with tiles offset to match), so it clips
+  // spillage intrinsically and overlaps neighbors by 1px — the same anti-seam
+  // behavior the mask gave the old per-tile Images, but for free.
   //
   // The mask rect is inflated by MASK_OVERLAP_PX on every side so adjacent
   // levels' masks overlap at every shared edge. Without this, seam pixels
   // can land in a sub-pixel zone where neither mask wins, letting the scene
   // clear color show through as a 1-pixel line. The cost is a 1-px ring of
   // tolerated spillage outside each level — invisible in practice.
-  const maskGraphics = scene.make.graphics();
-  maskGraphics.fillStyle(0xffffff);
-  maskGraphics.fillRect(
-    level.worldX - MASK_OVERLAP_PX,
-    level.worldY - MASK_OVERLAP_PX,
-    level.pxWid + MASK_OVERLAP_PX * 2,
-    level.pxHei + MASK_OVERLAP_PX * 2,
-  );
-  const mask = maskGraphics.createGeometryMask();
-  for (const rendered of out) {
-    rendered.container.setMask(mask);
+  let maskGraphics: Phaser.GameObjects.Graphics | null = null;
+  if (maskTargets.length > 0) {
+    maskGraphics = scene.make.graphics();
+    maskGraphics.fillStyle(0xffffff);
+    maskGraphics.fillRect(
+      level.worldX - MASK_OVERLAP_PX,
+      level.worldY - MASK_OVERLAP_PX,
+      level.pxWid + MASK_OVERLAP_PX * 2,
+      level.pxHei + MASK_OVERLAP_PX * 2,
+    );
+    const mask = maskGraphics.createGeometryMask();
+    for (const container of maskTargets) {
+      container.setMask(mask);
+    }
   }
 
   return {
@@ -290,7 +326,58 @@ export function renderLevel(
     heightPx: level.pxHei,
     layers: out,
     maskGraphics,
+    animations,
   };
+}
+
+// Bakes every tile of a layer into a single RenderTexture, replacing one Image
+// per tile with one draw call per layer. The RT is sized to the level inflated
+// by MASK_OVERLAP_PX on every side, with tiles offset to match, so it both
+// clips spillage to (roughly) the level rect — replacing the per-layer
+// GeometryMask the old per-tile path relied on — and overlaps adjacent levels'
+// baked layers by 1px, killing the clear-color seam at shared edges.
+//
+// A single reusable stamp Image (never added to the display list) is mutated
+// per tile and batch-drawn: batchGameObject renders it through its full render
+// path, so frame, H/V flip, and origin are all honored. Stacked tiles in one
+// cell paint bottom-to-top in autoLayerTiles order, matching LDtk's editor.
+function bakeTileLayer(
+  scene: Phaser.Scene,
+  level: LdtkLevel,
+  tiles: ReadonlyArray<LdtkAutoLayerTile>,
+  textureKey: string,
+): Phaser.GameObjects.RenderTexture {
+  const rt = scene.add.renderTexture(
+    level.worldX - MASK_OVERLAP_PX,
+    level.worldY - MASK_OVERLAP_PX,
+    level.pxWid + MASK_OVERLAP_PX * 2,
+    level.pxHei + MASK_OVERLAP_PX * 2,
+  );
+  rt.setOrigin(0, 0);
+  // A DynamicTexture's render target is created LINEAR-filtered regardless of
+  // the game's pixelArt config, so baked tiles would sample blurry at
+  // CAMERA_ZOOM. Force NEAREST to match the crisp look of the source tileset
+  // (which the old per-tile Images inherited from the loaded texture).
+  rt.texture.setFilter(Phaser.Textures.FilterMode.NEAREST);
+
+  const stamp = scene.make.image({ key: textureKey, add: false });
+  stamp.setOrigin(0, 0);
+
+  rt.beginDraw();
+  for (const t of tiles) {
+    // updateOrigin=false: setFrame would otherwise re-center the origin to the
+    // frame pivot (0.5), undoing the top-left origin the tile placement needs.
+    stamp.setFrame(t.t, true, false);
+    stamp.setFlip(
+      (t.f & FLIP_HORIZONTAL) !== 0,
+      (t.f & FLIP_VERTICAL) !== 0,
+    );
+    rt.batchDraw(stamp, t.px[0] + MASK_OVERLAP_PX, t.px[1] + MASK_OVERLAP_PX);
+  }
+  rt.endDraw();
+
+  stamp.destroy();
+  return rt;
 }
 
 // LDtk entity tiles use arbitrary src rects (tile.w/h can be larger than the
@@ -349,6 +436,7 @@ export function findRenderedLayer(
 function startGlowFlicker(
   scene: Phaser.Scene,
   target: Phaser.GameObjects.Image,
+  anims: LevelAnimations,
 ): void {
   const duration = Phaser.Math.Between(
     FOREGROUND_GLOW_FLICKER_DURATION_MIN_MS,
@@ -379,6 +467,9 @@ function startGlowFlicker(
   // desync would come from different durations drifting apart over time.
   // Seeking shoves each image into its own corner of the cycle from frame 0.
   tween.seek(Math.random());
+  // Collected so cullOffscreenLevels can pause this while the owning level is
+  // off-camera — otherwise every glow tile in all 19 levels ticks every frame.
+  anims.tweens.push(tween);
 }
 
 // Builds an Image for one of a sign's two baked textures (structure or lit).
@@ -560,5 +651,12 @@ export function destroyRenderedLevel(rendered: RenderedLevel): void {
     layer.container.clearMask(false);
     layer.container.destroy(true);
   }
-  rendered.maskGraphics.destroy();
+  // Glow tweens are paused (not stepped) while their level is culled off-camera.
+  // The Tween Manager only auto-prunes tweens it actively steps, so a paused
+  // tween won't notice its target Image was destroyed above — remove explicitly
+  // to avoid leaking it into the next world build on HMR/respawn.
+  for (const tween of rendered.animations.tweens) {
+    tween.remove();
+  }
+  rendered.maskGraphics?.destroy();
 }

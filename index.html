@@ -5,6 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Platformer</title>
     <style>
+      /* Apocalyptic display font for titles + subtitles (landing title, options
+         panel headers). Self-hosted woff2 so it works offline; declared here in
+         the document <head> so it's available to both the DOM overlays and
+         Phaser's canvas-rendered text. */
+      @font-face {
+        font-family: 'Nosifer';
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+        /* Relative path (matches vite base:'./') so the font resolves whether
+           the build is hosted at the site root or a subpath. */
+        src: url('./assets/fonts/nosifer-latin.woff2') format('woff2');
+      }
       html,
       body {
         margin: 0;

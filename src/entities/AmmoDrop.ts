@@ -17,6 +17,12 @@ import {
   COIN_SPAWN_VELOCITY_Y_MIN,
   COIN_TEXTURE_KEY,
   ENTITY_DEPTH,
+  HEAL_PICKUP_AMOUNT,
+  HEART_DROP_DISPLAY_SCALE,
+  HEART_TEXTURE_KEY,
+  KEY_DROP_DISPLAY_SCALE,
+  KEY_PICKUP_AMOUNT,
+  KEY_TEXTURE_KEY,
   MAGIC_ORB_LOITER_X_AMPLITUDE_PX,
   MAGIC_ORB_LOITER_X_PERIOD_MS,
   MAGIC_ORB_LOITER_Y_AMPLITUDE_PX,
@@ -67,6 +73,21 @@ function textureForKind(kind: PickupKind): TextureChoice {
     // keeps the circle smooth despite the global pixelArt config.
     return { key: MAGIC_ORB_TEXTURE_KEY, frame: undefined, scale: AMMO_DROP_DISPLAY_SCALE };
   }
+  if (kind === 'heal') {
+    // Healing heart: 16px procedural texture. Slightly larger display scale
+    // than ammo/orb so the rarer pickup stands out; LINEAR-filtered in
+    // PreloadScene so the curves stay smooth at zoom. Uses the default ammo
+    // physics branch below (gravity + pop), so a dropped heart falls and
+    // settles like an ammo pickup rather than hovering like a magic orb.
+    return { key: HEART_TEXTURE_KEY, frame: undefined, scale: HEART_DROP_DISPLAY_SCALE };
+  }
+  if (kind === 'key_storms' || kind === 'key_widow') {
+    // Boss key: 16px procedural gold key. Both keys share one texture (they're
+    // visually identical; door-matching is by pickup kind). Falls under the
+    // default ammo physics branch below (gravity + pop) so it drops and settles
+    // where the boss died rather than hovering like a magic orb.
+    return { key: KEY_TEXTURE_KEY, frame: undefined, scale: KEY_DROP_DISPLAY_SCALE };
+  }
   // Coin: procedural gold disc authored at 32 px source resolution for HUD
   // sharpness; COIN_DROP_DISPLAY_SCALE shrinks it back to ~4 world units so
   // world coins still read as smaller "minor pickups" than the magic orb.
@@ -77,6 +98,8 @@ function amountForKind(kind: PickupKind): number {
   if (kind === 'gun1') return AMMO_PICKUP_GUN1_AMOUNT;
   if (kind === 'gun2') return AMMO_PICKUP_GUN2_AMOUNT;
   if (kind === 'magic') return MAGIC_PICKUP_AMOUNT;
+  if (kind === 'heal') return HEAL_PICKUP_AMOUNT;
+  if (kind === 'key_storms' || kind === 'key_widow') return KEY_PICKUP_AMOUNT;
   return COIN_PICKUP_AMOUNT;
 }
 

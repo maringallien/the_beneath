@@ -151,10 +151,13 @@ function validateDropEvent(
       e.kind !== 'gun1' &&
       e.kind !== 'gun2' &&
       e.kind !== 'magic' &&
-      e.kind !== 'coin'
+      e.kind !== 'coin' &&
+      e.kind !== 'heal' &&
+      e.kind !== 'key_storms' &&
+      e.kind !== 'key_widow'
     ) {
       throw new Error(
-        `${ctx}.kinds[${i}].kind must be "gun1", "gun2", "magic", or "coin" (got ${JSON.stringify(e.kind)})`,
+        `${ctx}.kinds[${i}].kind must be "gun1", "gun2", "magic", "coin", "heal", "key_storms", or "key_widow" (got ${JSON.stringify(e.kind)})`,
       );
     }
     if (typeof e.weight !== 'number' || !Number.isFinite(e.weight) || e.weight < 0) {
@@ -345,6 +348,42 @@ function validateBehavior(
     }
     stayInSpawnLevel = b.stayInSpawnLevel;
   }
+  let homeLeashRange: number | undefined;
+  if (b.homeLeashRange !== undefined) {
+    if (
+      typeof b.homeLeashRange !== 'number' ||
+      !Number.isFinite(b.homeLeashRange) ||
+      b.homeLeashRange <= 0
+    ) {
+      throw new Error(
+        `${ctx}.homeLeashRange must be a positive number when set (got ${JSON.stringify(b.homeLeashRange)})`,
+      );
+    }
+    homeLeashRange = b.homeLeashRange;
+  }
+  let isBoss: boolean | undefined;
+  if (b.isBoss !== undefined) {
+    if (typeof b.isBoss !== 'boolean') {
+      throw new Error(`${ctx}.isBoss must be a boolean when set`);
+    }
+    isBoss = b.isBoss;
+  }
+  let roundFight: boolean | undefined;
+  if (b.roundFight !== undefined) {
+    if (typeof b.roundFight !== 'boolean') {
+      throw new Error(`${ctx}.roundFight must be a boolean when set`);
+    }
+    roundFight = b.roundFight;
+  }
+  let displayName: string | undefined;
+  if (b.displayName !== undefined) {
+    if (typeof b.displayName !== 'string' || b.displayName.length === 0) {
+      throw new Error(
+        `${ctx}.displayName must be a non-empty string when set (got ${JSON.stringify(b.displayName)})`,
+      );
+    }
+    displayName = b.displayName;
+  }
   let hideHealthBar: boolean | undefined;
   if (b.hideHealthBar !== undefined) {
     if (typeof b.hideHealthBar !== 'boolean') {
@@ -473,6 +512,10 @@ function validateBehavior(
     immovable,
     horizontalMovementOnly,
     stayInSpawnLevel,
+    homeLeashRange,
+    isBoss,
+    roundFight,
+    displayName,
     hideHealthBar,
     healthBarOffsetY,
     attack,
@@ -606,6 +649,8 @@ function validateAttack(
   let appearAnimation: string | undefined;
   let targetOffsetY: number | undefined;
   let appearElevated: boolean | undefined;
+  let comboNextAnimation: string | undefined;
+  let comboChancePct: number | undefined;
 
   // Hitbox parser shared by melee and teleport (both deliver damage via a
   // transient rect on a frame). Accepts either `hitbox` (single object) or
@@ -1115,6 +1160,43 @@ function validateAttack(
     hurtSource = a.hurtSource;
   }
 
+  // Combo chaining is only meaningful for attacks that complete via the
+  // standard animation-complete → recover path. teleport/dive/aoe/contact
+  // have non-standard completion (phase machines, overlap-driven damage, no
+  // swing) — reject the field on them so a misplaced combo fails loudly at
+  // boot rather than silently no-opping.
+  if (a.comboNextAnimation !== undefined) {
+    if (type !== 'melee' && type !== 'ranged' && type !== 'magic') {
+      throw new Error(
+        `${ctx}.comboNextAnimation is only valid on type "melee" | "ranged" | "magic" (got type "${type}")`,
+      );
+    }
+    // Validate the key exists in this entity's animations. Cross-checking that
+    // it names another *attack* in the same pool isn't possible here (we see
+    // one entry at a time); that lookup no-ops safely at runtime if unmatched.
+    comboNextAnimation = optionalAnimKey(
+      ctx,
+      'comboNextAnimation',
+      a.comboNextAnimation,
+      animations,
+    );
+    if (
+      typeof a.comboChancePct !== 'number' ||
+      !Number.isFinite(a.comboChancePct) ||
+      a.comboChancePct <= 0 ||
+      a.comboChancePct > 100
+    ) {
+      throw new Error(
+        `${ctx}.comboChancePct must be a number in (0, 100] when comboNextAnimation is set (got ${JSON.stringify(a.comboChancePct)})`,
+      );
+    }
+    comboChancePct = a.comboChancePct;
+  } else if (a.comboChancePct !== undefined) {
+    throw new Error(
+      `${ctx}.comboChancePct requires comboNextAnimation to also be set`,
+    );
+  }
+
   let damageHalfWidth: number | undefined;
   let damageHalfHeight: number | undefined;
   const validateAoeHalfDim = (field: 'damageHalfWidth' | 'damageHalfHeight'): number | undefined => {
@@ -1178,6 +1260,8 @@ function validateAttack(
     appearAnimation,
     targetOffsetY,
     appearElevated,
+    comboNextAnimation,
+    comboChancePct,
   };
 }
 

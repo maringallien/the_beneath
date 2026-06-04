@@ -21,6 +21,10 @@ export interface FrameData {
   // regardless of displayScale.
   displayScale?: number;
   startFrame?: number;
+  // When set, this animation is a single static pose pinned to this frame
+  // index of the sheet (registration emits a 1-frame anim). Used for held
+  // poses like block_idle that freeze on one frame of a multi-frame strip.
+  poseFrame?: number;
   ambiguous?: boolean;
 }
 
@@ -84,6 +88,7 @@ export type LogicalAnimationKey =
   | 'dash'
   | 'roll'
   | 'block'
+  | 'block_idle'
   | 'ledge_climb'
   | 'jump'
   | 'death'

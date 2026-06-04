@@ -1,9 +1,20 @@
 import Phaser from 'phaser';
+import { GENERAL_ENEMY_SPAWN_IDENTIFIER } from '../constants';
 import {
   getRenderableEntityLayers,
   getRenderableLayers,
   getTilesetDefs,
 } from '../ldtk/parseLdtk';
+
+// Logic-only marker entities that are never rendered (see LevelRenderer's
+// skip set). Their LDtk def may carry a preview-tile reference to a tileset
+// that doesn't exist in this project, so they must also be excluded from
+// tileset collection — otherwise the "references tileset uid=… but no def"
+// guard below would throw on a level that only "uses" that tileset via a
+// marker preview.
+const NON_RENDERED_MARKER_IDENTIFIERS: ReadonlySet<string> = new Set([
+  GENERAL_ENEMY_SPAWN_IDENTIFIER,
+]);
 import type {
   LdtkLevel,
   LdtkProject,
@@ -40,7 +51,10 @@ export function collectTilesetsForLevel(
   // type, so its own tileset is null). Collect those too — otherwise the
   // renderer throws "Tileset texture not loaded" the first time it walks a
   // level whose decorations point at a tileset no tile layer happens to use.
-  for (const layer of getRenderableEntityLayers(level)) {
+  for (const layer of getRenderableEntityLayers(
+    level,
+    NON_RENDERED_MARKER_IDENTIFIERS,
+  )) {
     for (const dec of layer.decorations) {
       usedUids.add(dec.tilesetUid);
     }

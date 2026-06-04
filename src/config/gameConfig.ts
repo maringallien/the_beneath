@@ -5,6 +5,7 @@ import { GameScene } from '../scenes/GameScene';
 import { LandingScene } from '../scenes/LandingScene';
 import { PauseScene } from '../scenes/PauseScene';
 import { PreloadScene } from '../scenes/PreloadScene';
+import { VictoryScene } from '../scenes/VictoryScene';
 
 export const gameConfig: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
@@ -26,10 +27,10 @@ export const gameConfig: Phaser.Types.Core.GameConfig = {
     parent: 'game'
   },
   // LandingScene is last so it renders above GameScene when launched as an
-  // overlay during the first-boot landing-page flow. PauseScene also sits
-  // above GameScene for the same reason; their relative order doesn't
-  // matter — they're never on screen together. The merchant shop is rendered
-  // as a DOM overlay (src/ui/ShopOverlay) instead of a Phaser scene, so it
-  // doesn't appear here.
-  scene: [BootScene, PreloadScene, GameScene, PauseScene, LandingScene]
+  // overlay during the first-boot landing-page flow. PauseScene and
+  // VictoryScene also sit above GameScene for the same reason; their relative
+  // order doesn't matter — they're never on screen together. The merchant shop
+  // is rendered as a DOM overlay (src/ui/ShopOverlay) instead of a Phaser
+  // scene, so it doesn't appear here.
+  scene: [BootScene, PreloadScene, GameScene, PauseScene, LandingScene, VictoryScene]
 };

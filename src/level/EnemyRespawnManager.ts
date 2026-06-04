@@ -1,8 +1,7 @@
-import Phaser from 'phaser';
 import {
   ENEMY_RESPAWN_CHECK_INTERVAL_MS,
-  ENEMY_RESPAWN_DELAY_MS,
-  ENEMY_RESPAWN_OFFSCREEN_PADDING_PX,
+  ENEMY_RESPAWN_MIN_DISTANCE_PX,
+  ENEMY_RESPAWN_MIN_TIME_MS,
 } from '../constants';
 import type { Enemy } from '../entities/Enemy';
 import type { LoiterPathPoint } from '../ldtk/types';
@@ -16,8 +15,9 @@ export interface PendingRespawn {
   readonly spawnX: number;
   readonly spawnY: number;
   readonly loiterPath: ReadonlyArray<LoiterPathPoint> | null;
-  // Scene-time at which the respawn becomes eligible. Compared against
-  // scene.time.now in tick(); off-camera gating runs only after this passes.
+  // Scene-time at which the time gate opens (death time + MIN_TIME). The
+  // distance gate is still also required — this is merely the earliest the
+  // entry can come back, even if the player is already far away.
   readonly respawnAt: number;
 }
 
@@ -25,8 +25,11 @@ export type RespawnCallback = (entry: PendingRespawn) => void;
 
 // Per-scene registry of killed non-boss enemies waiting to come back. Death
 // events from GameScene push entries here; tick() runs a throttled scan and
-// invokes the callback when an entry is both past its delay AND its spawn
-// point is off-camera.
+// invokes the callback once an entry has cleared BOTH gates: at least
+// ENEMY_RESPAWN_MIN_TIME_MS has elapsed since death AND the player is at least
+// ENEMY_RESPAWN_MIN_DISTANCE_PX from its spawn point. The time floor stops a
+// cleared area from refilling the instant the player sprints out of range; the
+// distance floor stops it refilling while the player lingers nearby.
 //
 // State is transient: cleared on tearDownWorld. After save→death→respawn-
 // from-save, the world rebuilds from LDtk and all non-bosses come back fresh
@@ -53,7 +56,7 @@ export class EnemyRespawnManager {
       spawnX: enemy.getSpawnX(),
       spawnY: enemy.getSpawnY(),
       loiterPath: enemy.getLoiterPath(),
-      respawnAt: now + ENEMY_RESPAWN_DELAY_MS,
+      respawnAt: now + ENEMY_RESPAWN_MIN_TIME_MS,
     });
   }
 
@@ -67,13 +70,17 @@ export class EnemyRespawnManager {
   }
 
   // Per-frame entry point. Throttled internally so callers can call this
-  // unconditionally from scene.update(). Iterates pending entries, fires the
-  // callback for any whose delay has elapsed AND whose spawn point sits
-  // outside the camera rect (padded). Eligible entries are removed from the
-  // Map BEFORE the callback to keep the manager's view consistent if the
+  // unconditionally from scene.update(). Iterates pending entries and fires
+  // the callback for any that has cleared both gates: now past its respawnAt
+  // (the time floor) AND its spawn point at least ENEMY_RESPAWN_MIN_DISTANCE_PX
+  // from the player. Because that distance far exceeds the on-screen radius, an
+  // eligible spawn is always well off-camera, so respawns never materialize in
+  // view — no separate camera check needed. Eligible entries are removed from
+  // the Map BEFORE the callback to keep the manager's view consistent if the
   // callback re-records the freshly-respawned enemy for its next death.
   tick(
-    camera: Phaser.Cameras.Scene2D.Camera,
+    playerX: number,
+    playerY: number,
     now: number,
     onRespawn: RespawnCallback,
   ): void {
@@ -81,19 +88,9 @@ export class EnemyRespawnManager {
     this.lastTickAt = now;
     if (this.pending.size === 0) return;
 
-    // Camera rect in world coords, derived from midPoint + displayWidth/Height
-    // — same construction GameScene.cullOffscreenLevels uses, for the same
-    // reason: cam.scrollX/Y + width/zoom undershoots the actual visible right
-    // edge by `(cam.width/2)(1 - 1/zoom)` (Phaser stores scrollX as raw canvas
-    // half-width). Pad outward so respawns happen comfortably off-screen even
-    // if the camera lerp catches up to the player on the very next frame.
-    const halfDispW = camera.displayWidth * 0.5;
-    const halfDispH = camera.displayHeight * 0.5;
-    const pad = ENEMY_RESPAWN_OFFSCREEN_PADDING_PX;
-    const visibleLeft = camera.midPoint.x - halfDispW - pad;
-    const visibleTop = camera.midPoint.y - halfDispH - pad;
-    const visibleRight = camera.midPoint.x + halfDispW + pad;
-    const visibleBottom = camera.midPoint.y + halfDispH + pad;
+    // Compare squared distances so the per-entry test avoids a sqrt.
+    const minDistSq =
+      ENEMY_RESPAWN_MIN_DISTANCE_PX * ENEMY_RESPAWN_MIN_DISTANCE_PX;
 
     // Two-pass to avoid mutating the Map during the for..of: first collect
     // every eligible iid this tick, then process them in order. Cheaper than
@@ -101,13 +98,12 @@ export class EnemyRespawnManager {
     // its own iteration" pitfall in JS Maps.
     const ready: PendingRespawn[] = [];
     for (const entry of this.pending.values()) {
+      // Time gate first: it's a cheap scalar compare and rejects the common
+      // "killed seconds ago" case before the distance math.
       if (now < entry.respawnAt) continue;
-      const onScreen =
-        entry.spawnX >= visibleLeft &&
-        entry.spawnX <= visibleRight &&
-        entry.spawnY >= visibleTop &&
-        entry.spawnY <= visibleBottom;
-      if (onScreen) continue;
+      const dx = entry.spawnX - playerX;
+      const dy = entry.spawnY - playerY;
+      if (dx * dx + dy * dy < minDistSq) continue;
       ready.push(entry);
     }
     for (const entry of ready) {

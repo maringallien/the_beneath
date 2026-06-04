@@ -5,6 +5,7 @@ import type { AmmoDropSpawnerScene } from './AmmoDropSpawnerScene';
 import { AnimatedEntity } from './AnimatedEntity';
 import { entityAnimFullKey } from './entityRegistryLoader';
 import type { Interactable } from './Interactable';
+import { isChestOpened, recordChestOpened } from '../state/runProgress';
 
 // Source-px gap between the chest's body.top and the E icon anchor point.
 // Pulls the anchor a touch above the lid silhouette so the icon doesn't sit
@@ -17,15 +18,44 @@ const ICON_ANCHOR_GAP_PX = 2;
 // (suitable for ambient loops); for chests we override that to a closed-pose
 // idle so the open animation can later be replayed from the start. On
 // interact, the full open clip plays once and the chest becomes permanently
-// non-interactable until the world is rebuilt (HMR or scene.restart).
+// non-interactable. The opened state is recorded in runProgress (keyed by the
+// LDtk entity iid) so it survives the world rebuilds that death/respawn and HMR
+// perform — a looted chest stays open (rendered on its final frame) for the
+// rest of the run, resetting only on New Game / Quit (resetRunProgress).
 export class Chest extends AnimatedEntity implements Interactable {
+  private readonly iid: string;
   private opened = false;
   private opening = false;
 
-  constructor(scene: Phaser.Scene, x: number, y: number, identifier: string) {
+  constructor(
+    scene: Phaser.Scene,
+    x: number,
+    y: number,
+    identifier: string,
+    iid: string,
+  ) {
     super(scene, x, y, identifier);
+    this.iid = iid;
     this.anims.stop();
-    this.setFrame(0);
+    // A chest opened earlier this run must stay open across the world rebuilds
+    // that death/respawn (and HMR) perform — runProgress.openedChests survives
+    // those rebuilds (keyed by LDtk iid). Restore the opened pose by settling
+    // on the open clip's final frame and locking interaction, WITHOUT replaying
+    // the animation or re-rolling drops (the player already looted this chest).
+    if (isChestOpened(iid)) {
+      this.opened = true;
+      this.setFrame(this.openedFrameIndex());
+    } else {
+      this.setFrame(0);
+    }
+  }
+
+  // Last frame index of the open animation — the resting pose the clip halts on
+  // (registry loops:false). Used to render a pre-opened chest on its open frame
+  // without playing the clip through.
+  private openedFrameIndex(): number {
+    const anim = this.config.animations[this.config.defaultAnimation];
+    return Math.max(0, anim.frameCount - 1);
   }
 
   getInteractionAnchor(): { x: number; y: number } {
@@ -66,6 +96,9 @@ export class Chest extends AnimatedEntity implements Interactable {
     this.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
       this.opening = false;
       this.opened = true;
+      // Persist the open across world rebuilds so the chest stays open for the
+      // rest of the run (death/respawn re-spawns it from the LDtk file).
+      recordChestOpened(this.iid);
       this.maybeSpawnAmmoDrop();
     });
   }
