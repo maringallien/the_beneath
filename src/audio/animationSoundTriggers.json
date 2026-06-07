@@ -424,14 +424,12 @@
       {
         "name": "widow_walk_step1",
         "soundId": "widow_walk_stone_smash",
-        "frameIndex": 3,
-        "repeatPerLoop": true
+        "frameIndex": 3
       },
       {
         "name": "widow_walk_step2",
         "soundId": "widow_walk_stone_smash",
-        "frameIndex": 8,
-        "repeatPerLoop": true
+        "frameIndex": 8
       }
     ],
     "entity_The_tarnished_widow_spawn_buff": [
@@ -560,6 +558,13 @@
       {
         "name": "heart_hoarder_teleport_appear",
         "soundId": "heart_hoarder_teleport_appear",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Shadow_of_storms_spawn_buff": [
+      {
+        "name": "widow_buff_steam_hiss",
+        "soundId": "heal_spell_cast",
         "frameIndex": 1
       }
     ]

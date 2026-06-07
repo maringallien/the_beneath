@@ -101,9 +101,12 @@ const FACTORIES: Readonly<Record<string, EntityFactoryFn>> = (() => {
     if (identifier in out) continue;
     // Three-way switch on the registry blocks (validator guarantees `behavior`
     // and `trap` are mutually exclusive):
-    //   behavior present → Enemy (health/AI/attacks)
+    //   behavior present → Enemy (health/AI/attacks, incl. loiterPath patrol —
+    //                      this is how walking NPCs like spirit walkers work:
+    //                      attack-less Enemies that patrol their route under
+    //                      gravity using the shared character walk code)
     //   trap present     → Trap (overlap-based passive damage)
-    //   neither          → AnimatedEntity (pure decoration)
+    //   neither          → plain in-place AnimatedEntity (static decoration)
     // Capture the branch at factory-build time so spawn-time work is just a
     // constructor call.
     if (config.behavior) {
@@ -236,7 +239,16 @@ export function spawnEntities(
     );
   }
 
-  return { player, enemies, doors, traps, chests, saves, merchants, others };
+  return {
+    player,
+    enemies,
+    doors,
+    traps,
+    chests,
+    saves,
+    merchants,
+    others,
+  };
 }
 
 // Symmetric teardown for spawnEntities. Optionally preserves the player so

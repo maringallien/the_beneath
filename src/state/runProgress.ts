@@ -33,6 +33,19 @@ const defeatedBosses = new Set<string>();
 // death/respawn for the rest of the run.
 const openedChests = new Set<string>();
 
+// Capacity upgrades the player has bought this run. Two lines: 'ammo' (the tech
+// shops' Ammo Storage upgrade, which widens both gun caps) and 'magic' (the
+// mushroom merchants' Orb Pouch upgrade). Stored as a set of ids that encode
+// both the line and the selling level (see upgradeId, e.g. "ammo@Level_9"), so
+// each shop's upgrade is a distinct one-time purchase. The COUNT of ids per line
+// is what drives the player's derived ammo/magic caps (Player.getMax*), so the
+// order levels are visited in is irrelevant. Lives here for the same reason as
+// the state above: a permanent capacity boost must survive the world rebuilds
+// that death/respawn and HMR perform, and is wiped only by resetRunProgress()
+// when the run is abandoned.
+export type UpgradeType = 'ammo' | 'magic';
+const purchasedUpgrades = new Set<string>();
+
 export function recordKeyCollected(key: BossKeyId): void {
   collectedKeys.add(key);
 }
@@ -57,6 +70,33 @@ export function isChestOpened(iid: string): boolean {
   return openedChests.has(iid);
 }
 
+// Stable id for one shop's capacity upgrade: the upgrade line plus the level
+// that sells it. Each tech shop / mushroom merchant lives in a distinct level
+// (Level_9/11/18), so this is unique per shop and lets a shop's upgrade be
+// recorded — and refused on re-purchase — independently of the others.
+export function upgradeId(type: UpgradeType, levelId: string): string {
+  return `${type}@${levelId}`;
+}
+
+export function recordUpgradePurchased(id: string): void {
+  purchasedUpgrades.add(id);
+}
+
+export function hasUpgrade(id: string): boolean {
+  return purchasedUpgrades.has(id);
+}
+
+// How many upgrades of a line the player owns. Drives the derived cap: e.g.
+// gun1 max = BASE_MAX_GUN1_AMMO + countUpgrades('ammo') * GUN1_CAPACITY_UPGRADE_STEP.
+export function countUpgrades(type: UpgradeType): number {
+  const prefix = `${type}@`;
+  let count = 0;
+  for (const id of purchasedUpgrades) {
+    if (id.startsWith(prefix)) count += 1;
+  }
+  return count;
+}
+
 // True once every required boss has been recorded as defeated — the win gate.
 export function allBossesDefeated(): boolean {
   return REQUIRED_BOSS_IDENTIFIERS.every((id) => defeatedBosses.has(id));
@@ -68,4 +108,5 @@ export function resetRunProgress(): void {
   collectedKeys.clear();
   defeatedBosses.clear();
   openedChests.clear();
+  purchasedUpgrades.clear();
 }

@@ -203,6 +203,10 @@
   color: #c87a78;
 }
 
+.shop-item-status--owned {
+  color: #bfa86a;
+}
+
 .shop-item-price {
   display: flex;
   align-items: center;

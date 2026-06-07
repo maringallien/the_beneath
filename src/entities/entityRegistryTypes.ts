@@ -115,6 +115,14 @@ export interface AnimatedEntityHitboxConfig {
 //     suppressed for the duration of the attack so the appear pose doesn't
 //     fall during the strike; restored when the attack ends, on hurt-interrupt,
 //     or on death.
+//   - 'summon': plays a cast animation and, on the configured frame, spawns
+//     `summonCount` minions (each kind chosen at random from `summonKinds`,
+//     which must be registry identifiers) beside the caster. Deals no direct
+//     damage. `range` gates it like a normal attack so the caster only summons
+//     once the player is engaged; `cooldownMs` throttles re-casts and the
+//     optional `summonMaxAlive` caps how many of this caster's minions can be
+//     alive at once. The spawned minions are wired into the world as ordinary
+//     enemies (full AI/collision) and immediately pursue the player.
 export interface AnimatedEntityAttackConfig {
   readonly type:
     | 'melee'
@@ -124,7 +132,8 @@ export interface AnimatedEntityAttackConfig {
     | 'heal'
     | 'dive'
     | 'aoe'
-    | 'teleport';
+    | 'teleport'
+    | 'summon';
   // Animation key. Required for melee/ranged/magic/heal/dive; optional for
   // contact (which has no swing animation — the enemy walks into the
   // player while playing its default walk/idle).
@@ -188,6 +197,23 @@ export interface AnimatedEntityAttackConfig {
   // Probability (0 < n <= 100) of chaining into comboNextAnimation. Required
   // when comboNextAnimation is set; ignored otherwise.
   readonly comboChancePct?: number;
+  // When true, this attack is never selected on its own by the AI pool — it
+  // only ever runs as another attack's `comboNextAnimation` follow-up. Lets you
+  // author a strict "B only after A" chain (e.g. an assassin whose attack2 is
+  // purely a finisher to attack1). melee/ranged/magic only. Because the attack
+  // is never independently selected, its `range` is optional (reachability is
+  // inherited from the lead attack's range check at combo time); it still needs
+  // its own animation/frame/damage/hitbox to deliver the follow-up hit.
+  readonly comboOnly?: boolean;
+  // Melee-only: forward distance (source px) the body advances when the swing
+  // completes. For attacks whose ART bakes a forward lunge into the frames
+  // (the character slides forward across the strip) while the body holds still:
+  // without this, the entity visibly snaps back to the launch point when it
+  // returns to idle. Setting it to roughly the art's forward travel moves the
+  // body to where the lunge landed so idle resumes seamlessly. Applied in the
+  // entity's facing direction; skipped if the swing is interrupted (hurt/death)
+  // or chains into a combo follow-up. Default unset (no advance).
+  readonly lungeDistance?: number;
   readonly aggressive: boolean;
   // Optional chase fields. If chaseRange is set, the entity moves toward
   // the player when within that range. Absent = stationary attacker.
@@ -214,6 +240,35 @@ export interface AnimatedEntityAttackConfig {
   // so the sprite center sits high above her head.
   readonly projectileOriginX?: number;
   readonly projectileOriginY?: number;
+  // Ranged/magic-only: when true, the projectile flies straight along the
+  // entity's facing (horizontal, vy = 0) instead of aiming at the player. The
+  // player dodges by changing elevation rather than just sidestepping. Default
+  // false — projectiles home onto the player's position at fire time. Used by
+  // turret-style shooters (hell bot, wheel bot) that fire fixed volleys.
+  readonly projectileStraight?: boolean;
+  // projectileStraight-only: opt-in vertical-alignment gate. A straight shot
+  // flies horizontally, so it can only connect when the muzzle's Y line passes
+  // through the player's body. When set, the attack becomes ineligible while the
+  // player sits on a different elevation (the muzzle Y is outside the player's
+  // body height, expanded by this margin in px) — so a mobile shooter like the
+  // hell bot falls through to chase and repositions onto the player's row (or
+  // closes for melee) instead of firing volleys that sail over/under them.
+  // Unset = legacy behavior: fire whenever the 2D distance is in range,
+  // regardless of elevation (correct for a stationary turret that can't
+  // reposition, e.g. the wheel bot). Only valid with projectileStraight=true.
+  readonly verticalAlignMarginPx?: number;
+  // 'summon'-only: registry identifiers of the minions to spawn (e.g.
+  // ["Ghoul_spawn", "Spitter_spawn"]). Each summoned unit picks one entry at
+  // random. Must be a non-empty array of identifiers that resolve to a
+  // behavior-bearing registry entry at runtime; an unresolvable id is skipped.
+  readonly summonKinds?: ReadonlyArray<string>;
+  // 'summon'-only: how many minions to spawn per cast (clamped by
+  // summonMaxAlive when set). Positive integer.
+  readonly summonCount?: number;
+  // 'summon'-only: optional cap on how many of THIS caster's still-alive
+  // minions may exist at once. A cast spawns only up to the remaining budget,
+  // so a long fight can't snowball into an endless horde. Omit for no cap.
+  readonly summonMaxAlive?: number;
   // 'aoe'-only: animation key (within this entity's `animations` map)
   // played by the VFX sprite that spawns at the player's snapshot
   // position on the damage frame. Must be one-shot. When omitted, the
@@ -350,6 +405,25 @@ export interface AnimatedEntityBehaviorConfig {
   // as the engagement zone instead, which works for airborne bosses where
   // 2D distance never drops below a small radius due to vertical separation.
   readonly encounterRadius?: number;
+  // Dormant-until-spotted behavior. When set, the entity starts inert: it
+  // holds its asleep pose (a looping `sleepAnimation` when set, otherwise the
+  // first frame of `wakeAnimation` paused), runs no chase/attack/encounter
+  // logic, and ignores the player entirely until it gains line of sight
+  // (`trigger: 'lineOfSight'`) to the player within
+  // `range` px (defaults to a screen-ish radius). On first sight it plays
+  // `wakeAnimation` once, then hands off to the normal AI loop — which then
+  // idles until the player is within an attack's `range` and engages. Used for
+  // ambush turrets like the wheel bot that should not react across a room they
+  // can't see into. `wakeAnimation` must be one-shot.
+  readonly dormant?: {
+    readonly wakeAnimation: string;
+    readonly trigger: 'lineOfSight';
+    readonly range?: number;
+    // Optional looping clip shown while dormant (e.g. the wheel bot's curled
+    // 'sleep'). When omitted, the entity holds the first frame of
+    // `wakeAnimation` paused as its asleep pose (legacy behavior).
+    readonly sleepAnimation?: string;
+  };
   // Optional delay (ms) between the player crossing encounterRadius and the
   // boss beginning to attack/chase. During the delay the boss stays in its
   // idle pose, giving the player time to actually enter the arena before
@@ -408,6 +482,15 @@ export interface AnimatedEntityBehaviorConfig {
   // Storms"). Only consumed when roundFight is true. Falls back to a name
   // derived from the entity identifier when omitted.
   readonly displayName?: string;
+  // Patrol movement, decoupled from combat. The AI's loiter/patrol code reads
+  // movement from the lead attack when one exists (legacy combat entities), and
+  // falls back to these fields otherwise — so an attack-less character (e.g.
+  // spirit walkers) walks its LDtk loiterPath under gravity using the exact
+  // same patrol code as any other character. walkAnimation must resolve to an
+  // animation key; moveSpeed is world px/s. Ignored when attacks[0] already
+  // supplies walkAnimation/moveSpeed, so existing enemies are unaffected.
+  readonly walkAnimation?: string;
+  readonly moveSpeed?: number;
   // Single-attack shorthand. For enemies with one combat behavior. Mutually
   // exclusive with attackPool in practice — if both are set, attackPool wins
   // and attack is ignored (validator warns at boot).
@@ -471,6 +554,48 @@ export interface AnimatedEntityBehaviorConfig {
     // death animation's frameCount at boot when the death anim exists.
     readonly frame: number;
   };
+  // Spawn-anchored ground wander (see Enemy.updateAreaWander). When set on a
+  // grounded character that has no authored loiterPath, it strolls within
+  // `radius` px of its spawn point — resting between strolls and using the
+  // shared leap probe to hop level gaps that land back in-bounds — instead of
+  // standing idle. Without this block such a character just idles (unchanged).
+  readonly wander?: AnimatedEntityWanderConfig;
+}
+
+// Spawn-anchored wander parameters (behavior.wander). Presence on a grounded
+// character makes it stroll around its spawn point instead of standing idle
+// when it has no authored loiterPath — see Enemy.updateAreaWander.
+export interface AnimatedEntityWanderConfig {
+  // Horizontal half-width (world px) of the stroll zone, centered on the
+  // entity's spawn X. Targets are picked within ±radius; a gap whose landing
+  // would fall outside this band is declined (the entity turns back) so it
+  // stays in its vicinity and never strolls off down a hole.
+  readonly radius: number;
+  // Optional social greeting. When two wandering characters that share the same
+  // `group` tag cross paths, they occasionally stop, face each other, and bob a
+  // few tiny hops. Omit for solitary wanderers.
+  readonly greet?: AnimatedEntityGreetConfig;
+}
+
+// Greeting parameters (behavior.wander.greet). Two wanderers are greet-eligible
+// when both share `group`, are within `proximityPx` on the same floor, and are
+// each off cooldown; on an eligible crossing the initiator rolls `chance` and,
+// on success, pulls its partner into a synchronized greet of `hops` tiny bobs.
+export interface AnimatedEntityGreetConfig {
+  // Match tag. Only wanderers with an identical group greet each other, so the
+  // seven Spirit_walker* variants (distinct identifiers) all share one tag.
+  readonly group: string;
+  // Center-to-center distance (world px) within which a partner triggers a
+  // greeting. Small — an arm's length, not across the room.
+  readonly proximityPx: number;
+  // Probability (0–1) that an eligible crossing actually becomes a greeting, so
+  // they don't greet on every single pass.
+  readonly chance: number;
+  // How many tiny hops each participant performs per greeting.
+  readonly hops: number;
+  // Per-instance cooldown (ms) after a greeting before this character greets
+  // again, so a clustered pair doesn't greet on a loop.
+  readonly cooldownMs: number;
 }
 
 // Per-entity trap parameters. Presence of this block is the signal the

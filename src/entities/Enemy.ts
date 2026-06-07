@@ -12,7 +12,12 @@ import {
   BOSS_ROUND_BREAK_MS,
   ENEMY_COMBAT_TIMEOUT_MS,
   ENEMY_HEALTH_MULTIPLIER,
+  GRAVITY_Y,
+  HOARDER_SEPARATION_MIN_DX_PX,
+  HOARDER_SEPARATION_PUSH_SPEED,
   HORIZONTAL_CHASE_STANDOFF_DEADZONE_PX,
+  PLAYER_JUMP_VELOCITY,
+  PLAYER_RUN_SPEED,
 } from '../constants';
 import type { LoiterPathPoint } from '../ldtk/types';
 import { rollDrop } from './AmmoDrop';
@@ -28,9 +33,12 @@ import {
 import type {
   AnimatedEntityAttackConfig,
   AnimatedEntityBehaviorConfig,
+  AnimatedEntityGreetConfig,
   AnimatedEntityHitboxConfig,
+  AnimatedEntityWanderConfig,
 } from './entityRegistryTypes';
 import { Player } from './Player';
+import type { TeleportCoordinator } from './teleportCoordinator';
 
 export type EnemyState =
   | 'idle'
@@ -64,12 +72,103 @@ const FALL_DAMAGE_PER_VELOCITY = 1 / 30;
 // at typical zoom — large enough to feel like "stepping into the arena"
 // rather than "right next to the boss".
 const DEFAULT_ENCOUNTER_RADIUS = 300;
+// Dormant/wake (ambush turrets like the wheel bot). Default line-of-sight
+// detection distance used when behavior.dormant.range is unset — a bit under
+// one screen-width so the bot wakes when the player is plainly in view, not
+// from clear across an open arena it happens to share a sightline with.
+const DEFAULT_DORMANT_WAKE_RANGE = 220;
+// Summon spawn placement: minions appear flanking the caster, alternating
+// sides and stepping outward so a spawned pair doesn't stack on one pixel.
+const SUMMON_SPAWN_OFFSET_X = 28;
+const SUMMON_SPAWN_SPACING_X = 22;
 // Jump velocity for chase-time obstacle hops. Solving v² = 2·g·h with
 // g = 800 (project gravity) and h = 2 tiles + margin → 40 px gives
 // v ≈ 253 px/s. -260 keeps a comfortable buffer so a 2-tile wall is cleared
 // without scraping; the chase X velocity keeps the body moving forward
 // during the arc so it lands on the far side.
 const ENEMY_JUMP_VELOCITY = -260;
+// Cross-gap leaping (chase only). When a grounded chaser reaches a ledge with
+// open air ahead, it searches for the GENTLEST jump arc that lands on solid
+// ground toward the player and commits that — otherwise it stops at the edge
+// instead of walking into the void. The search escalates from a one-tile hop up
+// to the player's own jump velocity (PLAYER_JUMP_VELOCITY) and no further, so
+// the enemy clears exactly the gaps the player can, in any direction (up / down
+// / across), but never over-jumps a small gap and rockets into the ceiling.
+// Horizontal leap speed is floored at the player's run speed so a slow enemy
+// still gets the player's reach mid-leap.
+const ENEMY_LEAP_HORIZONTAL_SPEED = PLAYER_RUN_SPEED;
+// Ballistic-probe integration step and time budget. The step matches the 60 Hz
+// physics tick; the budget exceeds the player's flat airtime (~0.83 s) so the
+// longer arcs of downward leaps — and wall-sliding shaft climbs — are still
+// found. Cost is negligible — the search runs only at a ledge (a dozen-odd short
+// integration loops), far cheaper than the per-frame LOS raycast the chase does.
+const LEAP_PROBE_STEP_S = 1 / 60;
+const LEAP_PROBE_MAX_TIME_S = 1.3;
+// World grid size (px). LDtk authors this game on a 16 px tile, so terrain edges
+// and standable surfaces fall on 16 px boundaries.
+const TILE_PX = 16;
+// Sample stride (px) when testing a body edge against the tile grid in the
+// swept-AABB probe. Half a tile catches every 16 px collider along a body span
+// without a query per pixel.
+const LEAP_PROBE_SAMPLE_PX = 8;
+// A landing must clear at least this far (px) past the takeoff edge to count, so
+// the probe never "lands" the enemy back on the platform it's leaping from.
+const LEAP_MIN_ADVANCE_PX = 16;
+// Gentlest cross-gap leap. The smallest hop should rise exactly one tile (16 px)
+// — enough to pop a drop-off or a one-tile step cleanly without scraping the
+// near corner, but nothing taller. Solving v = √(2·g·h) with g = GRAVITY_Y (800)
+// and h = 16 → 160 px/s. findLeapLanding escalates from here toward the player
+// max only as far as a given gap actually demands.
+const LEAP_MIN_LAUNCH_VELOCITY = -160;
+// Search granularity for the minimum-sufficient launch velocity. 15 px/s spans
+// ~13 candidate arcs between the one-tile floor and the player max — fine enough
+// that the committed jump barely overshoots the gap, coarse enough to stay a
+// dozen-odd cheap probe sims at a ledge frame.
+const LEAP_LAUNCH_STEP = 15;
+// Horizontal safety margin (px) the descending foot must clear past the landing
+// platform's near edge for a leap to count. Landing right on the lip makes
+// Arcade resolve the touch on the X axis — shoving the body back off the edge
+// into the gap — instead of the Y axis (resting on top), which is why a bare-
+// minimum arc drops just short. Requiring the foot ~¾ tile onto the platform
+// guarantees enough overlap to separate upward and land. The solver escalates
+// launch velocity until the arc reaches this far in, so it adds only the height
+// a clean landing actually needs.
+const LEAP_LANDING_MARGIN_PX = 12;
+// --- Grounded chase "is it actually moving?" detection (run vs idle pose) ---
+// A grounded chaser can keep "chasing" while its body makes no headway — wedged
+// against a wall it can't mount, parked at a ledge it can't leap. Rather than
+// freeze it mid-stride ("running in place") or make it give up and wander off, we
+// drive the chase ANIMATION off real self-movement: it plays the walk clip while
+// moving and drops to its idle pose while wedged, but stays engaged (facing the
+// player, velocity still aimed at it) so it resumes the instant it can move again
+// — e.g. the player drops to a reachable spot. The metric is self-movement, not
+// distance-to-player: a chaser closing the last few pixels (or detouring around
+// terrain) is moving, so it keeps running; it never mistakes "player stepped just
+// out of reach" for "stuck" (which an earlier distance-based stuck-bail did — it
+// idled instead of closing back in). The grace window keeps a normally-moving
+// chaser from flickering to idle on a single stationary frame.
+const CHASE_STILL_GRACE_MS = 250;
+// Minimum body displacement (px) since the last movement mark that still counts
+// as "moving", so frame jitter — or a body wedged against a wall, which physics
+// pins to ~0 movement — doesn't keep refreshing the movement timestamp.
+const CHASE_MOVE_EPSILON_PX = 6;
+// Up-leap (mounting a platform whose vertical face is directly ahead). Only fires
+// when the player sits at least this far above the chaser, so it never jumps at a
+// wall to reach a level or below player.
+const UP_LEAP_MIN_RISE_PX = 24;
+// Column-scan stride (px) used to locate a mountable wall's top edge. 4 px finds
+// the lip finely enough to size the launch without tile-alignment math.
+const WALL_MOUNT_SCAN_STEP_PX = 4;
+// Throttle for the climb-from-under-an-overhang search. That branch runs the full
+// leap ladder, so cap it per enemy; between probes the enemy keeps walking toward
+// the player. ~12 Hz reacts fast enough to catch the takeoff window while walking
+// past it without paying the search every frame.
+const UP_PROBE_INTERVAL_MS = 80;
+// How far ahead (px) the climb-from-under gate looks for a platform to jump onto.
+// The launch window is BEFORE the platform's near edge (you can't land on a
+// platform you're directly under), so the gate must see a platform up to a jump's
+// horizontal reach ahead — ~6 tiles covers a player-grade arc.
+const UP_LEAP_SCAN_REACH_PX = 96;
 // Loiter behavior for airborne enemies (gravity:false). Replaces idle so a
 // crow/wasp out of chase range doesn't freeze mid-air in a grounded idle
 // pose. Drifts toward a randomized point above the player at a fraction of
@@ -114,6 +213,54 @@ const LOITER_REFRESH_MAX_MS = 3000;
 // and repick early, so the crow doesn't stutter against a target it
 // already overshot.
 const LOITER_TARGET_REACHED_DIST = 12;
+// Patrol dwell ("wandering"): while walking an authored loiterPath, the entity
+// periodically halts and idles for a short beat so the back-and-forth reads as
+// strolling-and-observing rather than a metronomic march. Both the stroll
+// interval and the pause length are randomized per-occurrence so the cadence
+// never looks mechanical. Applies to every path-follower (grounded NPCs,
+// combat enemies patrolling out of combat, airborne flyers) — the dwell lives
+// in updatePathLoiter, which only runs in the out-of-combat loiter state, so
+// chase/attack are never delayed by a pause.
+const PATH_WALK_INTERVAL_MIN_MS = 2500;
+const PATH_WALK_INTERVAL_MAX_MS = 5500;
+const PATH_PAUSE_DURATION_MIN_MS = 700;
+const PATH_PAUSE_DURATION_MAX_MS = 1800;
+// Spawn-anchored ground wander (behavior.wander; see updateAreaWander). A
+// grounded character with no authored loiterPath strolls within wander.radius
+// of its spawn X, reusing the path dwell timers/constants above for its rest
+// breaks. These tune the parts not authored per-entity.
+// Minimum step (px) between consecutive wander targets so a fresh pick is never
+// so close it "arrives" instantly and stutters the stroller in place.
+const WANDER_MIN_TARGET_STEP_PX = 24;
+// Vertical reach gates for a committed wander leap, measured from the takeoff
+// foot to the landing. A stroller climbs up to ~4 tiles and drops up to ~4 tiles
+// — symmetric so it can always climb back out of any drop it takes (no
+// stranding), and a 4-tile fall stays under the fall-damage threshold. Beyond
+// either bound it declines the leap and turns back from the edge.
+const WANDER_LEAP_MAX_RISE_PX = 64;
+const WANDER_LEAP_MAX_DROP_PX = 64;
+// Wander jumps reach higher than the chase ceiling (PLAYER_JUMP_VELOCITY) so a
+// stroller reliably lands atop a 4-tile-high platform: v=√(2·g·h), -380 ≈ a
+// 90 px apex (~5.6 tiles), clearing a 64 px climb with margin. findLeapLanding
+// still escalates from the one-tile floor, so flat gaps keep their gentle hop —
+// this only raises the ceiling it may reach when a climb actually demands it.
+const WANDER_MAX_LAUNCH_VELOCITY = -380;
+// Greeting (behavior.wander.greet). Tiny hop impulse — a fraction of the 2-tile
+// obstacle hop (ENEMY_JUMP_VELOCITY) so the greet bob reads as a friendly
+// bounce, not a jump. v=√(2·g·h) with g=GRAVITY_Y (800) → -120 ≈ a 9 px bob.
+const GREET_HOP_VELOCITY = -120;
+// Spacing (ms) between a greeter's successive bobs. It only actually launches
+// when grounded, so this is a floor on the cadence, not an exact period.
+const GREET_HOP_INTERVAL_MS = 240;
+// Throttle (ms) for the greet partner scan. Greeting is ambient flavor, so a
+// ~5 Hz look for a nearby partner is plenty and keeps the O(enemy count) scan
+// off the per-frame path.
+const GREET_SCAN_INTERVAL_MS = 200;
+// Greeting partners must be on the same floor — within this vertical band (px)
+// of each other. Tight (under a tile) so a walker on a platform above or below
+// is never treated as "beside" the one looking to greet, even though wanderers
+// now leap several tiles up/down.
+const GREET_SAME_FLOOR_PX = 12;
 // Per-instance chase variation. Reinforcement waves spawn many identical
 // enemies on the same frame; with one shared moveSpeed and pure straight-line
 // homing they chase the player as a single synchronized mass, which reads as a
@@ -131,6 +278,16 @@ const CHASE_SPEED_JITTER = 0.18;
 const AIRBORNE_WEAVE_FRACTION = 0.4;
 const AIRBORNE_WEAVE_FREQ_MIN = 2.2; // rad/s
 const AIRBORNE_WEAVE_FREQ_MAX = 4.0; // rad/s
+// Combo chaining tolerates the player being knocked beyond the lead attack's
+// strict range before it launches the follow-up. Every melee connect flings the
+// player back (PLAYER_HURT_KNOCKBACK_X), so a 1-for-1 range check would sever a
+// legitimate in-range combo the instant the opener lands — the player is shoved
+// out of `range` before the chain decision runs. The lead attack's range is
+// multiplied by this factor for the continue-decision ONLY (initial attack
+// selection still uses the strict range), so a flurry like the assassin's
+// attack1→attack2→attack3 stays fluid while still bailing if the player has
+// genuinely fled the encounter.
+const COMBO_FOLLOWUP_RANGE_TOLERANCE = 2;
 
 // Animation key suffixes that should pause an entity's ambience sequence
 // (e.g. the heart hoarder's cloth flap) while playing, then resume when the
@@ -153,6 +310,12 @@ function isTeleportAnimationKey(key: string): boolean {
 // member directly.
 interface EnemyHelperScene {
   spawnEnemyProjectile(options: EnemyProjectileSpawnOptions): void;
+  // Spawns a summoned minion of `identifier` at (x, y), drops it onto the
+  // floor beneath that point, wires it into the world as a normal enemy
+  // (no respawn tracking), and forces it into immediate pursuit. Returns the
+  // new Enemy, or null when the identifier doesn't resolve to a behavior-
+  // bearing registry entry. Used by 'summon' attacks (e.g. the summoner).
+  summonEnemyAt(identifier: string, x: number, y: number): Enemy | null;
   // True when the world-pixel segment from (x1,y1) to (x2,y2) intersects a
   // solid collision tile. Used to gate chase and ranged-attack initiation.
   isLineBlocked(x1: number, y1: number, x2: number, y2: number): boolean;
@@ -171,6 +334,11 @@ interface EnemyHelperScene {
     x: number,
     y: number,
   ): { worldX: number; worldY: number; pxWid: number; pxHei: number } | null;
+  // Invokes `cb` once for every live enemy in the world (the scene's enemies
+  // group), including the caller. Used by the wander greeting to find a nearby
+  // same-group partner; callers do their own group/proximity/self filtering and
+  // throttle the scan since this is O(enemy count).
+  forEachEnemy(cb: (enemy: Enemy) => void): void;
 }
 
 // IntGrid values from the LDtk source. Match the constants in Player.ts —
@@ -202,6 +370,11 @@ export interface EnemySpawnOverrides {
   // boss hold distinct stand-off slots beside the player instead of all homing
   // to the same player.x and stacking into one entity. 0 / unset = home dead-on.
   readonly chaseStandoffX?: number;
+  // Shared coordinator joining this enemy to its boss self-copy group. Gates
+  // teleports to one member at a time and feeds the lateral-separation pass so
+  // the group never stacks into one sprite (see TeleportCoordinator). Unset for
+  // everyone outside a split.
+  readonly attackCoordinator?: TeleportCoordinator;
 }
 
 // Animated entity that gains health, damage, and a behavior block. Owns the
@@ -327,6 +500,35 @@ export class Enemy extends AnimatedEntity {
   // never accrue fall damage even if their velocity briefly spikes.
   private peakFallVelocity = 0;
   private wasAirborne = false;
+  // Committed horizontal direction of an in-flight chase leap (see
+  // findLeapLanding and the grounded-chase branch). Set at takeoff so the enemy
+  // holds its arc toward the chosen landing even if the player darts to the
+  // other side mid-jump; reset to 0 on every grounded chase frame. 0 = not
+  // leaping, in which case ordinary wall-hops keep their normal chase speed.
+  private leapDirX: 1 | -1 | 0 = 0;
+  // Self-movement tracker driving the grounded chase animation (walk while
+  // moving, idle pose while wedged against a wall/ledge it can't pass — so a
+  // blocked chaser shows an idle pose instead of "running in place", yet stays
+  // engaged and resumes the instant it can move). `chaseAnchorX`/`chaseAnchorY`
+  // mark where the body last registered real movement; `chaseMovedAt` is when
+  // that was (0 = fresh/idle, re-armed on the next chase frame). `chaseAnimMoving`
+  // caches which clip is currently showing so it's only swapped on a flip, never
+  // restarted every frame. Reset when it stops chasing.
+  private chaseAnchorX = 0;
+  private chaseAnchorY = 0;
+  private chaseMovedAt = 0;
+  private chaseAnimMoving = false;
+  // Throttle for the climb-from-under-an-overhang probe (a full ladder search).
+  // Holds the last time it ran so it fires a few times a second, not every frame.
+  private lastUpProbeAt = 0;
+  // Escape-from-under-a-platform latch. When stranded beneath a platform the
+  // chaser walks out to its nearer edge; this holds that direction so, once the
+  // body clears the edge, "head toward the player" doesn't immediately pull it
+  // back under before it reaches the takeoff window. `escapeFromX` is where the
+  // latch was last refreshed, used to abort the escape after a bounded distance
+  // if no jump materialises. 0 = not escaping.
+  private escapeDirX: 1 | -1 | 0 = 0;
+  private escapeFromX = 0;
   // Latches true once the encounter sting (boss intro sound) has fired so the
   // sound plays exactly once per Enemy instance. A scene.restart respawn
   // creates a new Enemy and gets a fresh sting.
@@ -382,6 +584,33 @@ export class Enemy extends AnimatedEntity {
   // walks it backward. Flipped at the endpoints so the entity sweeps the
   // path A→B→C→B→A→B→C…
   private pathDirection: 1 | -1 = 1;
+  // Patrol-dwell timers (scene-time ms). While walking an authored loiterPath
+  // the entity strolls for a randomized interval, then halts and idles for a
+  // randomized beat — see updatePathLoiter. pathPauseUntil > now means it is
+  // currently parked at a dwell (0 = walking); nextPathPauseAt is when the
+  // next dwell begins. Both reset on every (re)entry into loiter so a patrol
+  // resumed after a chase starts clean rather than pausing immediately.
+  private pathPauseUntil = 0;
+  private nextPathPauseAt = 0;
+  // Spawn-anchored wander (behavior.wander). wanderConfig null = this entity
+  // doesn't wander (no block, or airborne/path-bound). wanderTargetX is the
+  // current stroll target X; wanderWalkAnimOn tracks whether the walk clip (vs
+  // the resting idle pose) is currently showing so updateAreaWander only swaps
+  // animations on change rather than every frame. See updateAreaWander.
+  private readonly wanderConfig: AnimatedEntityWanderConfig | null;
+  private wanderTargetX = 0;
+  private wanderWalkAnimOn = false;
+  // Greeting (behavior.wander.greet). While greetUntil > now a greeting is in
+  // progress: the entity is parked, facing greetFacing, bobbing tiny hops.
+  // greetHopsLeft counts the bobs remaining and greetNextHopAt paces them.
+  // nextGreetAt is the per-instance cooldown before it greets again; the scan
+  // for a partner is throttled to nextGreetScanAt. All scene-time ms.
+  private greetUntil = 0;
+  private greetFacing: 1 | -1 = 1;
+  private greetHopsLeft = 0;
+  private greetNextHopAt = 0;
+  private nextGreetAt = 0;
+  private nextGreetScanAt = 0;
   // World rect of the LDtk level the entity spawned in. Captured at
   // construction when behavior.stayInSpawnLevel is true so arena-bound bosses
   // can clamp movement/teleport destinations to a fixed arena. null when the
@@ -448,6 +677,11 @@ export class Enemy extends AnimatedEntity {
   // self-copies of a horizontal-movement-only boss flank the player on distinct
   // X slots instead of all homing to the same point. 0 for everyone else.
   private readonly chaseStandoffX: number;
+  // Shared boss self-copy coordinator (see EnemySpawnOverrides.attackCoordinator
+  // / TeleportCoordinator). null outside a split; set on copies at construction
+  // and on the boss via setTeleportCoordinator when round 3 begins. Drives the
+  // one-teleport-at-a-time lock and the lateral separation pass.
+  private teleportCoordinator: TeleportCoordinator | null;
   // Fixed-at-construction movement "personality" that desynchronizes packs
   // spawned on one frame (see CHASE_SPEED_JITTER / AIRBORNE_WEAVE_*). chaseSpeedMul
   // scales chase speed per-instance; weavePhase/weaveFreq drive the airborne
@@ -456,6 +690,18 @@ export class Enemy extends AnimatedEntity {
   private readonly chaseSpeedMul: number;
   private readonly weavePhase: number;
   private readonly weaveFreq: number;
+  // Dormant-until-spotted state (behavior.dormant). `dormant` holds the entity
+  // inert (no AI, no encounter) until it gains line of sight; `waking` is the
+  // brief window while the one-shot wake clip plays before normal AI resumes.
+  // dormantWakeAnim caches the logical wake-animation key so the gate doesn't
+  // re-read behavior.dormant each tick. All inert when behavior.dormant unset.
+  private dormant = false;
+  private waking = false;
+  private readonly dormantWakeAnim: string | null;
+  // Minions this entity has summoned that are still alive (type:'summon'
+  // attacks). Pruned before each cast to enforce summonMaxAlive. Never tracked
+  // for entities without a summon attack.
+  private activeSummons: Enemy[] = [];
 
   constructor(
     scene: Phaser.Scene,
@@ -491,11 +737,22 @@ export class Enemy extends AnimatedEntity {
       );
     }
     this.behavior = behavior;
+    // Cached spawn-anchored wander config (null unless this is a grounded
+    // character authored with behavior.wander). Drives updateAreaWander.
+    this.wanderConfig = behavior.wander ?? null;
+    this.dormantWakeAnim = behavior.dormant?.wakeAnimation ?? null;
     // A "harmless copy" (boss self-clone, see EnemySpawnOverrides) keeps the
     // source entry's animations/attacks/AI but deals no damage and is excluded
     // from the boss/round-fight machinery (isBoss/isRoundFight return false).
     this.harmless = spawnOverrides?.harmless === true;
     this.chaseStandoffX = spawnOverrides?.chaseStandoffX ?? 0;
+    // Copies arrive with the group's coordinator in their overrides — join the
+    // group now so the teleport lock + separation see them from frame one. The
+    // boss (built long before the split) joins later via setTeleportCoordinator.
+    this.teleportCoordinator = spawnOverrides?.attackCoordinator ?? null;
+    if (this.teleportCoordinator) {
+      this.teleportCoordinator.register(this);
+    }
     // Roll this instance's movement personality once. Math.random is used
     // elsewhere in this class (attack selection) — no seeded RNG needed since
     // the only goal is that sibling enemies differ from one another.
@@ -596,6 +853,18 @@ export class Enemy extends AnimatedEntity {
     // Cancel any pending hurt timer when the sprite is destroyed (e.g. on
     // HMR teardown or death-anim complete). Without this, the delayedCall
     // can fire against a destroyed body and throw.
+    // Dormant entities start inert, holding their asleep pose (a looping
+    // `sleepAnimation` when set, else the curled first frame of the wake clip);
+    // the update() dormant-gate plays the wake clip forward and clears the flag
+    // once the player is spotted. Two opt-outs: harmless self-copies (they
+    // inherit a dormant boss entry but must act immediately as part of the
+    // fight), and instances given an authored walk path — a patrolling ambusher
+    // makes no sense, so it skips the sleep/wake cycle and just walks its route.
+    if (behavior.dormant && !this.harmless && !this.loiterPath) {
+      this.dormant = true;
+      this.holdDormantPose();
+    }
+
     this.once(Phaser.GameObjects.Events.DESTROY, () => {
       if (this.hurtTimer) {
         this.hurtTimer.remove(false);
@@ -773,6 +1042,12 @@ export class Enemy extends AnimatedEntity {
 
     if (this.enemyState === 'dead' || this.enemyState === 'hurt') return;
 
+    // Lateral de-stacking for grouped self-copies — runs across every live
+    // state (idle / chase / attack / recover) so a hoarder pile that formed in
+    // any of them slides apart. No-op outside a split, and skips the active
+    // teleporter internally so a blink/strike placement is never perturbed.
+    this.applyHoarderSeparation();
+
     // Round-transition freeze: while the break timer is live the boss is
     // parked and invulnerable (takeDamage gates on the same field). Hold
     // position and skip all AI until it lapses, then resume from idle. Only
@@ -792,6 +1067,35 @@ export class Enemy extends AnimatedEntity {
     const dx = player.x - this.x;
     const dy = player.y - this.y;
     const dist = Math.hypot(dx, dy);
+
+    // Dormant gate: an ambush entity stays inert — holding its curled wake-pose
+    // frame, running no encounter/chase/attack logic — until it gains a clear
+    // line of sight to the player within the wake range. On first sight it
+    // plays its wake clip once (waking=true); onAnimComplete clears both flags
+    // and hands off to the normal AI loop, which then idles until the player is
+    // within an attack's range. Returns early for the whole dormant + waking
+    // window so nothing below runs before the entity has woken.
+    if (this.dormant) {
+      if (!this.behavior.immovable) {
+        this.body.setVelocityX(0);
+        if (!this.body.allowGravity) this.body.setVelocityY(0);
+      }
+      if (this.waking) return; // wake clip is mid-play; wait for it to finish
+      const wakeRange = this.behavior.dormant?.range ?? DEFAULT_DORMANT_WAKE_RANGE;
+      const helper = this.scene as unknown as EnemyHelperScene;
+      if (
+        this.dormantWakeAnim != null &&
+        dist <= wakeRange &&
+        !helper.isLineBlocked(this.x, this.y, player.x, player.y)
+      ) {
+        // Face the player as it wakes so the first attack points the right way.
+        this.facingDirection = dx >= 0 ? 1 : -1;
+        this.setFacing(this.facingDirection === -1);
+        this.waking = true;
+        this.playLogical(this.dormantWakeAnim);
+      }
+      return;
+    }
 
     // Boss-encounter sting + engage-delay start: fires once the first time
     // the player crosses into the boss's engagement zone. For arena-bound
@@ -837,7 +1141,16 @@ export class Enemy extends AnimatedEntity {
       }
     }
 
-    if (this.attacks.length === 0) return;
+    // Attack-less characters (e.g. spirit walkers) never fight: they patrol
+    // their loiterPath under gravity — or stand idle when they have no path —
+    // using the same movement code as any other character, then return before
+    // all the attack/chase logic below. A hit can still knock them back, but
+    // with no attack to resolve they can't be drawn into a chase; they just
+    // resume walking their route.
+    if (this.attacks.length === 0) {
+      this.enterIdleOrLoiter(player);
+      return;
+    }
 
     this.playerRef = player;
 
@@ -1013,34 +1326,188 @@ export class Enemy extends AnimatedEntity {
       // a spider on a higher ledge walks off and drops down to engage instead of
       // idling behind the arena floor. The gate still stands during normal
       // exploration, where wall-grinding pursuit would look broken.
-      if (
+      const now = this.scene.time.now;
+      const losBlocked =
         !this.isConverging() &&
-        helper.isLineBlocked(this.x, this.y, player.x, player.y)
-      ) {
+        helper.isLineBlocked(this.x, this.y, player.x, player.y);
+      // Airborne chasers keep a strict sightline gate — they navigate in 2D and
+      // would otherwise grind against walls between them and the player.
+      if (losBlocked && !this.body.allowGravity) {
         this.enterEngagedFallback(player);
         return;
       }
-      if (this.enemyState !== 'chase') {
-        this.enemyState = 'chase';
-        const walkAnim = chaseLead.walkAnimation;
-        if (walkAnim) this.playLogical(walkAnim);
+      // Decide whether the chaser is actually making headway, to drive its
+      // animation (walk while moving, idle pose while wedged) without ever leaving
+      // the chase — see CHASE_STILL_GRACE_MS. Self-movement, not distance-to-
+      // player, so closing the last few px (or detouring around terrain) still
+      // reads as moving. Airborne and converging chasers always read as moving
+      // (they navigate in 2D / are scripted through geometry). The first frame of
+      // a fresh chase counts as moving so it shows the walk clip at once instead of
+      // inheriting a stale wedged state from a prior chase (e.g. right after an
+      // attack/recover cycle, before the body has stepped).
+      const enteringChase = this.enemyState !== 'chase';
+      let chaseMoving = true;
+      if (this.body.allowGravity && !this.isConverging()) {
+        const movedSq =
+          (this.x - this.chaseAnchorX) ** 2 + (this.y - this.chaseAnchorY) ** 2;
+        if (
+          enteringChase ||
+          this.chaseMovedAt === 0 ||
+          movedSq > CHASE_MOVE_EPSILON_PX * CHASE_MOVE_EPSILON_PX
+        ) {
+          // Fresh chase, or the body moved a real margin since the last mark —
+          // (re)anchor here and stamp the movement time.
+          this.chaseAnchorX = this.x;
+          this.chaseAnchorY = this.y;
+          this.chaseMovedAt = now;
+        }
+        chaseMoving = now - this.chaseMovedAt < CHASE_STILL_GRACE_MS;
+      } else {
+        this.chaseMovedAt = 0;
       }
-      // Refresh per-frame so surface-gated footsteps (pebble vs metal stairs)
-      // flip when the enemy walks onto/off a bridge. Airborne chasers (no
-      // gravity) and chasers off any IntGrid tile resolve to `null`, which
-      // silences surface anchors while still letting `'always'` anchors play
-      // (e.g. ghoul mud footsteps stay audible even mid-hop).
-      setEnemyWalkSoundEnabled(this, true, this.currentWalkSurface());
+      // Enter/stay in chase, showing the walk clip while moving and the idle pose
+      // while wedged. Swap the clip only on a flip so it isn't restarted (frozen
+      // on frame 0) every frame; footsteps follow the same moving/idle state.
+      const walkAnim = chaseLead.walkAnimation;
+      if (enteringChase) this.enemyState = 'chase';
+      if (enteringChase || chaseMoving !== this.chaseAnimMoving) {
+        this.chaseAnimMoving = chaseMoving;
+        if (chaseMoving && walkAnim) {
+          this.playLogical(walkAnim);
+        } else {
+          this.playAmbientAnimation();
+        }
+      }
+      // Surface-gated footsteps (pebble vs metal stairs) follow the moving state,
+      // and re-resolve per-frame so they flip when the chaser walks onto/off a
+      // bridge. Off any IntGrid tile they resolve to `null`, silencing surface
+      // anchors while still letting `'always'` anchors play (e.g. ghoul mud).
+      setEnemyWalkSoundEnabled(this, chaseMoving, this.currentWalkSurface());
       // Per-instance chase-speed spread so a same-frame swarm desyncs instead
       // of chasing in lockstep. Bosses keep their exact hand-tuned speed.
       const speedMul = this.isBoss() ? 1 : this.chaseSpeedMul;
       if (this.body.allowGravity) {
-        // Ground-bound chase: drive horizontally, hop short walls
-        // (≤ 2 tiles) so the chaser can follow the player up small steps.
-        if (this.shouldJumpOverObstacle()) {
-          this.setVelocityY(ENEMY_JUMP_VELOCITY);
+        // Ground-bound chase. Each grounded frame, in priority order:
+        //   1. Hop a short solid wall directly ahead (≤2 tiles) — small steps.
+        //   2. At a ledge with open air ahead, leap toward the player — the
+        //      wall-aware probe finds the up / down / across landing that best
+        //      closes on the player (including riding up a wall-attached platform
+        //      in a vertical shaft); otherwise stop at the edge, never the void.
+        //   3. Player on a platform above with a wall directly ahead — mount it
+        //      (a flush-wall climb the ledge probe can't be launched from).
+        //   4. Player above while on open ground — climb onto an overhead
+        //      platform once positioned under its edge.
+        //   5. Otherwise drive horizontally toward the player.
+        // While airborne mid-leap, hold the committed leap momentum so the arc
+        // actually clears the gap; an ordinary wall-hop (no leap committed)
+        // keeps normal chase speed so short hops are unchanged.
+        const dir = this.facingDirection;
+        const moveX = chaseLead.moveSpeed! * speedMul;
+        const leapX = Math.max(moveX, ENEMY_LEAP_HORIZONTAL_SPEED);
+        if (this.body.blocked.down) {
+          this.leapDirX = 0;
+          const blockedAhead =
+            dir === 1 ? this.body.blocked.right : this.body.blocked.left;
+          const playerAbove = dy < -UP_LEAP_MIN_RISE_PX;
+          if (this.shouldJumpOverObstacle()) {
+            this.setVelocityY(ENEMY_JUMP_VELOCITY);
+            this.setVelocityX(moveX * dir);
+          } else if (this.isLedgeAhead(dir)) {
+            // Leap toward the player: up a shaft, down to a lower platform, or
+            // across a gap — whichever lands closest to the player. The launch
+            // is the gentlest that lands solidly (see findLeapLanding); its
+            // horizontal speed is held through the arc by the leapDirX latch.
+            const landing = this.findLeapLanding(dir, leapX, player);
+            if (landing) {
+              this.leapDirX = dir;
+              this.setVelocityY(landing.vy);
+              this.setVelocityX(leapX * dir);
+            } else {
+              // Nothing reachable toward the player off this edge — park instead
+              // of walking into the void.
+              this.setVelocityX(0);
+            }
+          } else if (playerAbove && blockedAhead) {
+            // Player above and a wall blocks the walk forward: mount it (see
+            // findWallMountLaunch). Null → keep pressing; the stuck-tracker
+            // reroutes instead of hammering a wall it can't climb.
+            const mountVy = this.findWallMountLaunch(dir);
+            if (mountVy !== null) {
+              this.leapDirX = dir;
+              this.setVelocityY(mountVy);
+              this.setVelocityX(leapX * dir);
+            } else {
+              this.setVelocityX(moveX * dir);
+            }
+          } else if (playerAbove) {
+            // Player on a platform above while we're on open ground (no ledge,
+            // no flush wall). Probe an up-leap onto a platform ahead-and-above
+            // (throttled — it's the full ladder search) and commit when one lands
+            // higher than here. The takeoff window is BEFORE the platform's near
+            // edge, so the probe must run while the platform is still ahead.
+            const now = this.scene.time.now;
+            let climbed = false;
+            if (
+              now - this.lastUpProbeAt >= UP_PROBE_INTERVAL_MS &&
+              this.hasReachablePlatformAhead(dir)
+            ) {
+              this.lastUpProbeAt = now;
+              const landing = this.findLeapLanding(dir, leapX, player);
+              if (landing && landing.y < this.body.bottom - UP_LEAP_MIN_RISE_PX) {
+                this.leapDirX = dir;
+                this.escapeDirX = 0;
+                this.setVelocityY(landing.vy);
+                this.setVelocityX(leapX * dir);
+                climbed = true;
+              }
+            }
+            if (!climbed) {
+              // Can't jump from here yet — choose how to reposition. Every
+              // escape step goes through tryEscapeStep, which ledge-guards the
+              // move (so working out from under a platform never walks the body
+              // off its own floor) and faces the travel direction (so it
+              // doesn't moonwalk away from the player it's facing).
+              const underDir = this.overheadEscapeDir();
+              if (underDir !== 0 && this.tryEscapeStep(underDir, moveX)) {
+                // Stranded under a platform: walking out toward its nearer edge.
+                // Latch the direction and where we started so the continuation
+                // below carries us into the takeoff window once we're clear.
+                this.escapeDirX = underDir;
+                this.escapeFromX = this.x;
+              } else if (
+                underDir !== 0 &&
+                this.tryEscapeStep((-underDir) as 1 | -1, moveX)
+              ) {
+                // Nearer edge runs off a ledge — head for the far edge instead
+                // so we still get out from under without stepping into the void.
+                this.escapeDirX = (-underDir) as 1 | -1;
+                this.escapeFromX = this.x;
+              } else if (
+                underDir === 0 &&
+                this.escapeDirX !== 0 &&
+                Math.abs(this.x - this.escapeFromX) <= UP_LEAP_SCAN_REACH_PX &&
+                this.tryEscapeStep(this.escapeDirX, moveX)
+              ) {
+                // Just cleared the overhang — keep going the latched way into
+                // the takeoff window (tryEscapeStep set velocity + facing) so
+                // "toward the player" doesn't pull us back under before the
+                // up-probe fires next tick.
+              } else {
+                // Free of any overhang, or every escape route runs off a ledge —
+                // close on the player to reach a takeoff edge. dir was
+                // ledge-checked by the outer branch, so moving that way is safe.
+                this.escapeDirX = 0;
+                this.setVelocityX(moveX * dir);
+              }
+            }
+          } else {
+            this.setVelocityX(moveX * dir);
+          }
+        } else if (this.leapDirX !== 0) {
+          this.setVelocityX(leapX * this.leapDirX);
+        } else {
+          this.setVelocityX(moveX * dir);
         }
-        this.setVelocityX(chaseLead.moveSpeed! * speedMul * this.facingDirection);
       } else if (this.behavior.horizontalMovementOnly) {
         // Airborne but horizontal-locked (heart hoarder): chase along X only.
         // Y stays parked so the boss glides on a fixed line and only changes
@@ -1087,6 +1554,9 @@ export class Enemy extends AnimatedEntity {
       return;
     }
 
+    // Not pursuing this frame (out of range, leashed, or can't move) — idle the
+    // movement tracker so the next pursuit re-arms from a fresh window.
+    this.chaseMovedAt = 0;
     this.enterEngagedFallback(player);
   }
 
@@ -1111,6 +1581,14 @@ export class Enemy extends AnimatedEntity {
     // every damage source (projectile, melee, trap, fall) since they all
     // funnel through here.
     if (this.roundBreakUntil > this.scene.time.now) return;
+    // A hit wakes a dormant ambusher immediately — being struck counts as
+    // being spotted. Clear the flags so the normal hurt → AI flow takes over
+    // (no wake clip; it was rudely roused) instead of snapping back to the
+    // curled pose in the dormant gate next tick.
+    if (this.dormant) {
+      this.dormant = false;
+      this.waking = false;
+    }
     this.health = Math.max(0, this.health - damage);
     if (options.sourceIsPlayer !== false) {
       this.enterCombat();
@@ -1185,7 +1663,7 @@ export class Enemy extends AnimatedEntity {
     this.attackFired = false;
     this.firedMeleeHitboxes.clear();
     this.firedAoeDamageFrames.clear();
-    this.currentAttack = null;
+    this.clearCurrentAttack();
     // Clears the teleport phase + restores gravity when a hit cancels a
     // mid-blink boss. No-op if no teleport was active.
     this.endTeleport();
@@ -1249,7 +1727,7 @@ export class Enemy extends AnimatedEntity {
     this.attackFired = false;
     this.firedMeleeHitboxes.clear();
     this.firedAoeDamageFrames.clear();
-    this.currentAttack = null;
+    this.clearCurrentAttack();
     // Restores gravity + clears the teleport phase if the crossing hit landed
     // mid-teleport, so the boss doesn't freeze mid-blink.
     this.endTeleport();
@@ -1292,14 +1770,45 @@ export class Enemy extends AnimatedEntity {
   // range), one is picked uniformly at random — gives bosses a varied
   // attack rhythm without scripting a sequence.
   private pickAttack(dist: number): AnimatedEntityAttackConfig | null {
+    // No attacking mid-jump. A gravity-bound enemy that has left the ground
+    // (leaping a gap, hopping onto a platform, or knocked into the air) holds
+    // its swing until it lands — a melee hit or shot fired from the air reads
+    // as broken and lets the enemy strike from places it shouldn't reach. The
+    // check is gated on allowGravity so flyers (crows, wasps), which are
+    // airborne by design, are unaffected; it mirrors the off-grid idiom in
+    // currentWalkSurface.
+    if (
+      this.body.allowGravity &&
+      !this.body.blocked.down &&
+      !this.body.touching.down
+    ) {
+      return null;
+    }
     const now = this.scene.time.now;
     const eligible: AnimatedEntityAttackConfig[] = [];
     for (const attack of this.attacks) {
       if (attack.type === 'contact') continue;
+      // Combo-only follow-ups are never selected on their own — they run only
+      // via tryEnterComboFollowup as another attack's chain. Skipping here is
+      // what makes a strict "B only after A" finisher (e.g. assassin attack2)
+      // unreachable except as the attack1 follow-up.
+      if (attack.comboOnly === true) continue;
       // Per-attack lockout — skip if this specific attack is still on
       // its recast timer regardless of range / heal-threshold.
       const readyAt = this.attackReadyAt.get(attack) ?? 0;
       if (now < readyAt) continue;
+      // Group teleport lock — only one boss self-copy may be mid-teleport at a
+      // time. Without this the whole hoarder family blinks onto the player at
+      // once (every teleport repositions to the player's spot), reading as one
+      // stacked sprite and landing attack1 in unison. Skip teleports while a
+      // group-mate holds the lock; melee/aoe stay eligible so the others keep
+      // pressuring instead of freezing. No coordinator (solo boss) = no gate.
+      if (
+        attack.type === 'teleport' &&
+        this.teleportCoordinator?.isLockedByOther(this) === true
+      ) {
+        continue;
+      }
       if (attack.type === 'heal') {
         const threshold = attack.healThreshold ?? 0.5;
         if (this.health / this.maxHealth >= threshold) continue;
@@ -1311,6 +1820,21 @@ export class Enemy extends AnimatedEntity {
         // types leave it undefined and pass freely.
         const minRange = attack.minRange ?? 0;
         if (dist < minRange) continue;
+        // Straight projectiles fly horizontally, so a shot can only connect
+        // when the muzzle's Y line passes through the player's body. When the
+        // attack opts in via verticalAlignMarginPx, skip it while the player is
+        // on a different elevation — the entity then falls through to chase and
+        // repositions onto the player's row (or closes for melee) instead of
+        // firing volleys that sail over/under them. Without this gate a mobile
+        // straight shooter (hell bot) wastes every shot at a player one platform
+        // up and never approaches.
+        if (
+          attack.projectileStraight === true &&
+          attack.verticalAlignMarginPx != null &&
+          !this.straightShotAligned(attack)
+        ) {
+          continue;
+        }
         eligible.push(attack);
       }
     }
@@ -1333,6 +1857,25 @@ export class Enemy extends AnimatedEntity {
     // Floating-point slack guard — pick the last entry if rounding leaves
     // `pick` non-negative after the loop.
     return eligible[eligible.length - 1];
+  }
+
+  // True when a straight projectile fired right now would pass through the
+  // player's body vertically — i.e. the muzzle's Y line (the same origin the
+  // shot spawns from, this.y + projectileOriginY) sits within the player's body
+  // height, expanded by the attack's verticalAlignMarginPx. Gates straight
+  // ranged/magic attacks in pickAttack so a turret-style shooter only commits
+  // when the shot can actually connect; off-row it chases to align instead.
+  // Returns false (not aligned → don't fire) when there's no player reference
+  // yet, so the entity defers to chasing rather than firing blind.
+  private straightShotAligned(attack: AnimatedEntityAttackConfig): boolean {
+    const player = this.playerRef;
+    if (!player) return false;
+    const muzzleY = this.y + (attack.projectileOriginY ?? 0);
+    const margin = attack.verticalAlignMarginPx ?? 0;
+    return (
+      muzzleY >= player.body.top - margin &&
+      muzzleY <= player.body.bottom + margin
+    );
   }
 
   private enterAttackState(attack: AnimatedEntityAttackConfig): void {
@@ -1368,6 +1911,13 @@ export class Enemy extends AnimatedEntity {
       if (!this.body.allowGravity) this.setVelocityY(0);
     }
     if (attack.type === 'teleport') {
+      // Claim the group teleport lock for the whole disappear → appear → strike
+      // sequence so no group-mate blinks onto the player alongside us. Released
+      // by clearCurrentAttack on every attack-exit path (recover / hurt / dead /
+      // round-break / idle / loiter). pickAttack already gated others out, and
+      // updates run single-threaded, so this is a safe unconditional claim. No-op
+      // for a solo boss (no coordinator).
+      this.teleportCoordinator?.acquire(this);
       // Phase 1: play the disappear clip at the pre-teleport position. The
       // ANIMATION_COMPLETE handler re-fires us into phase 2 (reposition +
       // appear). Gravity is suspended for the full attack so the boss
@@ -1414,8 +1964,18 @@ export class Enemy extends AnimatedEntity {
     const player = this.playerRef;
     if (player) {
       const dist = Math.hypot(player.x - this.x, player.y - this.y);
-      // Don't chain into empty space if the player left the lead attack's reach.
-      if (attack.range != null && dist > attack.range) return false;
+      // Don't chain into empty space if the player has genuinely left the
+      // combo's reach — but tolerate the knockback the lead hit just dealt, or a
+      // strict check would sever every combo the moment the opener connects (the
+      // hit shoves the player out of `range`). Combo-only links carry no range of
+      // their own (attack.range == null, e.g. assassin attack2→attack3) and chain
+      // unconditionally; reachability was already vetted by the opener.
+      if (
+        attack.range != null &&
+        dist > attack.range * COMBO_FOLLOWUP_RANGE_TOLERANCE
+      ) {
+        return false;
+      }
       // Facing locks during 'attack', so update() won't re-orient us between
       // swings — re-face the player here so the follow-up points the right way.
       this.facingDirection = player.x >= this.x ? 1 : -1;
@@ -1443,6 +2003,18 @@ export class Enemy extends AnimatedEntity {
     resumeEntitySoundSequence(this);
   }
 
+  // Single exit point for the in-flight swing: releases the group teleport lock
+  // (no-op unless this was a teleport we held) before clearing currentAttack.
+  // Every state that ends or cancels an attack — recover, hurt, dead, round-
+  // break, idle, loiter — routes through here so a teleport interrupted mid-blink
+  // can never strand the lock and freeze every group-mate's teleport.
+  private clearCurrentAttack(): void {
+    if (this.currentAttack?.type === 'teleport') {
+      this.teleportCoordinator?.release(this);
+    }
+    this.currentAttack = null;
+  }
+
   // Reactive teleport triggered by GameScene when the player fires a
   // projectile within behavior.dodgeOnProjectile.triggerRangePx. Picks one of
   // the entity's own `type: 'teleport'` attacks (the existing gap-closers)
@@ -1456,6 +2028,9 @@ export class Enemy extends AnimatedEntity {
     if (!cfg) return;
     if (this.enemyState === 'dead' || this.enemyState === 'hurt') return;
     if (this.teleportPhase !== null) return;
+    // Honor the group teleport lock here too — a reactive dodge mustn't blink a
+    // second hoarder onto the player while a group-mate is mid-teleport.
+    if (this.teleportCoordinator?.isLockedByOther(this) === true) return;
     if (this.scene.time.now < this.projectileReactionReadyAt) return;
     const dx = originX - this.x;
     const dy = originY - this.y;
@@ -1625,9 +2200,58 @@ export class Enemy extends AnimatedEntity {
     this.setVelocityY((dy * 1000) / durationMs);
   }
 
+  // Snaps the body forward by up to `distance` source px in the facing
+  // direction at the end of a lunge attack (see
+  // AnimatedEntityAttackConfig.lungeDistance). body.reset repositions body +
+  // sprite together and zeroes velocity — correct for the attack→recover
+  // handoff. The distance is first clamped by safeLungeDistance so the snap
+  // can't drop the enemy through the world edge or out over a gap; clampToArena
+  // on the next tick still pulls an arena-bound boss back inside its rect.
+  private applyLungeDisplacement(distance: number): void {
+    const safe = this.safeLungeDistance(distance);
+    this.body.reset(this.x + safe * this.facingDirection, this.y);
+  }
+
+  // Clamps a requested lunge displacement to the furthest forward distance
+  // (0..distance) that keeps the body inside the world bounds and — for
+  // gravity-bound entities — over solid ground. body.reset teleports with no
+  // collision, and a path-walking enemy like the assassin has no
+  // spawnLevelBounds for clampToArena to rescue it, so an unclamped lunge can
+  // reset the body past the world edge (it falls through the world) or off a
+  // ledge (it falls to its death). Steps along the path at LEAP_PROBE_SAMPLE_PX
+  // — fine enough that a one-tile gap can't slip between samples — and stops at
+  // the first unsafe step, parking the body at the near edge instead of
+  // teleporting it across the gap. Flyers (no gravity) skip the ground check so
+  // they can still lunge over open air.
+  private safeLungeDistance(distance: number): number {
+    if (distance <= 0) return distance;
+    const helper = this.scene as unknown as EnemyHelperScene;
+    const dir = this.facingDirection;
+    const probeY = this.body.bottom + FOOTSTEP_TILE_PROBE_OFFSET_Y;
+    const bounds = this.scene.physics.world.bounds;
+    const halfWidth = this.body.width / 2;
+    const minCenterX = bounds.left + halfWidth;
+    const maxCenterX = bounds.right - halfWidth;
+    const startCenterX = this.body.center.x;
+    // Only gravity-bound entities fall into gaps; flyers can lunge over air.
+    const guardGaps = this.body.allowGravity;
+    let safe = 0;
+    for (let d = LEAP_PROBE_SAMPLE_PX; ; d += LEAP_PROBE_SAMPLE_PX) {
+      // Clamp the final sample to the exact endpoint so a fully-clear path
+      // lands at `distance` rather than the last whole step short of it.
+      const step = Math.min(d, distance);
+      const candidateCenterX = startCenterX + step * dir;
+      if (candidateCenterX < minCenterX || candidateCenterX > maxCenterX) break;
+      if (guardGaps && !helper.isTileSolidAt(candidateCenterX, probeY)) break;
+      safe = step;
+      if (step >= distance) break;
+    }
+    return safe;
+  }
+
   private enterIdle(): void {
     this.enemyState = 'idle';
-    this.currentAttack = null;
+    this.clearCurrentAttack();
     if (!this.behavior.immovable) {
       this.body.setVelocityX(0);
       if (!this.body.allowGravity) this.body.setVelocityY(0);
@@ -1643,14 +2267,41 @@ export class Enemy extends AnimatedEntity {
   // original semantics so partial-anim entities (e.g. The_hive uses
   // 'take_off' as its resting pose) keep working.
   private playAmbientAnimation(): void {
-    if (this.canLoiter()) {
-      const walkAnim = this.attacks[0]?.walkAnimation;
+    // Only AIRBORNE loiterers (crows, wasps) hold their walk/fly clip while at
+    // rest — a flyer snapping to a grounded idle pose mid-air looks broken.
+    // Grounded entities, including authored path-walkers (canLoiter() is true
+    // for them too), show the idle pose when standing still; their walk clip is
+    // for actual locomotion only. Without the gravity gate a path-walking melee
+    // enemy (e.g. the assassin) would "run in place" through its post-attack
+    // recover — the body is parked there but this resting animation is showing.
+    if (!this.body.allowGravity && this.canLoiter()) {
+      const walkAnim = this.effectiveWalkAnimation();
       if (walkAnim) {
         this.playLogical(walkAnim);
         return;
       }
     }
     this.playLogical(this.config.defaultAnimation);
+  }
+
+  // Shows the dormant pose: the curled first frame of the wake clip, held
+  // paused. Called once at construction for dormant entities; the update()
+  // dormant-gate plays the clip forward from here when the player is spotted.
+  private holdDormantPose(): void {
+    // When the entity defines an explicit looping sleep clip (e.g. the wheel
+    // bot's curled 'sleep'), rest on that while dormant; the gate swaps to the
+    // one-shot wake clip on first sight. playLogical returns false if the key
+    // is missing, so a bad config falls through to the wake-frame-0 pose.
+    const sleepAnim = this.behavior.dormant?.sleepAnimation;
+    if (sleepAnim != null && this.playLogical(sleepAnim)) return;
+    if (this.dormantWakeAnim == null) return;
+    const wakeKey = entityAnimFullKey(this.getIdentifier(), this.dormantWakeAnim);
+    // play() starts the clip at frame 0; pausing immediately holds that curled
+    // first frame. Passing no frame to pause() avoids caching a live frame
+    // object that can go stale (and silently no-op) across an animation-manager
+    // rebuild on HMR.
+    this.play(wakeKey);
+    this.anims.pause();
   }
 
   // Returns x clamped so a body of this entity's width centered there fits
@@ -1727,6 +2378,114 @@ export class Enemy extends AnimatedEntity {
   forceConverge(): void {
     this.forcePursue();
     this.convergeUntil = this.scene.time.now + ENEMY_COMBAT_TIMEOUT_MS;
+  }
+
+  // External trigger to make this enemy give up the chase on the spot: clears
+  // the aggro, converge, and hive-alarm windows so it stops pursuing now rather
+  // than ENEMY_COMBAT_TIMEOUT_MS after the last blow. Used by the boss-fight
+  // escape system — while the player is outside the arena every arena enemy is
+  // dropped each frame so nothing trails the player out of the room; they fall
+  // back to their loiter path / home drift / idle. A live chase is broken
+  // immediately; other states unwind through update()'s normal routing once the
+  // windows are clear.
+  dropPursuit(): void {
+    this.aggroUntil = 0;
+    this.convergeUntil = 0;
+    this.homeAlarmUntil = 0;
+    this.leashBroken = false;
+    if (this.enemyState === 'chase') {
+      this.enterIdle();
+    }
+  }
+
+  // Full fight reset, called by GameScene's escape system when the player
+  // abandons the arena past the grace window. Restores this boss to its
+  // pre-encounter state so a returning player meets a fresh fight: HP and round
+  // back to full, the encounter latch + engage gate re-armed (re-entering
+  // replays the sting and engage delay), every aggro/converge/break window
+  // cleared, any committed swing or mid-blink teleport unwound (mirrors
+  // beginRoundBreak's cleanup — restores gravity, releases the group teleport
+  // lock), and the body snapped home to its spawn point. The self-copy
+  // coordinator ref is dropped because GameScene destroys the copies on reset.
+  // enterIdle leaves the boss resting until the encounter re-triggers.
+  resetEncounter(): void {
+    this.health = this.maxHealth;
+    this.healthBar?.setHealth(this.health, this.maxHealth);
+    this.roundReached = 1;
+    this.encounterTriggered = false;
+    this.engageReadyAt =
+      this.behavior.engageDelayMs !== undefined
+        ? Number.POSITIVE_INFINITY
+        : 0;
+    this.aggroUntil = 0;
+    this.convergeUntil = 0;
+    this.homeAlarmUntil = 0;
+    this.roundBreakUntil = 0;
+    // A fresh fight shouldn't count minions summoned in the abandoned one
+    // against the summon cap. (Defensive: summon attacks are on non-boss
+    // entities today, but resetEncounter is the right place to clear this.)
+    this.activeSummons = [];
+    this.leashBroken = false;
+    this.attackFired = false;
+    this.firedMeleeHitboxes.clear();
+    this.firedAoeDamageFrames.clear();
+    this.clearCurrentAttack();
+    this.endTeleport();
+    this.teleportCoordinator = null;
+    if (this.hurtTimer) {
+      this.hurtTimer.remove(false);
+      this.hurtTimer = null;
+    }
+    // Snap home and stop dead — body.reset repositions the sprite to the spawn
+    // point and zeroes velocity/acceleration in one call.
+    this.body.reset(this.spawnX, this.spawnY);
+    setEnemyWalkSoundEnabled(this, false);
+    this.enterIdle();
+  }
+
+  // Joins this enemy to a boss self-copy group's shared coordinator. Used for
+  // the BOSS itself, which is constructed long before it splits — copies receive
+  // the coordinator through their spawn overrides instead. Registers so the
+  // separation pass and teleport lock include the boss from the moment round 3
+  // begins. Idempotent (register is a Set add).
+  setTeleportCoordinator(coordinator: TeleportCoordinator): void {
+    this.teleportCoordinator = coordinator;
+    coordinator.register(this);
+  }
+
+  // Lateral de-stacking for grouped self-copies. The chase stand-off slots only
+  // spread members while actively chasing; teleport landings, edge-clamped
+  // slots, and the zero-velocity attack/recover/idle states can still leave two
+  // hoarders overlapping. Each frame, nudge this member away (X only — the
+  // family is horizontal-movement-only) from any group-mate within MIN_DX, so
+  // the trio never collapses into a single sprite. No-op outside a split (no
+  // coordinator). The active teleporter is skipped so its blink reposition /
+  // strike placement is never perturbed; a stacked group-mate of the teleporter
+  // still slides off it (the teleporter holds its spot, the other moves the full
+  // amount via the iid tie-break).
+  private applyHoarderSeparation(): void {
+    const coordinator = this.teleportCoordinator;
+    if (!coordinator || !this.body) return;
+    if (this.teleportPhase !== null) return;
+    let push = 0;
+    for (const other of coordinator.getMembers()) {
+      if (other === this || !other.active || !other.body) continue;
+      const dx = this.x - other.x;
+      const absDx = Math.abs(dx);
+      if (absDx >= HOARDER_SEPARATION_MIN_DX_PX) continue;
+      // Direction away from the overlap. Perfectly stacked (dx === 0) breaks the
+      // tie on the stable per-spawn iid so the pair splits apart deterministically
+      // instead of both picking the same side and never separating.
+      const dir = dx !== 0 ? Math.sign(dx) : this.iid < other.iid ? -1 : 1;
+      // Closer overlap pushes harder (0 at the edge of MIN_DX, 1 when fully
+      // stacked), so members ease into their gap rather than snapping.
+      push += dir * ((HOARDER_SEPARATION_MIN_DX_PX - absDx) / HOARDER_SEPARATION_MIN_DX_PX);
+    }
+    if (push === 0) return;
+    const clamped = Math.max(-1, Math.min(1, push));
+    // Move the game object; the arcade body re-syncs from it next physics step,
+    // and update()'s clampToArena keeps the nudge inside the arena.
+    this.x += clamped * HOARDER_SEPARATION_PUSH_SPEED;
   }
 
   // World point this enemy was constructed at. Exposed so GameScene can tether
@@ -1807,27 +2566,48 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
+  // Patrol movement source, decoupled from combat. The lead attack's
+  // walkAnimation/moveSpeed win when present (every existing combat entity);
+  // otherwise these fall back to the behavior block so an attack-less
+  // character (spirit walkers) patrols its loiterPath with the same code.
+  // Each getter returns undefined when no source supplies a value.
+  private effectiveWalkAnimation(): string | undefined {
+    return this.attacks[0]?.walkAnimation ?? this.behavior.walkAnimation;
+  }
+
+  private effectiveMoveSpeed(): number | undefined {
+    return this.attacks[0]?.moveSpeed ?? this.behavior.moveSpeed;
+  }
+
   // Gate for loiter eligibility. Two distinct paths:
-  //   - LDtk-authored patrol: any non-immovable enemy with a walkAnimation
-  //     and moveSpeed on its lead attack can walk its loiterPath, regardless
-  //     of gravity. Grounded enemies steer X only; airborne steer X and Y.
+  //   - LDtk-authored patrol: any non-immovable character with an effective
+  //     walkAnimation and moveSpeed (from its lead attack or, for attack-less
+  //     NPCs, the behavior block) walks its loiterPath, regardless of gravity.
+  //     Grounded characters steer X only; airborne steer X and Y.
   //   - Player-anchored drift (legacy): gravity-off airborne enemies without
   //     a path still drift around the player so they don't freeze mid-air.
   // Immovable airborne entities (e.g. the_hive) are excluded — they're
   // anchored to their spawn.
   private canLoiter(): boolean {
     if (this.behavior.immovable) return false;
-    const lead = this.attacks[0];
-    if (!lead) return false;
-    if (lead.walkAnimation == null || lead.moveSpeed == null) return false;
+    if (
+      this.effectiveWalkAnimation() == null ||
+      this.effectiveMoveSpeed() == null
+    ) {
+      return false;
+    }
     if (this.loiterPath) return true;
-    return !this.body.allowGravity;
+    // Grounded characters normally stand idle when they have no authored path;
+    // a behavior.wander block opts them into spawn-anchored strolling instead.
+    // Airborne enemies keep their legacy player-anchored drift unconditionally.
+    if (this.body.allowGravity) return this.wanderConfig != null;
+    return true;
   }
 
   private enterLoiter(player: Player): void {
     this.enemyState = 'loiter';
-    this.currentAttack = null;
-    const walkAnim = this.attacks[0]?.walkAnimation;
+    this.clearCurrentAttack();
+    const walkAnim = this.effectiveWalkAnimation();
     if (walkAnim) this.playLogical(walkAnim);
     setEnemyWalkSoundEnabled(this, true);
     if (this.loiterPath) {
@@ -1836,6 +2616,23 @@ export class Enemy extends AnimatedEntity {
       // stale index. Direction is preserved across re-entries so the sweep
       // pattern stays consistent.
       this.pathIndex = this.findNearestWaypointIndex();
+      // Start the dwell cadence fresh: clear any in-flight pause and schedule
+      // the first stroll interval so a patrol resumed after a chase doesn't
+      // immediately stop to idle.
+      this.pathPauseUntil = 0;
+      this.scheduleNextPathPause(this.scene.time.now);
+    } else if (this.body.allowGravity && this.wanderConfig) {
+      // Spawn-anchored stroll. Start the rest-break cadence fresh and pick a
+      // first target within the wander band. Clear any greeting carried over
+      // from a prior loiter session (e.g. interrupted by a knockback) so a
+      // fresh entry starts clean. enterLoiter already played the walk clip
+      // above, so mark the walk pose as showing to keep setWanderWalking synced.
+      this.pathPauseUntil = 0;
+      this.scheduleNextPathPause(this.scene.time.now);
+      this.greetUntil = 0;
+      this.greetHopsLeft = 0;
+      this.wanderWalkAnimOn = true;
+      this.pickWanderTarget();
     } else {
       this.pickLoiterTarget(player);
     }
@@ -1844,6 +2641,10 @@ export class Enemy extends AnimatedEntity {
   private updateLoiter(player: Player): void {
     if (this.loiterPath) {
       this.updatePathLoiter();
+      return;
+    }
+    if (this.body.allowGravity && this.wanderConfig) {
+      this.updateAreaWander();
       return;
     }
     const lead = this.attacks[0];
@@ -1874,7 +2675,7 @@ export class Enemy extends AnimatedEntity {
     ) {
       this.pickLoiterTarget(player);
     }
-    const moveSpeed = lead?.moveSpeed;
+    const moveSpeed = this.effectiveMoveSpeed();
     if (moveSpeed == null || dist === 0) {
       this.body.setVelocity(0, 0);
       return;
@@ -1897,10 +2698,33 @@ export class Enemy extends AnimatedEntity {
   private updatePathLoiter(): void {
     const path = this.loiterPath;
     if (!path) return;
-    const lead = this.attacks[0];
-    const moveSpeed = lead?.moveSpeed;
+    const moveSpeed = this.effectiveMoveSpeed();
     if (moveSpeed == null) {
       this.body.setVelocity(0, 0);
+      return;
+    }
+
+    // Patrol dwell: periodically halt and idle so the walk reads as wandering
+    // rather than a constant march. Only runs here (out-of-combat loiter), so
+    // a pause never delays chase/attack — those preempt loiter entirely.
+    const now = this.scene.time.now;
+    if (now < this.pathPauseUntil) {
+      // Parked at a dwell — hold position (gravity keeps grounded bodies on
+      // the floor, so only zero Y when airborne) and keep idling.
+      this.setVelocityX(0);
+      if (!this.body.allowGravity) this.setVelocityY(0);
+      return;
+    }
+    if (this.pathPauseUntil !== 0) {
+      // Dwell just elapsed: resume the walk pose/sound and schedule the next.
+      this.pathPauseUntil = 0;
+      const walkAnim = this.effectiveWalkAnimation();
+      if (walkAnim) this.playLogical(walkAnim);
+      setEnemyWalkSoundEnabled(this, true);
+      this.scheduleNextPathPause(now);
+    } else if (now >= this.nextPathPauseAt) {
+      // Time to stop and observe for a beat.
+      this.beginPathPause(now);
       return;
     }
 
@@ -1949,6 +2773,31 @@ export class Enemy extends AnimatedEntity {
       this.setVelocityX((dx / dist) * moveSpeed);
       this.setVelocityY((dy / dist) * moveSpeed);
     }
+  }
+
+  // Begins a patrol dwell: parks the body, drops into the idle pose, and mutes
+  // the walk loop for a randomized short beat. updatePathLoiter holds this
+  // state until pathPauseUntil elapses, then resumes the walk. Grounded bodies
+  // keep their Y to gravity; airborne bodies are fully stopped so they hover.
+  private beginPathPause(now: number): void {
+    this.pathPauseUntil =
+      now +
+      PATH_PAUSE_DURATION_MIN_MS +
+      Math.random() * (PATH_PAUSE_DURATION_MAX_MS - PATH_PAUSE_DURATION_MIN_MS);
+    this.setVelocityX(0);
+    if (!this.body.allowGravity) this.setVelocityY(0);
+    // Idle pose (registry defaultAnimation) rather than the walk clip, so the
+    // entity visibly stops to observe. Mirrors enterIdle's resting semantics.
+    this.playLogical(this.config.defaultAnimation);
+    setEnemyWalkSoundEnabled(this, false);
+  }
+
+  // Schedules the next dwell a randomized stroll-interval out from `now`.
+  private scheduleNextPathPause(now: number): void {
+    this.nextPathPauseAt =
+      now +
+      PATH_WALK_INTERVAL_MIN_MS +
+      Math.random() * (PATH_WALK_INTERVAL_MAX_MS - PATH_WALK_INTERVAL_MIN_MS);
   }
 
   // Ping-pong increment: bumps pathIndex by pathDirection, flipping when
@@ -2006,9 +2855,280 @@ export class Enemy extends AnimatedEntity {
       Math.random() * (LOITER_REFRESH_MAX_MS - LOITER_REFRESH_MIN_MS);
   }
 
+  // ── Spawn-anchored ground wander (behavior.wander) ───────────────────────
+  // A grounded character with no authored loiterPath strolls within
+  // wander.radius of its spawn X, resting between strolls and using the shared
+  // leap probe to hop level gaps that land back in-bounds. Drives the 'loiter'
+  // state for these characters (see canLoiter / updateLoiter dispatch).
+
+  // Picks the next stroll target: a random X within the wander band centered on
+  // spawnX, nudged at least WANDER_MIN_TARGET_STEP_PX off the current spot so
+  // the pick never resolves as "already arrived". Y is left to gravity — the
+  // band is horizontal, matching the grounded patrol convention.
+  private pickWanderTarget(): void {
+    const radius = this.wanderConfig?.radius ?? 0;
+    const minX = this.spawnX - radius;
+    const maxX = this.spawnX + radius;
+    let target = minX + Math.random() * (maxX - minX);
+    if (Math.abs(target - this.x) < WANDER_MIN_TARGET_STEP_PX) {
+      // Roll landed in the dead-band — step toward spawn instead so the entity
+      // drifts back to center rather than picking a target under its feet.
+      const toward: 1 | -1 = this.spawnX >= this.x ? 1 : -1;
+      target = this.x + toward * WANDER_MIN_TARGET_STEP_PX;
+    }
+    this.wanderTargetX = Math.max(minX, Math.min(maxX, target));
+  }
+
+  // Gate for committing a wander leap: the landing must stay within the wander
+  // band horizontally (so strolling never carries the entity out of its
+  // vicinity) and within the climb/drop reach vertically (so it crosses gaps and
+  // steps up or down to nearby platforms, but turns back at a too-tall climb or
+  // a deep pit rather than stranding itself or diving to its death).
+  private isWanderLandingAllowed(landing: { x: number; y: number }): boolean {
+    const radius = this.wanderConfig?.radius ?? 0;
+    if (Math.abs(landing.x - this.spawnX) > radius) return false;
+    // Y grows downward: dy > 0 = landing below the foot (a drop), dy < 0 = above
+    // (a climb). Allow drops up to MAX_DROP and climbs up to MAX_RISE.
+    const dy = landing.y - this.body.bottom;
+    if (dy < -WANDER_LEAP_MAX_RISE_PX) return false;
+    if (dy > WANDER_LEAP_MAX_DROP_PX) return false;
+    return true;
+  }
+
+  // After declining a leap at a ledge, retarget back toward spawn (away from the
+  // edge) so the next step walks off the brink instead of re-probing it every
+  // frame. The net effect is the stroller paces between the gaps that bound its
+  // area.
+  private turnBackFromEdge(blockedDir: 1 | -1): void {
+    const radius = this.wanderConfig?.radius ?? 0;
+    const back = (-blockedDir) as 1 | -1;
+    const step = Math.max(WANDER_MIN_TARGET_STEP_PX, radius * 0.5);
+    const target = this.x + back * step;
+    this.wanderTargetX = Math.max(
+      this.spawnX - radius,
+      Math.min(this.spawnX + radius, target),
+    );
+  }
+
+  // Toggles the walk clip vs the resting idle pose for the wander, swapping only
+  // on change so the animation isn't restarted every frame. Mirrors the chase
+  // animation's moving/idle latch.
+  private setWanderWalking(walking: boolean): void {
+    if (walking === this.wanderWalkAnimOn) return;
+    this.wanderWalkAnimOn = walking;
+    if (walking) {
+      const walkAnim = this.effectiveWalkAnimation();
+      if (walkAnim) this.playLogical(walkAnim);
+      setEnemyWalkSoundEnabled(this, true);
+    } else {
+      this.playLogical(this.config.defaultAnimation);
+      setEnemyWalkSoundEnabled(this, false);
+    }
+  }
+
+  private greetConfig(): AnimatedEntityGreetConfig | null {
+    return this.wanderConfig?.greet ?? null;
+  }
+
+  // Per-frame stroll update for grounded wanderers. Priority each frame:
+  //   1. A greeting in progress → park, face the partner, bob tiny hops.
+  //   2. Otherwise (throttled) look for a same-group partner to greet.
+  //   3. Otherwise honor the rest-break cadence (stop and idle a beat).
+  //   4. Otherwise walk toward the current target, hopping small walls and
+  //      leaping level in-bounds gaps — turning back at any ledge it can't
+  //      safely clear so it never strolls into a hole.
+  private updateAreaWander(): void {
+    const moveSpeed = this.effectiveMoveSpeed();
+    if (moveSpeed == null) {
+      this.body.setVelocity(0, 0);
+      return;
+    }
+    const now = this.scene.time.now;
+
+    // (1) Greeting in progress: full stop, face the partner, bob. Only launch a
+    // hop while grounded so each bob is a real pop off the floor.
+    if (now < this.greetUntil) {
+      this.setWanderWalking(false);
+      this.facingDirection = this.greetFacing;
+      this.setFacing(this.greetFacing === -1);
+      this.setVelocityX(0);
+      if (
+        this.greetHopsLeft > 0 &&
+        this.body.blocked.down &&
+        now >= this.greetNextHopAt
+      ) {
+        this.setVelocityY(GREET_HOP_VELOCITY);
+        this.greetHopsLeft--;
+        this.greetNextHopAt = now + GREET_HOP_INTERVAL_MS;
+      }
+      return;
+    }
+
+    // (2) Look for a greeting partner (throttled). If a greeting starts this
+    // frame, bail and let the gate above own it next frame.
+    if (this.greetConfig() && now >= this.nextGreetScanAt) {
+      this.nextGreetScanAt = now + GREET_SCAN_INTERVAL_MS;
+      this.tryStartGreeting(now);
+      if (now < this.greetUntil) {
+        this.setWanderWalking(false);
+        this.setVelocityX(0);
+        return;
+      }
+    }
+
+    // (3) Rest breaks: stroll for a randomized interval, then halt and idle a
+    // randomized beat so the wander reads as "wander and pause", not constant
+    // pacing. Reuses the authored-path dwell timers/constants for the cadence.
+    if (now < this.pathPauseUntil) {
+      this.setWanderWalking(false);
+      this.setVelocityX(0);
+      return;
+    }
+    if (this.pathPauseUntil !== 0) {
+      // Dwell just elapsed — clear it and schedule the next stroll interval.
+      this.pathPauseUntil = 0;
+      this.scheduleNextPathPause(now);
+    } else if (now >= this.nextPathPauseAt) {
+      // Time to stop and observe for a beat.
+      this.pathPauseUntil =
+        now +
+        PATH_PAUSE_DURATION_MIN_MS +
+        Math.random() *
+          (PATH_PAUSE_DURATION_MAX_MS - PATH_PAUSE_DURATION_MIN_MS);
+      this.setWanderWalking(false);
+      this.setVelocityX(0);
+      return;
+    }
+
+    // (4) Walk toward the target. X-only arrival: gravity owns Y on a grounded
+    // body, so the authored target Y (== spawn row) is never reached exactly.
+    const dx = this.wanderTargetX - this.x;
+    if (Math.abs(dx) < LOITER_TARGET_REACHED_DIST) {
+      this.pickWanderTarget();
+      return;
+    }
+    const dir: 1 | -1 = dx >= 0 ? 1 : -1;
+    this.facingDirection = dir;
+    this.setFacing(dir === -1);
+    this.setWanderWalking(true);
+
+    const leapX = Math.max(moveSpeed, ENEMY_LEAP_HORIZONTAL_SPEED);
+    if (this.body.blocked.down) {
+      this.leapDirX = 0;
+      if (this.shouldJumpOverObstacle()) {
+        // Small wall between here and the target — hop it like a patrol step.
+        this.setVelocityY(ENEMY_JUMP_VELOCITY);
+        this.setVelocityX(moveSpeed * dir);
+      } else if (this.isLedgeAhead(dir)) {
+        // Open air ahead. Commit a leap only when the probe finds a roughly
+        // level landing that stays inside the wander band; otherwise turn back
+        // so the stroller never drops into a hole or wanders out of its area.
+        const landing = this.findLeapLanding(
+          dir,
+          leapX,
+          { x: this.wanderTargetX, y: this.y },
+          WANDER_MAX_LAUNCH_VELOCITY,
+        );
+        if (landing && this.isWanderLandingAllowed(landing)) {
+          this.leapDirX = dir;
+          this.setVelocityY(landing.vy);
+          this.setVelocityX(leapX * dir);
+        } else {
+          this.setVelocityX(0);
+          this.turnBackFromEdge(dir);
+        }
+      } else {
+        this.setVelocityX(moveSpeed * dir);
+      }
+    } else if (this.leapDirX !== 0) {
+      // Airborne mid-leap: hold the committed arc so it clears the gap.
+      this.setVelocityX(leapX * this.leapDirX);
+    } else {
+      this.setVelocityX(moveSpeed * dir);
+    }
+  }
+
+  // Scans for a nearby same-group wanderer to greet (called throttled from
+  // updateAreaWander). On finding an available partner within proximity on the
+  // same floor, rolls `chance`; on success begins a synchronized greeting on
+  // both this entity and the partner (each faces the other). A decline arms a
+  // short cooldown so a lingering pair doesn't reroll every scan.
+  private tryStartGreeting(now: number): void {
+    const greet = this.greetConfig();
+    if (greet == null) return;
+    if (now < this.nextGreetAt) return;
+    if (!this.body.blocked.down) return;
+    const helper = this.scene as unknown as EnemyHelperScene;
+    const proximitySq = greet.proximityPx * greet.proximityPx;
+    let partner: Enemy | null = null;
+    let bestDistSq = proximitySq;
+    helper.forEachEnemy((other) => {
+      if (other === this) return;
+      if (!other.isGreetAvailable(greet.group, now)) return;
+      const dx = other.x - this.x;
+      const dy = other.y - this.y;
+      // Same floor only: a tight vertical band rejects a walker on a platform
+      // above or below (wanderers now leap several tiles, so this uses its own
+      // tolerance rather than the leap reach).
+      if (Math.abs(dy) > GREET_SAME_FLOOR_PX) return;
+      const distSq = dx * dx + dy * dy;
+      if (distSq <= bestDistSq) {
+        bestDistSq = distSq;
+        partner = other;
+      }
+    });
+    if (partner == null) return;
+    if (Math.random() > greet.chance) {
+      // Declined this crossing — brief cooldown so we don't reroll every scan
+      // while they stand next to each other.
+      this.nextGreetAt = now + GREET_SCAN_INTERVAL_MS * 4;
+      return;
+    }
+    // Mutual: both stop and face each other on the same frame.
+    const chosen: Enemy = partner;
+    this.beginGreet(chosen.x, now);
+    chosen.beginGreet(this.x, now);
+  }
+
+  // True when this entity could accept a greeting right now: it's a wanderer of
+  // the given group, currently strolling (loiter state), grounded, not already
+  // greeting, and off its greet cooldown. Used by a would-be partner's scan so
+  // beginGreet only ever lands on a willing, grounded stroller. Public so the
+  // initiator can poll candidates returned by the scene's forEachEnemy.
+  isGreetAvailable(group: string, now: number): boolean {
+    const greet = this.greetConfig();
+    if (greet == null || greet.group !== group) return false;
+    if (this.enemyState !== 'loiter') return false;
+    if (!this.body.blocked.down) return false;
+    if (now < this.greetUntil) return false;
+    if (now < this.nextGreetAt) return false;
+    return true;
+  }
+
+  // Begins a greeting: face the given partner X and start the tiny-hop bob
+  // sequence, dropping to the resting idle pose (no jump anim exists — the bob
+  // conveys it). Public so an initiator can pull its partner into the same
+  // greeting on the same frame. No-op for non-greeters.
+  beginGreet(partnerX: number, now: number): void {
+    const greet = this.greetConfig();
+    if (greet == null) return;
+    this.greetFacing = partnerX >= this.x ? 1 : -1;
+    this.greetHopsLeft = greet.hops;
+    this.greetNextHopAt = now;
+    // Window covers every hop plus a tail beat so the last bob lands before the
+    // stroll resumes; a hop delayed by mid-air frames still fits.
+    this.greetUntil =
+      now + (greet.hops + 1) * GREET_HOP_INTERVAL_MS;
+    this.nextGreetAt = this.greetUntil + greet.cooldownMs;
+    this.setVelocityX(0);
+    this.setWanderWalking(false);
+    this.facingDirection = this.greetFacing;
+    this.setFacing(this.greetFacing === -1);
+  }
+
   private enterDeadState(): void {
     this.enemyState = 'dead';
-    this.currentAttack = null;
+    this.clearCurrentAttack();
     // Announce boss deaths on the scene bus so GameScene can record the defeat
     // (persistent run-progress), clear the boss's arena, and fire the victory
     // flow when the final boss falls. The boss's world position rides along so
@@ -2282,6 +3402,21 @@ export class Enemy extends AnimatedEntity {
       return;
     }
 
+    // Wake clip finished: the dormant entity has fully woken. Clear both flags
+    // and drop into idle so the normal AI loop takes over next tick (engaging
+    // once the player is within an attack's range). Only the wake clip's own
+    // completion is consumed here — any other completion while waking falls
+    // through to the normal handling rather than being silently swallowed.
+    if (this.waking && this.dormantWakeAnim != null) {
+      const wakeKey = entityAnimFullKey(this.getIdentifier(), this.dormantWakeAnim);
+      if (animation.key === wakeKey) {
+        this.waking = false;
+        this.dormant = false;
+        this.enterIdle();
+        return;
+      }
+    }
+
     const attack = this.currentAttack;
     // Teleport disappear → appear/strike: when the disappear clip ends,
     // reposition the body to the destination and either play the visual
@@ -2338,9 +3473,16 @@ export class Enemy extends AnimatedEntity {
         if (this.tryEnterComboFollowup(attack)) {
           return;
         }
+        // Lunge attacks bake forward travel into their frames while the body
+        // holds still; advance the body to the lunge-end now (not on a chained
+        // follow-up, handled above) so idle resumes where the character landed
+        // instead of snapping back to the launch point.
+        if (attack.lungeDistance != null && !this.behavior.immovable) {
+          this.applyLungeDisplacement(attack.lungeDistance);
+        }
         this.enemyState = 'recover';
         this.cooldownUntil = this.scene.time.now + attack.cooldownMs;
-        this.currentAttack = null;
+        this.clearCurrentAttack();
         this.playAmbientAnimation();
         // Seed a fresh loiter target so the recover-window movement aims
         // somewhere sensible. Path-walkers re-snap to the nearest waypoint
@@ -2382,6 +3524,10 @@ export class Enemy extends AnimatedEntity {
       // same transient rect as melee. fireMeleeAttack reads hitbox + damage
       // directly off the attack config — no special-case needed.
       this.fireMeleeAttack(attack);
+      return;
+    }
+    if (attack.type === 'summon') {
+      this.fireSummonAttack(attack);
       return;
     }
     // ranged / magic — same delivery, different art
@@ -2651,6 +3797,41 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
+  // Summon delivery: spawns `summonCount` minions (each a random pick from
+  // summonKinds) flanking the caster, capped by summonMaxAlive against this
+  // caster's still-alive summons. The scene wires each into the world as a
+  // normal pursuing enemy. Harmless self-copies never summon.
+  private fireSummonAttack(attack: AnimatedEntityAttackConfig): void {
+    if (this.harmless) return;
+    const kinds = attack.summonKinds;
+    const count = attack.summonCount;
+    if (!kinds || kinds.length === 0 || count == null) return;
+    // Prune dead/destroyed before counting live summons against the cap.
+    const live = this.activeSummons.filter((e) => e.active && !e.isDead());
+    let budget = count;
+    if (attack.summonMaxAlive != null) {
+      budget = Math.min(count, attack.summonMaxAlive - live.length);
+    }
+    if (budget <= 0) {
+      this.activeSummons = live;
+      return;
+    }
+    const helper = this.scene as unknown as EnemyHelperScene;
+    const spawned: Enemy[] = [];
+    for (let i = 0; i < budget; i++) {
+      const kind = kinds[Math.floor(Math.random() * kinds.length)];
+      // Alternate sides and step outward so a spawned pair flanks the caster
+      // instead of stacking on one pixel.
+      const sign = i % 2 === 0 ? -1 : 1;
+      const rank = Math.floor(i / 2);
+      const offsetX =
+        sign * (SUMMON_SPAWN_OFFSET_X + rank * SUMMON_SPAWN_SPACING_X);
+      const minion = helper.summonEnemyAt(kind, this.x + offsetX, this.y);
+      if (minion) spawned.push(minion);
+    }
+    this.activeSummons = [...live, ...spawned];
+  }
+
   // Used by `teleport` attacks (single damage event on the appear clip's
   // frame). Iterates every configured hitbox in one pass — the per-frame
   // spreading that melee uses lives in `onAnimUpdate` so teleport isn't
@@ -2737,12 +3918,25 @@ export class Enemy extends AnimatedEntity {
     const originOffsetY = attack.projectileOriginY ?? 0;
     const originX = this.x + originOffsetX;
     const originY = this.y + originOffsetY;
-    const dx = this.playerRef.x - originX;
-    const dy = this.playerRef.y - originY;
-    const len = Math.hypot(dx, dy);
-    if (len === 0) return;
-    const vx = (dx / len) * speed;
-    const vy = (dy / len) * speed;
+    let vx: number;
+    let vy: number;
+    if (attack.projectileStraight === true) {
+      // Straight volley: fly horizontally along facing (vy = 0) so the player
+      // dodges by changing elevation rather than just sidestepping. Facing was
+      // locked toward the player when the attack committed, so the shot still
+      // heads the player's way — it just won't track up/down. Used by turret
+      // shooters (hell bot, wheel bot).
+      vx = speed * this.facingDirection;
+      vy = 0;
+    } else {
+      // Aimed: home onto the player's position at fire time.
+      const dx = this.playerRef.x - originX;
+      const dy = this.playerRef.y - originY;
+      const len = Math.hypot(dx, dy);
+      if (len === 0) return;
+      vx = (dx / len) * speed;
+      vy = (dy / len) * speed;
+    }
     const helper = this.scene as unknown as EnemyHelperScene;
     helper.spawnEnemyProjectile({
       x: originX,
@@ -2842,5 +4036,279 @@ export class Enemy extends AnimatedEntity {
     if (!helper.isTileSolidAt(aheadX, probeY)) return false;
     if (helper.isTileSolidAt(aheadX, probeY - 32)) return false;
     return true;
+  }
+
+  // True when the floor stops just ahead of the leading foot — i.e. the enemy
+  // is standing at a ledge with open air in its travel direction. Mirrors
+  // shouldJumpOverObstacle's probe geometry: a point a hair past the leading
+  // body edge, one footstep-probe offset below the feet (inside the tile the
+  // enemy would step onto). No solid tile there → a gap the chaser must leap or
+  // stop short of. Grounded-only; airborne callers never ask.
+  private isLedgeAhead(dir: 1 | -1): boolean {
+    if (!this.body.blocked.down) return false;
+    const helper = this.scene as unknown as EnemyHelperScene;
+    const aheadX = dir === 1 ? this.body.right + 2 : this.body.left - 2;
+    const probeY = this.body.bottom + FOOTSTEP_TILE_PROBE_OFFSET_Y;
+    return !helper.isTileSolidAt(aheadX, probeY);
+  }
+
+  // Drives one sideways reposition step at `moveX` in `escapeDir` while the
+  // enemy works its way out from under an overhead platform to set up an
+  // up-leap. Adds the two guards the raw setVelocityX escape moves lacked:
+  // (1) refuses the step when a ledge lies that way, so escaping a platform
+  // never marches the body off the floor it's standing on (it would fall to
+  // its death); (2) faces the travel direction, so the sprite doesn't moonwalk
+  // — face the player while stepping away from it. Returns true when it moved;
+  // false when a ledge blocks the route, so the caller can try the other way
+  // or close on the player instead of driving into the void.
+  private tryEscapeStep(escapeDir: 1 | -1, moveX: number): boolean {
+    if (this.isLedgeAhead(escapeDir)) return false;
+    this.facingDirection = escapeDir;
+    this.setFacing(escapeDir === -1);
+    this.setVelocityX(moveX * escapeDir);
+    return true;
+  }
+
+  // Vertical-reach probe for mounting a step/ledge whose vertical face is
+  // directly ahead (no gap to arc over) — the "climb onto the platform above"
+  // case the ballistic gap-probe can't handle, because to it the forward wall
+  // reads as a ceiling and aborts the arc. Confirms a wall is flush ahead, scans
+  // its column upward for the top edge, and — if that top is within a player-
+  // grade jump and offers body-height standing clearance — returns the launch
+  // velocity that lifts the foot just past it (the chaser then jumps, slides up
+  // the wall face, and its held forward speed carries it onto the platform).
+  // Returns null when there's no wall ahead, its top is out of reach, or the
+  // surface isn't standable. Grounded-only; the caller guarantees blocked.down.
+  private findWallMountLaunch(dir: 1 | -1): number | null {
+    const helper = this.scene as unknown as EnemyHelperScene;
+    const aheadX = dir === 1 ? this.body.right + 2 : this.body.left - 2;
+    // Sample a hair above the floor (like shouldJumpOverObstacle) so the tile
+    // underfoot isn't mistaken for the wall.
+    const footProbeY = this.body.bottom - 8;
+    if (!helper.isTileSolidAt(aheadX, footProbeY)) return null; // no wall ahead
+    // Highest the foot can be lifted by a player-grade jump (the arc apex).
+    const maxRise =
+      (PLAYER_JUMP_VELOCITY * PLAYER_JUMP_VELOCITY) / (2 * GRAVITY_Y);
+    // Walk up the column ahead to the wall's top — the first clear sample.
+    let topY: number | null = null;
+    for (
+      let probeY = footProbeY - WALL_MOUNT_SCAN_STEP_PX;
+      probeY >= footProbeY - maxRise;
+      probeY -= WALL_MOUNT_SCAN_STEP_PX
+    ) {
+      if (!helper.isTileSolidAt(aheadX, probeY)) {
+        topY = probeY;
+        break;
+      }
+    }
+    if (topY === null) return null; // wall taller than a max jump can clear
+    // Require a body's height of standing clearance above the surface, else the
+    // chaser would mount into a ceiling and couldn't actually perch there.
+    if (helper.isTileSolidAt(aheadX, topY - this.body.height)) return null;
+    // Lift the foot to the top plus the landing margin so it comes down onto the
+    // surface instead of clipping the lip; reject if that exceeds the max jump,
+    // and clamp the magnitude to the player max as a safety net.
+    const liftNeeded = this.body.bottom - topY + LEAP_LANDING_MARGIN_PX;
+    if (liftNeeded > maxRise) return null;
+    return Math.max(
+      -Math.sqrt(2 * GRAVITY_Y * liftNeeded),
+      PLAYER_JUMP_VELOCITY,
+    );
+  }
+
+  // Cheap gate for the climb-from-under search: is there a platform within jump
+  // reach AHEAD-AND-ABOVE (in the travel direction) to leap onto? Scans a
+  // forward-up box from the leading foot. This is the crux of the fix for an
+  // enemy stranding itself under a platform: the only place a jump can land on
+  // top is BEFORE the platform's near edge, where the platform is ahead — not
+  // overhead — so a "directly above" test never fires in time. fwd starts at 0
+  // so terrain straight up (e.g. mounting toward a higher next platform) counts
+  // too. Doesn't check standability; that's the full probe's job.
+  private hasReachablePlatformAhead(dir: 1 | -1): boolean {
+    const helper = this.scene as unknown as EnemyHelperScene;
+    const maxRise =
+      (PLAYER_JUMP_VELOCITY * PLAYER_JUMP_VELOCITY) / (2 * GRAVITY_Y);
+    const lead = dir === 1 ? this.body.right : this.body.left;
+    const foot = this.body.bottom;
+    for (let up = TILE_PX; up <= maxRise + TILE_PX; up += TILE_PX) {
+      for (let fwd = 0; fwd <= UP_LEAP_SCAN_REACH_PX; fwd += TILE_PX) {
+        if (helper.isTileSolidAt(lead + dir * fwd, foot - up)) return true;
+      }
+    }
+    return false;
+  }
+
+  // When the chaser is stranded directly under a platform (can't launch onto a
+  // surface it's beneath), returns the direction toward that platform's NEAREST
+  // edge so it walks out from under and can jump up onto it on the next approach.
+  // Returns 0 when not under a platform (the caller then just closes on the
+  // player) or when the overhead solid is too wide to escape within reach (a
+  // ceiling, not a moundable ledge).
+  private overheadEscapeDir(): 1 | -1 | 0 {
+    const helper = this.scene as unknown as EnemyHelperScene;
+    const maxRise =
+      (PLAYER_JUMP_VELOCITY * PLAYER_JUMP_VELOCITY) / (2 * GRAVITY_Y);
+    const cx = this.body.center.x;
+    // Find the underside of the platform directly overhead, if any.
+    let level = Number.NaN;
+    for (let up = TILE_PX; up <= maxRise; up += LEAP_PROBE_SAMPLE_PX) {
+      if (helper.isTileSolidAt(cx, this.body.top - up)) {
+        level = this.body.top - up;
+        break;
+      }
+    }
+    if (Number.isNaN(level)) return 0; // not under a platform
+    // Walk out along that level to find the nearer edge.
+    const maxScan = UP_LEAP_SCAN_REACH_PX + TILE_PX * 4;
+    let leftDist = 0;
+    let rightDist = 0;
+    for (let d = TILE_PX; d <= maxScan; d += TILE_PX) {
+      if (rightDist === 0 && !helper.isTileSolidAt(cx + d, level)) rightDist = d;
+      if (leftDist === 0 && !helper.isTileSolidAt(cx - d, level)) leftDist = d;
+      if (leftDist !== 0 && rightDist !== 0) break;
+    }
+    if (leftDist === 0 && rightDist === 0) return 0; // too wide — a ceiling
+    if (leftDist !== 0 && (rightDist === 0 || leftDist <= rightDist)) return -1;
+    return 1;
+  }
+
+  // True if any solid tile lies on the vertical segment at xEdge from yTop to
+  // yBottom — i.e. the body's leading side would hit a wall there. Sampled every
+  // LEAP_PROBE_SAMPLE_PX (plus the bottom endpoint) so no 16 px collider slips
+  // between samples.
+  private columnSolid(xEdge: number, yTop: number, yBottom: number): boolean {
+    const helper = this.scene as unknown as EnemyHelperScene;
+    for (let y = yTop; y < yBottom; y += LEAP_PROBE_SAMPLE_PX) {
+      if (helper.isTileSolidAt(xEdge, y)) return true;
+    }
+    return helper.isTileSolidAt(xEdge, yBottom);
+  }
+
+  // True if any solid tile lies on the horizontal segment at yEdge from xLeft to
+  // xRight — used to test the body's foot row (a floor to land on) and head row
+  // (a ceiling). Same sampling guarantee as columnSolid.
+  private rowSolid(yEdge: number, xLeft: number, xRight: number): boolean {
+    const helper = this.scene as unknown as EnemyHelperScene;
+    for (let x = xLeft; x < xRight; x += LEAP_PROBE_SAMPLE_PX) {
+      if (helper.isTileSolidAt(x, yEdge)) return true;
+    }
+    return helper.isTileSolidAt(xRight, yEdge);
+  }
+
+  // Swept-AABB reachability probe for a SINGLE launch velocity. Integrates the
+  // body's box as Arcade would (semi-implicit Euler, X and Y resolved
+  // separately) so it behaves exactly like the real jump: it SLIDES along a wall
+  // in its path instead of stopping (the key to vertical-shaft climbs — launch
+  // toward a wall-attached platform, ride up its face, land on top), bonks
+  // ceilings (vy zeroed, then falls), and rests its foot on the first floor it
+  // descends onto that it can actually stand on (clear headroom). Returns the
+  // leading-foot landing point, or null if nothing standable is reached within
+  // the level and time budget. A landing must have left the takeoff spot — moved
+  // a body-step horizontally OR changed level by a tile — so it never "lands"
+  // back where it launched. Handles up / down / across uniformly.
+  private simulateLeapArc(
+    dir: 1 | -1,
+    launchVx: number,
+    launchVy: number,
+  ): { x: number; y: number } | null {
+    const helper = this.scene as unknown as EnemyHelperScene;
+    const bounds = helper.getLevelBoundsAt(this.x, this.y);
+    const hw = this.body.width / 2;
+    const hh = this.body.height / 2;
+    let cx = this.body.center.x;
+    let cy = this.body.center.y;
+    let vy = launchVy;
+    const vx = launchVx * dir;
+    const startFootX = cx + dir * hw;
+    const startFootY = cy + hh;
+    for (let t = 0; t < LEAP_PROBE_MAX_TIME_S; t += LEAP_PROBE_STEP_S) {
+      vy += GRAVITY_Y * LEAP_PROBE_STEP_S;
+      // Horizontal: advance unless the leading vertical edge would enter solid —
+      // then hold x and let the body slide vertically along the wall.
+      const newCx = cx + vx * LEAP_PROBE_STEP_S;
+      if (!this.columnSolid(newCx + dir * hw, cy - hh, cy + hh)) {
+        cx = newCx;
+      }
+      const newCy = cy + vy * LEAP_PROBE_STEP_S;
+      if (bounds) {
+        if (cx < bounds.worldX || cx > bounds.worldX + bounds.pxWid) return null;
+        if (newCy + hh > bounds.worldY + bounds.pxHei) return null;
+      }
+      if (vy >= 0) {
+        // Descending: a solid row under the foot is a landing if the body can
+        // stand there (head + mid rows clear) and it has left the takeoff spot.
+        const footY = newCy + hh;
+        if (this.rowSolid(footY, cx - hw, cx + hw)) {
+          // Inset the headroom samples by 1 px so a wall flush against the
+          // body's side (e.g. a shaft platform reached by riding up its face)
+          // doesn't read as "no headroom" — only solids genuinely above count.
+          const headClear =
+            !this.rowSolid(footY - this.body.height + 2, cx - hw + 1, cx + hw - 1) &&
+            !this.rowSolid(footY - hh, cx - hw + 1, cx + hw - 1);
+          const lx = cx + dir * hw;
+          const advanced =
+            Math.abs(lx - startFootX) >= LEAP_MIN_ADVANCE_PX ||
+            Math.abs(footY - startFootY) >= TILE_PX;
+          if (headClear && advanced) return { x: lx, y: footY };
+          return null; // fell back onto takeoff, or can't stand here
+        }
+        cy = newCy;
+      } else {
+        // Ascending: a solid row at the head is a ceiling — the real body's rise
+        // is zeroed here (then gravity returns it), so stop rising and hold cy.
+        if (this.rowSolid(newCy - hh, cx - hw, cx + hw)) {
+          vy = 0;
+        } else {
+          cy = newCy;
+        }
+      }
+    }
+    return null;
+  }
+
+  // Chase-leap solver. Tries launch velocities from the gentlest
+  // (LEAP_MIN_LAUNCH_VELOCITY, a one-tile hop) up to the player max
+  // (PLAYER_JUMP_VELOCITY) and returns the launch whose landing best advances
+  // toward `target` (the player). Each candidate must clear
+  // LEAP_LANDING_MARGIN_PX past the landing platform's near edge so the body
+  // settles on top instead of clipping the lip. Selection ascends the ladder and
+  // only switches to a stronger arc when it lands a full tile closer to the
+  // target — so a flat gap or drop keeps its minimum-sufficient hop, while a
+  // climb onto a platform above (which gets dramatically closer to a player up
+  // there) is taken when one exists. Returns null when nothing lands with margin
+  // (caller parks or reroutes). launchVx must be the SAME horizontal speed the
+  // takeoff applies so the predicted arc matches the real one. maxLaunchVelocity
+  // caps how hard the search may jump (default = the player's jump, used by
+  // chase); the spawn-anchored wander passes a stronger ceiling so a stroller
+  // can clear up to ~4 tiles.
+  private findLeapLanding(
+    dir: 1 | -1,
+    launchVx: number,
+    target: { x: number; y: number },
+    maxLaunchVelocity: number = PLAYER_JUMP_VELOCITY,
+  ): { x: number; y: number; vy: number } | null {
+    const helper = this.scene as unknown as EnemyHelperScene;
+    const steps = Math.ceil(
+      (LEAP_MIN_LAUNCH_VELOCITY - maxLaunchVelocity) / LEAP_LAUNCH_STEP,
+    );
+    let best: { x: number; y: number; vy: number; dist: number } | null = null;
+    for (let i = 0; i <= steps; i++) {
+      const vy = Math.max(
+        LEAP_MIN_LAUNCH_VELOCITY - i * LEAP_LAUNCH_STEP,
+        maxLaunchVelocity,
+      );
+      const landing = this.simulateLeapArc(dir, launchVx, vy);
+      if (!landing) continue;
+      if (
+        !helper.isTileSolidAt(landing.x - LEAP_LANDING_MARGIN_PX * dir, landing.y)
+      ) {
+        continue; // lands on the lip, not solidly on top
+      }
+      const dist = Math.hypot(landing.x - target.x, landing.y - target.y);
+      if (best === null || dist < best.dist - TILE_PX) {
+        best = { x: landing.x, y: landing.y, vy, dist };
+      }
+    }
+    return best ? { x: best.x, y: best.y, vy: best.vy } : null;
   }
 }

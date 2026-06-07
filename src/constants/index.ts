@@ -71,16 +71,25 @@ export const PROJECTILE_GUN2_DAMAGE = 15;
 
 // Ammo capacity and starting values. Deliberately scarce: guns out-DPS and
 // out-range the sword, so without tight caps the player can just shoot through
-// every fight. Low MAX stops hoarding (you can't bank a run's worth of ammo)
-// and INITIAL spawns BELOW max so guns read as an emergency burst to be saved
-// for trouble, with melee as the default. Gun2's smaller capacity reflects its
-// heavier shells. Tune these (with the 25% regular-enemy ammo drop chance in
-// entityRegistry.json and the per-pickup grants below) to set how gun-reliant
-// a run can be.
+// every fight. The BASE_MAX is the unupgraded magazine cap — low so guns read
+// as an emergency burst to be saved for trouble (with melee as the default),
+// and INITIAL spawns BELOW it. The player widens the cap by buying the "Ammo
+// Storage" upgrade at the three tech shops (Level_9/11/18); each tier adds the
+// CAPACITY_UPGRADE_STEP below, so a fully-upgraded run carries
+// BASE + 3·step = 30 pistol / 20 shotgun. The live cap is derived in
+// Player.getMaxGun1Ammo()/getMaxGun2Ammo() from this base plus the purchased-
+// upgrade count in runProgress (so it survives death/respawn). Tune these (with
+// the 25% regular-enemy ammo drop chance in entityRegistry.json and the
+// per-pickup grants below) to set how gun-reliant a run can be.
 export const INITIAL_GUN1_AMMO = 8;
-export const MAX_GUN1_AMMO = 10;
+export const BASE_MAX_GUN1_AMMO = 12;
 export const INITIAL_GUN2_AMMO = 3;
-export const MAX_GUN2_AMMO = 5;
+export const BASE_MAX_GUN2_AMMO = 8;
+// Per-tier capacity increment for the Ammo Storage upgrade. One upgrade bumps
+// BOTH guns at once. Three tiers reach the ceilings noted above (gun1 12→30 at
+// +6, gun2 8→20 at +4).
+export const GUN1_CAPACITY_UPGRADE_STEP = 6;
+export const GUN2_CAPACITY_UPGRADE_STEP = 4;
 // Per-pickup grant — also the per-purchase shop grant (SHOP_GUN*_GRANT aliases
 // these). Kept small so a single drop/buy tops you up by a couple of shots
 // rather than refilling the magazine, reinforcing the scarcity above. Gun2
@@ -92,13 +101,18 @@ export const AMMO_PICKUP_GUN2_AMOUNT = 1;
 export const AMMO_COST_PER_SHOT = 1;
 
 // Magic resource: a counted orb inventory (like coins / heal items), capped at
-// MAX_MAGIC carried orbs. Each magic sword swing spends one orb
+// the player's current orb cap. Each magic sword swing spends one orb
 // (MAGIC_COST_PER_SWING). No regen — orbs are gained only from MAGIC_ORB
 // pickups (chest2 and boss drops, plus the shop), one orb per pickup. The HUD
 // renders this as an orb icon + carried count (see PlayerHudOverlay), matching
 // the coin and heal counters rather than the old three-segment bar.
+// BASE_MAX_MAGIC is the unupgraded cap; the "Orb Pouch" upgrade sold at the
+// three mushroom merchants (Level_9/11/18) adds MAGIC_CAPACITY_UPGRADE_STEP per
+// tier, so BASE + 3·step = 20 carried orbs once fully upgraded. The live cap is
+// derived in Player.getMaxMagic() from the purchased-upgrade count.
 export const INITIAL_MAGIC = 3;
-export const MAX_MAGIC = 10;
+export const BASE_MAX_MAGIC = 8;
+export const MAGIC_CAPACITY_UPGRADE_STEP = 4;
 export const MAGIC_PICKUP_AMOUNT = 1;
 export const MAGIC_COST_PER_SWING = 1;
 
@@ -180,23 +194,23 @@ export const COIN_DRAG_X = 90;
 export const COIN_FILL_COLOR = 0xffcc33;
 export const COIN_HIGHLIGHT_COLOR = 0xfff2a8;
 
-// Healing-heart placeholder: generated procedurally in PreloadScene as a small
-// red heart (two lobes + a tapered base) with an off-center highlight — the
-// same idiom as the coin/orb. LINEAR-filtered so it stays smooth at CAMERA_ZOOM
-// and renders smoothly in the DOM shop (it is intentionally excluded from
-// ShopOverlay's PIXEL_ART_TEXTURE_KEYS). Swap for a real PNG by loading at
-// HEART_TEXTURE_KEY in preload() and removing the generator call.
-export const HEART_TEXTURE_KEY = 'heal_heart';
-// Source-pixel size, authored larger than the world-drop footprint so LINEAR
-// sampling has the resolution to keep the curved edges smooth.
-export const HEART_TEXTURE_SIZE_PX = 16;
-// World-drop scale: 16 × 0.5 = 8 world units, a touch larger than ammo/orb so
+// Heal-item pickup: generated procedurally in PreloadScene as a flat white "+"
+// cross, matching the heal-counter glyph in the player HUD (hudIcons.ts) so the
+// item reads identically in the world drop, the HUD, and the shop. LINEAR-
+// filtered so it stays smooth at CAMERA_ZOOM and renders smoothly in the DOM
+// shop (intentionally excluded from ShopOverlay's PIXEL_ART_TEXTURE_KEYS). Swap
+// for a real PNG by loading at HEAL_CROSS_TEXTURE_KEY in preload() and removing
+// the generator call.
+export const HEAL_CROSS_TEXTURE_KEY = 'heal_cross';
+// Source-pixel size, authored larger than the world-drop footprint (like the
+// coin) so the straight arms stay crisp when LINEAR-sampled at zoom.
+export const HEAL_CROSS_TEXTURE_SIZE_PX = 32;
+// World-drop scale: 32 × 0.25 = 8 world units, a touch larger than ammo/orb so
 // the rarer healing pickup reads as more important at a glance.
-export const HEART_DROP_DISPLAY_SCALE = 0.5;
-// Warm red body + a brighter pink highlight inset toward the upper-left, same
-// faux-3D read as the coin's highlight ring.
-export const HEART_FILL_COLOR = 0xff3b5c;
-export const HEART_HIGHLIGHT_COLOR = 0xffa6b6;
+export const HEAL_CROSS_DROP_DISPLAY_SCALE = 0.25;
+// Flat white, matching the HUD heal glyph — a clean modern mark, so no faux-3D
+// highlight (unlike the shaded coin/orb).
+export const HEAL_CROSS_COLOR = 0xffffff;
 
 // Boss-key placeholder: generated procedurally in PreloadScene as a small gold
 // key (round bow + shaft + two teeth) with a brighter highlight on the bow —
@@ -368,13 +382,14 @@ export const CURRENT_LEVEL_IDENTIFIER = 'Level_5';
 // markers in any other level, so this constant is the single source of truth
 // for the start location. Triggers the landing page overlay (LandingScene) at
 // first launch so the player is framed for the start screen.
-// TEMP: pointed at Level_14 to test the Sword_master_spawn placed there.
-// Restore to 'Level_3' to ship the normal start location.
-export const STARTING_LEVEL_IDENTIFIER = 'Level_14';
+export const STARTING_LEVEL_IDENTIFIER = 'Level_3';
 
-// Render depth for the player and other dynamic entities. Tile layers occupy
-// depth 0..N (back→front) using their LDtk layer position; this sits above
-// all of them.
+// Render depth for the player and other dynamic entities (enemies, projectiles,
+// traps, drops). Most tile layers occupy depth 0..N (back→front) by their LDtk
+// layer position and sit BELOW this, so entities render in front of the ground
+// and background. The exception is the foreground overlay band below: tile
+// layers authored ABOVE the Entities layer in LDtk are lifted past this depth
+// so they occlude entities (the player passes behind them).
 export const ENTITY_DEPTH = 100;
 // Player renders one step above other entities so decoration sprites
 // (Tech_shop_spawn, Mushroom_merchant, etc.) never occlude the player when
@@ -382,6 +397,25 @@ export const ENTITY_DEPTH = 100;
 // Phaser falls back to display-list insertion order, which depends on LDtk
 // entity processing order and put the shop in front.
 export const PLAYER_DEPTH = ENTITY_DEPTH + 1;
+
+// Foreground overlay depth band — sits between the entity bodies above and the
+// world-space UI band (ENEMY_HEALTH_BAR_DEPTH and friends) below. The LDtk
+// stack places the Entities layer BENEATH Foreground2 and Foreground3, so those
+// two tile layers are meant to render IN FRONT of the player and enemies
+// (foreground pillars, hanging roots, etc. the player walks behind). But
+// dynamic entities use the fixed ENTITY_DEPTH above, which outranks every tile
+// layer's natural 0..N depth — so without this lift the foreground renders
+// wrongly behind the player. LevelRenderer maps these identifiers to the depths
+// here instead of their natural layer depth. Foreground1 is deliberately NOT
+// listed: it's authored below the Entities layer, so entities correctly render
+// in front of it. Values preserve the LDtk front-to-back order (Foreground3 is
+// front-most, so it sits above Foreground2) and stay below the UI band so
+// health bars and prompts remain readable over foreground tiles.
+const FOREGROUND_OVERLAY_BASE_DEPTH = ENTITY_DEPTH + 10;
+export const FOREGROUND_OVERLAY_LAYER_DEPTHS: Readonly<Record<string, number>> = {
+  Foreground2: FOREGROUND_OVERLAY_BASE_DEPTH,
+  Foreground3: FOREGROUND_OVERLAY_BASE_DEPTH + 1,
+};
 
 // Global multiplier applied to every non-boss enemy's authored
 // behavior.health to set its effective max HP (Enemy computes
@@ -434,10 +468,12 @@ export const ENEMY_HEALTH_BAR_FG_COLOR = 0xff3333;
 export const ENEMY_HEALTH_BAR_BG_COLOR = 0x000000;
 export const ENEMY_HEALTH_BAR_BG_ALPHA = 0.7;
 export const ENEMY_HEALTH_BAR_OUTLINE_COLOR = 0x000000;
-// Sits above the player so a player jumping in front of an enemy still leaves
-// the bar legible. Tile layers stop at ENTITY_DEPTH, so this is always on top
-// of world geometry too.
-export const ENEMY_HEALTH_BAR_DEPTH = ENTITY_DEPTH + 2;
+// Sits above the player AND the foreground overlay band so a health bar stays
+// legible whether its enemy jumps in front of the player or stands behind a
+// foreground tile layer. The interaction icon, save toast, and key-door message
+// all chain off this, so the whole world-space UI band rides above the
+// foreground overlay and stays readable over foreground tiles.
+export const ENEMY_HEALTH_BAR_DEPTH = FOREGROUND_OVERLAY_BASE_DEPTH + 10;
 
 // Player HUD: now a DOM/HTML overlay (src/ui/PlayerHudOverlay.ts) styled in
 // src/ui/playerHud.css, so its layout and typography live in CSS rather than
@@ -494,7 +530,7 @@ export const REINFORCEMENT_SITE_STAGGER_MS = 350;
 // themselves (see src/entities/bossSelfCopies.ts and
 // GameScene.spawnBossSelfCopies). The copies inherit the boss's animations,
 // attacks, and AI but deal no damage and use a hand-set low max HP.
-// The Heart Hoarder's round-3 copies' max HP (the boss itself has 900). Kept
+// The Heart Hoarder's round-3 copies' max HP (the boss itself has 700). Kept
 // low so a copy reads as a regular enemy — a few hits with its floating bar
 // visible — rather than a damage sponge.
 export const HEART_HOARDER_COPY_HEALTH = 40;
@@ -511,6 +547,16 @@ export const BOSS_SELF_COPY_CHASE_STANDOFF_PX = 110;
 // this close to its target X it parks (velocityX = 0) instead of flip-flopping
 // Math.sign(dx) every frame, which would jitter a copy sitting on its slot.
 export const HORIZONTAL_CHASE_STANDOFF_DEADZONE_PX = 10;
+// Lateral separation for grouped self-copies (heart hoarder family). The chase
+// stand-off slots only spread members during an active chase; teleport landings,
+// arena-edge slot clamping, and the zero-velocity attack/recover/idle states can
+// still leave two hoarders overlapping. Each frame a member within MIN_DX of
+// another nudges away on X by up to PUSH_SPEED px so the family never collapses
+// into one sprite. MIN_DX is a touch wider than the 48 px body so a small gap
+// shows between them; PUSH_SPEED is small so it polishes spacing without fighting
+// the stand-off slots or reading as a shove.
+export const HOARDER_SEPARATION_MIN_DX_PX = 64;
+export const HOARDER_SEPARATION_PUSH_SPEED = 2.5;
 
 // Screen-wide boss health bar pinned to the top of the viewport. Like
 // PlayerHud, positions/sizes are authored in SCREEN px and converted to world
@@ -559,6 +605,39 @@ export const BOSS_BANNER_FADE_OUT_MS = 300;
 // banner sits above the bar.
 export const BOSS_HUD_DEPTH = PLAYER_HUD_DEPTH + 10;
 export const BOSS_BANNER_DEPTH = PLAYER_HUD_DEPTH + 11;
+
+// ── Leaving the combat zone (boss-fight escape) ──────────────────────────
+// When the player crosses out of a boss's arena mid-fight, a centered warning
+// + countdown appears; if they don't return before the grace window lapses the
+// fight resets (boss home at full HP, reinforcements despawn, enemies break
+// off). Screen-pinned and CAMERA_ZOOM-resolved like the rest of the boss UI.
+export const BOSS_ESCAPE_GRACE_MS = 3000;
+export const BOSS_ESCAPE_WARNING_TEXT = 'LEAVING COMBAT ZONE';
+export const BOSS_ESCAPE_SUBTEXT = 'Return to continue the fight';
+// Headline reuses the Nosifer display face so the escape moment shares the
+// round banner's visual language; single-weight font, so no fake-bold.
+export const BOSS_ESCAPE_WARNING_FONT_SIZE_PX = 14;
+export const BOSS_ESCAPE_WARNING_FONT_FAMILY = "'Nosifer', 'Impact', cursive";
+export const BOSS_ESCAPE_WARNING_COLOR = '#f3d27a';
+export const BOSS_ESCAPE_WARNING_STROKE_COLOR = '#3a0a0a';
+export const BOSS_ESCAPE_WARNING_STROKE_PX = 2;
+// Countdown digit sits below the headline — larger so it reads as the urgent
+// element.
+export const BOSS_ESCAPE_COUNTDOWN_FONT_SIZE_PX = 28;
+export const BOSS_ESCAPE_COUNTDOWN_COLOR = '#ffffff';
+// Hint line below the counter.
+export const BOSS_ESCAPE_SUBTEXT_FONT_SIZE_PX = 7;
+export const BOSS_ESCAPE_SUBTEXT_FONT_FAMILY = 'Arial, Helvetica, sans-serif';
+export const BOSS_ESCAPE_SUBTEXT_COLOR = '#d8c4a0';
+// Vertical anchor as a fraction of viewport height — a touch above center so it
+// doesn't sit on the player while they flee.
+export const BOSS_ESCAPE_VIEWPORT_FRACTION_Y = 0.4;
+// Screen-px gap between the three stacked lines.
+export const BOSS_ESCAPE_LINE_GAP_PX = 4;
+// Fade-in when the warning first appears (it snaps off on cancel/reset).
+export const BOSS_ESCAPE_FADE_IN_MS = 150;
+// Above the round banner so the warning always reads on top of the boss UI.
+export const BOSS_ESCAPE_DEPTH = BOSS_BANNER_DEPTH + 1;
 
 // Default proximity range (source px) at which an interactable advertises its
 // E icon. Chests are small (14-22 px wide bodies) — at 36 px the icon appears
@@ -778,7 +857,8 @@ export const PAUSE_DIM_ALPHA = 0.5;
 
 // Source-pixel scale for the word sprites.
 export const PAUSE_WORD_DISPLAY_SCALE = 1.5;
-// Canvas-pixel gap between the two word sprites once rendered.
+// Canvas-pixel gap between adjacent word sprites once rendered. The pause menu
+// stacks them vertically, so this is the vertical spacing between each option.
 export const PAUSE_WORD_GAP_PX = 32;
 
 // Bounding box around the two word sprites. Drawn with Phaser.Graphics using
@@ -846,6 +926,30 @@ export const SHOP_GUN1_GRANT_PER_PURCHASE = AMMO_PICKUP_GUN1_AMOUNT;
 export const SHOP_GUN2_GRANT_PER_PURCHASE = AMMO_PICKUP_GUN2_AMOUNT;
 export const SHOP_MAGIC_GRANT_PER_PURCHASE = MAGIC_PICKUP_AMOUNT;
 export const SHOP_HEAL_GRANT_PER_PURCHASE = HEAL_PICKUP_AMOUNT;
+
+// ── Capacity upgrades (Ammo Storage / Orb Pouch) ─────────────────────────
+// One-time purchases that permanently raise the player's carry cap, sold
+// alongside the normal restock items. Each tech shop (Tech_shop_spawn) sells
+// one Ammo Storage tier; each mushroom merchant (Mushroom_merchant_spawn) sells
+// one Orb Pouch tier. The SELLING LEVEL is the identity of the upgrade — a given
+// shop's tier can be bought exactly once — so these arrays list which levels
+// sell a tier and the index-aligned price charged there (Level_9 cheapest,
+// Level_18 priciest, since later tiers are reached with more coins in hand).
+// Purchases are recorded in runProgress (so they survive death/respawn) and the
+// COUNT of purchases per line drives the derived caps in Player; the specific
+// tiers bought don't matter, so any visiting order works.
+export const AMMO_UPGRADE_LEVELS: ReadonlyArray<string> = [
+  'Level_9',
+  'Level_11',
+  'Level_18',
+];
+export const MAGIC_UPGRADE_LEVELS: ReadonlyArray<string> = [
+  'Level_9',
+  'Level_11',
+  'Level_18',
+];
+export const AMMO_UPGRADE_PRICES: ReadonlyArray<number> = [30, 45, 60];
+export const MAGIC_UPGRADE_PRICES: ReadonlyArray<number> = [30, 45, 60];
 
 // Landing page. Shown on first boot via a LandingScene overlay launched on
 // top of GameScene. The START word sprite uses the same word-banner pattern
@@ -961,72 +1065,10 @@ export const LANDING_SCREEN_BRACKET_LENGTH_PX = 72;
 // the viewport edge to transparent at THICKNESS_PX inward, painted by the
 // LandingScene above the world but below the START button and screen
 // frame. Reads as soft darkening at the edges so the eye is drawn toward
-// the player + button composition. The same config drives the in-game
-// vignette (src/ui/EdgeVignette.ts) so gameplay matches the home screen.
+// the player + button composition.
 export const LANDING_VIGNETTE_COLOR = 0x000000;
 export const LANDING_VIGNETTE_THICKNESS_PX = 380;
 export const LANDING_VIGNETTE_EDGE_ALPHA = 0.8;
-
-// Depth for the in-game edge vignette (src/ui/EdgeVignette.ts). Sits just
-// below PLAYER_HUD_DEPTH so it darkens every world object at the screen edges
-// (tiles, entities, health bars, icons) while leaving the player + boss HUD
-// fully legible on top — the gameplay analog of the landing vignette sitting
-// behind the START button and frame.
-export const VIGNETTE_DEPTH = PLAYER_HUD_DEPTH - 1;
-
-// ── Dynamic vignette (terrain-density driven) ───────────────────────────
-// The vignette grows in tight, rock-filled spaces (less light) and shrinks in
-// open caverns (more light). The driver (GameScene.updateVignette) samples the
-// solid-tile fraction of a fixed cell window centered on the camera each frame
-// and maps it to a strip thickness + edge alpha around the landing-screen
-// set point.
-//
-// Sample window: a FIXED number of cells (not the live viewport) so the
-// calibration below is independent of the player's window size. 14×8 half-
-// extents → a 28×16-cell window, matching a ~1366×768 viewport at CAMERA_ZOOM=3
-// (gridSize 16) — the window the reference density was measured against.
-export const VIGNETTE_SAMPLE_HALF_W_CELLS = 14;
-export const VIGNETTE_SAMPLE_HALF_H_CELLS = 8;
-
-// The neutral solid-fraction set point: the vignette renders at exactly the
-// landing-screen values (LANDING_VIGNETTE_THICKNESS_PX / _EDGE_ALPHA) when the
-// camera window is this dense. Measured as Level_3's camera-local average
-// (Level_3 was the original STARTING_LEVEL_IDENTIFIER), so Level 3 reads as the reference and
-// tighter levels (~0.46–0.66) grow while open rooms shrink. Tunable by feel.
-export const VIGNETTE_REFERENCE_DENSITY = 0.37;
-
-// Thickness mapping: thickness = clamp(BASE + (density − REFERENCE) × SLOPE,
-// MIN, MAX), where BASE = LANDING_VIGNETTE_THICKNESS_PX. Slope is px of strip
-// per unit of solid-fraction; the clamps bound how far the vignette can open
-// or close so it never fully vanishes or swallows the play area.
-export const VIGNETTE_THICKNESS_DENSITY_SLOPE_PX = 800;
-export const VIGNETTE_MIN_THICKNESS_PX = 180;
-export const VIGNETTE_MAX_THICKNESS_PX = 640;
-
-// Alpha mapping: a MILD coupled darkening so tight spaces also read a touch
-// darker, not just wider. Same shape as the thickness map around the same set
-// point (BASE = LANDING_VIGNETTE_EDGE_ALPHA), kept subtle via a small slope and
-// tight clamps so Level 3 stays at the landing alpha.
-export const VIGNETTE_ALPHA_DENSITY_SLOPE = 0.3;
-export const VIGNETTE_MIN_EDGE_ALPHA = 0.7;
-export const VIGNETTE_MAX_EDGE_ALPHA = 0.92;
-
-// Per-frame exponential smoothing toward the density target. Lower = slower,
-// dreamier breathing; higher = snappier. ~0.05 gives a ~0.3s response so the
-// vignette eases as the player moves between spaces instead of jittering as
-// individual tiles scroll in and out of the sample window.
-export const VIGNETTE_SMOOTH_LERP = 0.05;
-
-// Protected clear zone: the central fraction of EACH axis where the vignette is
-// guaranteed to be exactly 0 — no shading at all — so it never interferes with
-// gameplay. 0.4 keeps the central 40% of the width AND 40% of the height fully
-// clear; the four edge strips are confined to the outer border outside it, each
-// reaching at most (1 − fraction)/2 of its axis inward and fading to zero right
-// at the clear-zone boundary. Density grows the strips toward (but never into)
-// that boundary, so denser areas darken the border more while the center stays
-// pristine. Raise toward 1 for a larger clear center (thinner border); lower for
-// a thicker border that reaches closer to center.
-export const VIGNETTE_CLEAR_FRACTION = 0.4;
 
 // Per-tileset brightness lift applied at preload (RGB multiplier on each
 // opaque pixel, clamped to 255). Used to compensate for tilesets whose source

@@ -1,15 +1,16 @@
-/* In-game player HUD — a DOM overlay rendered over the Phaser canvas inside the
- * same #game parent as the shop/options overlays, sharing their visual idiom:
- * a dark flat panel, a thin frame, and four small pixel-light corner accents
- * (the pause-menu / old-canvas-HUD decoration, recreated in CSS). Two clusters
- * pinned to the top corners — HP / STA (left) and the G1 / G2 / orb / coin /
- * heal counters (right).
+/* In-game player HUD — a modern, minimal, monochrome (black/white/grey) DOM
+ * overlay rendered over the Phaser canvas inside the same #game parent as the
+ * shop/options overlays. Unlike those pixel-art panels, this layer is
+ * deliberately contemporary: hairline translucent rounded panels, inline-SVG
+ * glyph icons, hearts for HP and diamond pips for STA, and white-vs-grey state
+ * instead of colour accents. Three clusters pinned to the corners — HP/STA
+ * (top-left), the ammo/orb/coin/heal counters (top-right), and the weapon
+ * indicator (bottom-left).
  *
  * The root is pointer-events:none so it never intercepts gameplay mouse input
- * (L-click to fire, etc.); GameScene toggles its visibility on scene pause so
- * the HUD is covered by the pause/shop dim instead of floating above it. It
- * sits well below the modal shop/options overlays (z-index 10000) in the
- * stacking order. */
+ * (L-click to fire, etc.); GameScene toggles its visibility on scene pause so the
+ * HUD is covered by the pause/shop dim instead of floating above it. It sits well
+ * below the modal shop/options overlays (z-index 10000) in the stacking order. */
 
 .player-hud {
   position: absolute;
@@ -17,118 +18,217 @@
   pointer-events: none;
   user-select: none;
   z-index: 50;
-  font-family: 'Arial', 'Helvetica', sans-serif;
-  color: #e6e6e6;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+    Arial, sans-serif;
+  color: #f2f2f2;
+  /* Glyph sizes, bumped together so the whole overlay scales from one place. */
+  --hud-heart: 24px;
+  --hud-pip: 18px;
+  --hud-icon: 24px;
+  /* Soft scrim under text so white glyphs/numbers stay legible over bright
+   * areas even where a panel is mostly transparent. */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
 }
 
-/* Flat dark panel matching the shop window's body, framed by a thin stroke
- * plus four corner accents. The accents are four small squares painted via
- * positioned background gradients (no extra DOM) just inside each corner. */
+/* Hairline translucent panel: a thin 1px light stroke, gently rounded, over a
+ * faint dark wash with a small backdrop blur. Modern and unobtrusive — no frame
+ * art, no corner accents. */
 .hud-panel {
   position: absolute;
-  top: 16px;
-  padding: 9px 12px;
-  background-color: rgba(18, 18, 18, 0.55);
-  border: 1px solid #4a4a4a;
-  background-image:
-    linear-gradient(#cfcfcf, #cfcfcf),
-    linear-gradient(#cfcfcf, #cfcfcf),
-    linear-gradient(#cfcfcf, #cfcfcf),
-    linear-gradient(#cfcfcf, #cfcfcf);
-  background-repeat: no-repeat;
-  background-size: 4px 4px;
-  background-position:
-    3px 3px,
-    calc(100% - 3px) 3px,
-    3px calc(100% - 3px),
-    calc(100% - 3px) calc(100% - 3px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 11px 15px;
+  background: rgba(10, 10, 12, 0.34);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
 }
 
 .hud-panel--left {
+  top: 16px;
   left: 16px;
+  align-items: flex-start;
 }
 
 .hud-panel--right {
+  top: 16px;
   right: 16px;
 }
 
-/* Shared row grid. Left: [label | content]; right: [label | icon | count].
- * The auto columns keep every row's content aligned across the cluster with no
- * hard-coded widths; justify-items:start stops single-cell content (the HP
- * canvas) from being stretched to fill its column. */
+.hud-panel--weapon {
+  bottom: 16px;
+  left: 16px;
+}
+
+/* === METERS (HP hearts / STA pips) ================================= */
+
+.hud-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Heart: a grey "empty" glyph in flow with a white "fill" glyph overlaid inside
+ * an absolutely-positioned clip span. The HUD sets the clip span's width to each
+ * heart's fill fraction; the inner fill SVG keeps a fixed pixel width so reducing
+ * the clip reveals the heart from the left (a fractional boundary heart). */
+.hud-heart {
+  position: relative;
+  display: inline-block;
+  width: var(--hud-heart);
+  height: var(--hud-heart);
+}
+
+.hud-heart-empty,
+.hud-heart-fill {
+  display: block;
+  width: var(--hud-heart);
+  height: var(--hud-heart);
+}
+
+.hud-heart-empty {
+  color: rgba(255, 255, 255, 0.2);
+}
+
+.hud-heart-fill {
+  color: #ffffff;
+}
+
+.hud-heart-clip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: var(--hud-heart);
+  width: 100%;
+  overflow: hidden;
+  /* Smooth drain/heal sweep as the fill fraction changes. */
+  transition: width 160ms ease-out;
+}
+
+/* Stamina diamond pip: white when available, faint when spent. */
+.hud-pip {
+  width: var(--hud-pip);
+  height: var(--hud-pip);
+  color: #ffffff;
+  transition: color 140ms linear;
+}
+
+.hud-pip.is-empty {
+  color: rgba(255, 255, 255, 0.2);
+}
+
+/* === RIGHT CLUSTER (icon + count rows) ============================= */
+
 .hud-grid {
   display: grid;
-  align-items: center;
-  justify-items: start;
-  row-gap: 8px;
-  column-gap: 10px;
-}
-
-.hud-grid--left {
   grid-template-columns: auto auto;
+  align-items: center;
+  column-gap: 11px;
+  row-gap: 9px;
+  justify-items: start;
 }
 
-.hud-grid--right {
-  grid-template-columns: auto auto auto;
-}
-
-.hud-label {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  color: #b8b8b8;
-}
-
-/* STA/MAG labels are a touch smaller so they read closer to their short bars
- * without towering over them. */
-.hud-label--small {
-  font-size: 9px;
+.hud-icon {
+  width: var(--hud-icon);
+  height: var(--hud-icon);
+  color: #f2f2f2;
+  transition: color 140ms linear;
 }
 
 .hud-count {
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
   color: #ffffff;
   font-variant-numeric: tabular-nums;
+  transition: color 140ms linear;
 }
 
-/* HP slider art (33×16 source) scaled up ~2.25× with crisp pixel edges
- * (50% larger than the previous ~1.5× to read more clearly at a glance). */
-.hud-bar--hp {
-  width: 75px;
-  height: 36px;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
+/* Depleted resource (zero) recedes: both the icon and the number dim. */
+.hud-icon.is-empty {
+  color: rgba(255, 255, 255, 0.28);
 }
 
-.hud-segments {
+.hud-count.is-empty {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+/* === WEAPON INDICATOR ============================================== */
+
+.hud-weapon {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 9px;
 }
 
-/* STA segment art (7×3 source) at 4.5× (50% larger than the previous 3× so it
- * reads more clearly). Drained segments fade rather than vanish (see
- * SEGMENT_EMPTY_OPACITY) so the meter's footprint stays put. */
-.hud-seg {
-  width: 31.5px;
-  height: 13.5px;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
-  transition: opacity 120ms linear;
+.hud-weapon-icon {
+  display: inline-flex;
 }
 
-/* Right-column resource icons. Pixel-art ammo icons stay nearest-neighbour;
- * the procedural (LINEAR-filtered) coin and heart sample smoothly via the
- * --smooth modifier, matching how they read in-game and in the shop. */
-.hud-icon {
+.hud-weapon-glyph {
+  width: 28px;
+  height: 28px;
+  color: #ffffff;
+}
+
+.hud-weapon-label {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  color: #f2f2f2;
+}
+
+/* Magic sub-tag: separated by a hairline divider, grey when the stance is
+ * available but off, white (with a one-shot pulse) when selected. The whole tag
+ * is hidden in gun modes via an inline display:none (updateWeapon). currentColor
+ * drives both the sparkle glyph and the text, so the state is a single colour. */
+.hud-weapon-magic {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 2px;
+  padding-left: 11px;
+  border-left: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.34);
+  transition: color 150ms ease-out;
+}
+
+.hud-weapon-magic-icon {
   width: 20px;
   height: 20px;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
-  transition: opacity 120ms linear;
 }
 
-.hud-icon--smooth {
-  image-rendering: auto;
+.hud-weapon-magic-text {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+}
+
+.hud-weapon-magic.is-active {
+  color: #ffffff;
+  animation: hud-magic-pulse 320ms ease-out;
+}
+
+.hud-weapon-magic.is-active .hud-weapon-magic-icon {
+  filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.6));
+}
+
+.hud-weapon-magic.is-active .hud-weapon-magic-text {
+  text-shadow: 0 0 6px rgba(255, 255, 255, 0.5);
+}
+
+/* Brief swell when the stance is toggled on, so the change reads even though the
+ * indicator is always present. */
+@keyframes hud-magic-pulse {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
 }

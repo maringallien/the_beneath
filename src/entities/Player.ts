@@ -38,10 +38,13 @@ import {
   INITIAL_MAGIC,
   INITIAL_STAMINA,
   MAX_COINS,
-  MAX_GUN1_AMMO,
-  MAX_GUN2_AMMO,
+  BASE_MAX_GUN1_AMMO,
+  BASE_MAX_GUN2_AMMO,
+  BASE_MAX_MAGIC,
+  GUN1_CAPACITY_UPGRADE_STEP,
+  GUN2_CAPACITY_UPGRADE_STEP,
+  MAGIC_CAPACITY_UPGRADE_STEP,
   MAX_HEAL_ITEMS,
-  MAX_MAGIC,
   MAX_STAMINA,
   AMMO_COST_PER_SHOT,
   DASH_STAMINA_COST,
@@ -53,7 +56,12 @@ import {
 } from '../constants';
 import { Enemy } from './Enemy';
 import type { ShopItem } from './shop/shopTypes';
-import { recordKeyCollected } from '../state/runProgress';
+import {
+  countUpgrades,
+  hasUpgrade,
+  recordKeyCollected,
+  recordUpgradePurchased,
+} from '../state/runProgress';
 import { Trap } from './Trap';
 import {
   animKey,
@@ -174,7 +182,6 @@ const GUNSLINGER_ROLL_LATERAL_START_FRAME = 2;
 const COMBO_FIRST_STEP = 2;
 const MAX_COMBO_STEP = 5;
 const TELEPORT_ATTACK_STEP = 6;
-const TELEPORT_DISTANCE_PX = 150;
 // Vertical gap between the player's sprite center and the targeted enemy's
 // body center when attack6's 'appear' stage fires. The slash hitbox extends
 // SWORD_ATTACK_REACH_Y/2 (15 px) below player.y, so overlap requires
@@ -535,6 +542,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
 
   getCurrentMode(): CharacterModeId {
     return this.currentMode;
+  }
+
+  // True while the magic sword stance is selected (F toggles it; sword_master
+  // only, and it auto-clears when wheeling to a gun — see line ~988). Drives the
+  // HUD weapon indicator's magic sub-tag (PlayerHudOverlay.updateWeapon).
+  isMagicMode(): boolean {
+    return this.magicMode;
   }
 
   // External freeze toggle for the landing-page flow. When disabled,
@@ -1082,6 +1096,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     if (this.keySpace.isDown) {
       // Teleport-attack is sword_master-only — gunslinger has no attack6.
       if (this.currentMode !== 'sword_master') return;
+      // attack6 only activates when there's a valid teleport target: a live
+      // enemy in the player's level with clear line of sight (getNearestEnemy
+      // applies both gates). With nothing in sight the press is a no-op, so the
+      // player can't blink to an off-screen or cross-level enemy.
+      const scene = this.scene as unknown as NearestEnemyScene;
+      if (!scene.getNearestEnemy(this.x, this.y)) return;
       this.attackCounter = TELEPORT_ATTACK_STEP;
       this.currentAttackKind = 'regular';
       this.startAttackAnim(this.attackCounter);
@@ -1600,12 +1620,11 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     const target = scene.getNearestEnemy(this.x, this.y);
     if (target) {
       this.setPosition(target.x, target.y - TELEPORT_HOVER_OFFSET_Y);
-    } else {
-      // No live enemies in the level — fall back to the original
-      // facing-direction hop so the move still does something.
-      const direction = this.flipX ? -1 : 1;
-      this.x += TELEPORT_DISTANCE_PX * direction;
     }
+    // No else: handleAttackInput only starts attack6 when a valid target is in
+    // sight, so a null target here means it died or broke line of sight during
+    // the wind-up — the player then holds position rather than blinking nowhere
+    // (an earlier fallback hopped blindly in the facing direction).
     // Hold the new position until TELEPORT_HOVER_END_FRAME by suspending
     // gravity and zeroing velocity. Without this, an enemy in the sky leaves
     // the player dropping immediately on frame 7 — the visual reads as a
@@ -1722,8 +1741,11 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     for (const body of hits) {
       const obj = body.gameObject;
       if (obj instanceof Trap) {
+        // Traps are indestructible hazards — mirrors the projectile→trap rule
+        // (GameScene.onProjectileHitsTrap): the blade clinks off with the
+        // impact SFX but the trap survives, so the player can't clear a hazard
+        // by swinging at it.
         if (!obj.active) continue;
-        obj.destroy();
         if (!this.swordImpactPlayedThisSwing) {
           const slashId =
             SWORD_SLASH_IMPACT_SOUND_IDS[
@@ -1771,22 +1793,28 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   getMagic(): number {
     return this.magic;
   }
+  // Live orb cap: base plus the Orb Pouch upgrades bought this run. Derived
+  // (not stored) so it stays correct across level transitions and death/respawn
+  // — the upgrade count lives in runProgress, which survives world rebuilds.
   getMaxMagic(): number {
-    return MAX_MAGIC;
+    return BASE_MAX_MAGIC + countUpgrades('magic') * MAGIC_CAPACITY_UPGRADE_STEP;
   }
 
   getGun1Ammo(): number {
     return this.gun1Ammo;
   }
+  // Live pistol cap: base plus the Ammo Storage upgrades bought this run (one
+  // upgrade raises both guns). Derived for the same reason as getMaxMagic.
   getMaxGun1Ammo(): number {
-    return MAX_GUN1_AMMO;
+    return BASE_MAX_GUN1_AMMO + countUpgrades('ammo') * GUN1_CAPACITY_UPGRADE_STEP;
   }
 
   getGun2Ammo(): number {
     return this.gun2Ammo;
   }
+  // Live shotgun cap: base plus the same Ammo Storage upgrade count as gun1.
   getMaxGun2Ammo(): number {
-    return MAX_GUN2_AMMO;
+    return BASE_MAX_GUN2_AMMO + countUpgrades('ammo') * GUN2_CAPACITY_UPGRADE_STEP;
   }
 
   getCoins(): number {
@@ -1824,12 +1852,14 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     healItems?: number;
   }): void {
     this.health = Phaser.Math.Clamp(state.health, 0, PLAYER_MAX_HEALTH);
-    this.gun1Ammo = Phaser.Math.Clamp(state.gun1Ammo, 0, MAX_GUN1_AMMO);
-    this.gun2Ammo = Phaser.Math.Clamp(state.gun2Ammo, 0, MAX_GUN2_AMMO);
-    // Clamps against the current MAX_MAGIC — legacy saves authored under an
-    // older cap (the old 100-unit bar, or the interim 3-orb cap) collapse to
-    // MAX_MAGIC cleanly. Same for stamina.
-    this.magic = Phaser.Math.Clamp(state.magic, 0, MAX_MAGIC);
+    // Clamp to the player's CURRENT caps (base + purchased upgrades). Upgrades
+    // live in runProgress, which survives the respawn rebuild, so a snapshot
+    // taken while upgraded restores its full ammo here; one taken before the
+    // upgrade simply can't exceed the now-higher cap. A snapshot authored under
+    // a higher cap than the live one (e.g. a future down-tune) is clamped down.
+    this.gun1Ammo = Phaser.Math.Clamp(state.gun1Ammo, 0, this.getMaxGun1Ammo());
+    this.gun2Ammo = Phaser.Math.Clamp(state.gun2Ammo, 0, this.getMaxGun2Ammo());
+    this.magic = Phaser.Math.Clamp(state.magic, 0, this.getMaxMagic());
     this.stamina = Phaser.Math.Clamp(state.stamina, 0, MAX_STAMINA);
     // Coins field is optional so legacy snapshots predating the coin economy
     // restore with the field absent — default to the player's current value
@@ -1850,11 +1880,11 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   // separate follow-up (see the player-resources TODO trail elsewhere).
   addPickup(kind: PickupKind, amount: number): void {
     if (kind === 'gun1') {
-      this.gun1Ammo = Math.min(MAX_GUN1_AMMO, this.gun1Ammo + amount);
+      this.gun1Ammo = Math.min(this.getMaxGun1Ammo(), this.gun1Ammo + amount);
     } else if (kind === 'gun2') {
-      this.gun2Ammo = Math.min(MAX_GUN2_AMMO, this.gun2Ammo + amount);
+      this.gun2Ammo = Math.min(this.getMaxGun2Ammo(), this.gun2Ammo + amount);
     } else if (kind === 'magic') {
-      this.magic = Math.min(MAX_MAGIC, this.magic + amount);
+      this.magic = Math.min(this.getMaxMagic(), this.magic + amount);
     } else if (kind === 'heal') {
       this.healItems = Math.min(MAX_HEAL_ITEMS, this.healItems + amount);
     } else if (kind === 'key_storms' || kind === 'key_widow') {
@@ -1881,9 +1911,9 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   }
 
   getResourceMax(kind: PickupKind): number {
-    if (kind === 'gun1') return MAX_GUN1_AMMO;
-    if (kind === 'gun2') return MAX_GUN2_AMMO;
-    if (kind === 'magic') return MAX_MAGIC;
+    if (kind === 'gun1') return this.getMaxGun1Ammo();
+    if (kind === 'gun2') return this.getMaxGun2Ammo();
+    if (kind === 'magic') return this.getMaxMagic();
     if (kind === 'heal') return MAX_HEAL_ITEMS;
     return MAX_COINS;
   }
@@ -1911,12 +1941,30 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   // works here: GameScene is paused but the Player instance is still alive.
   tryPurchase(item: ShopItem): boolean {
     if (this.coins < item.price) return false;
+    if (item.kind === 'upgrade') {
+      // One-time capacity upgrade: refuse if this shop's upgrade is already
+      // owned (so it can't be bought twice), otherwise charge and record the
+      // purchase in run-progress. No resource is granted — recording the
+      // upgrade raises getMax* for the matching line, widening the cap the
+      // player then fills via drops/restocks.
+      if (hasUpgrade(item.id)) return false;
+      this.coins -= item.price;
+      recordUpgradePurchased(item.id);
+      return true;
+    }
     if (this.getResourceValue(item.pickupKind) >= this.getResourceMax(item.pickupKind)) {
       return false;
     }
     this.coins -= item.price;
     this.addPickup(item.pickupKind, item.grantAmount);
     return true;
+  }
+
+  // Whether this run has bought the capacity upgrade with the given id. Lets the
+  // shop overlay show an OWNED (sold-out) state for an upgrade the player
+  // already has, mirroring the MAX state on a fully-stocked resource.
+  ownsUpgrade(id: string): boolean {
+    return hasUpgrade(id);
   }
 
   // Q-driven heal. Spends one carried healing item to restore

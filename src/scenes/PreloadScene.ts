@@ -8,10 +8,9 @@ import {
   DISPLAY_FONT_NAME,
   FONT_BOOT_TIMEOUT_MS,
   FOREGROUND_GLOW_ENABLED,
-  HEART_FILL_COLOR,
-  HEART_HIGHLIGHT_COLOR,
-  HEART_TEXTURE_KEY,
-  HEART_TEXTURE_SIZE_PX,
+  HEAL_CROSS_COLOR,
+  HEAL_CROSS_TEXTURE_KEY,
+  HEAL_CROSS_TEXTURE_SIZE_PX,
   KEY_FILL_COLOR,
   KEY_HIGHLIGHT_COLOR,
   KEY_TEXTURE_KEY,
@@ -153,7 +152,7 @@ export class PreloadScene extends Phaser.Scene {
     this.generateMagicOrbTexture();
     this.generateMistParticleTexture();
     this.generateCoinTexture();
-    this.generateHeartTexture();
+    this.generateHealCrossTexture();
     this.generateKeyTexture();
     // Force LINEAR sampling on the pause word banners so the scaled-up
     // letters render smoothly. The global pixelArt:true config would
@@ -245,22 +244,30 @@ export class PreloadScene extends Phaser.Scene {
     }
   }
 
-  // Procedural placeholder for the magic orb pickup: a small pure-black smooth
-  // circle. Authored at MAGIC_ORB_TEXTURE_SIZE_PX (12) so a 0.5× display scale
-  // at zoom 3 has enough source pixels to anti-alias. LINEAR filter is forced
-  // on this texture because the global pixelArt:true config would otherwise
-  // nearest-sample the smooth circle into a stepped silhouette. Swap for a
-  // real PNG by loading at MAGIC_ORB_TEXTURE_KEY in preload() and removing
-  // this call.
+  // Procedural placeholder for the magic ("mana crystal") pickup: a small
+  // faceted gem — a flat table, out to the girdle, down to a pointed culet —
+  // matching the HUD magic glyph (hudIcons.ts) and kept small so it never reads
+  // as the larger Save crystal. Authored at MAGIC_ORB_TEXTURE_SIZE_PX (12) and
+  // LINEAR-filtered so its straight edges stay smooth despite the global
+  // pixelArt:true config (which would otherwise stair-step them). Internal "orb"
+  // naming is retained — the resource is still "orbs" in code; only the shape
+  // changed. Swap for a real PNG by loading at MAGIC_ORB_TEXTURE_KEY in preload().
   private generateMagicOrbTexture(): void {
     const size = MAGIC_ORB_TEXTURE_SIZE_PX;
-    const cx = size / 2;
-    const cy = size / 2;
     const g = this.make.graphics({ x: 0, y: 0 }, false);
     g.fillStyle(MAGIC_ORB_FILL_COLOR, 1);
-    // 1px margin so the AA edge has room to fade to transparent without
-    // getting clipped by texture bounds.
-    g.fillCircle(cx, cy, cx - 1);
+    // Gem outline as fractions of `size`, inset ~1px from the edges so the AA
+    // ring fades cleanly inside the texture bounds.
+    g.fillPoints(
+      [
+        { x: size * 0.29, y: size * 0.2 }, // table left
+        { x: size * 0.71, y: size * 0.2 }, // table right
+        { x: size * 0.88, y: size * 0.42 }, // right girdle
+        { x: size * 0.5, y: size * 0.86 }, // culet (bottom point)
+        { x: size * 0.12, y: size * 0.42 }, // left girdle
+      ],
+      true,
+    );
     g.generateTexture(MAGIC_ORB_TEXTURE_KEY, size, size);
     g.destroy();
     this.textures
@@ -293,44 +300,27 @@ export class PreloadScene extends Phaser.Scene {
       .setFilter(Phaser.Textures.FilterMode.LINEAR);
   }
 
-  // Procedural placeholder for the healing item: a small red heart built from
-  // two overlapping lobe circles plus a downward triangle for the tapered base,
-  // with an off-center pink highlight on the left lobe (same faux-3D idiom as
-  // the coin). Lobes are inset ~1.3px from the texture edge so the LINEAR AA
-  // ring fades cleanly inside bounds. Same LINEAR filter as the orb/coin so the
-  // curves stay smooth at CAMERA_ZOOM and in the DOM shop. Swap for a real PNG
-  // by loading at HEART_TEXTURE_KEY in preload() and removing this call.
-  private generateHeartTexture(): void {
-    const size = HEART_TEXTURE_SIZE_PX;
+  // Procedural heal-item pickup: a flat white "+" cross matching the player HUD's
+  // heal glyph (hudIcons.ts PLUS_D). Two overlapping bars — one vertical, one
+  // horizontal — each 1/6 of the texture thick and inset 1/6 from every edge, so
+  // the world/shop pickup reads the same as the interface counter. LINEAR-
+  // filtered (like the coin/orb) so the arms stay smooth at CAMERA_ZOOM and in
+  // the DOM shop. Swap for a real PNG by loading at HEAL_CROSS_TEXTURE_KEY in
+  // preload() and removing this call.
+  private generateHealCrossTexture(): void {
+    const size = HEAL_CROSS_TEXTURE_SIZE_PX;
     const g = this.make.graphics({ x: 0, y: 0 }, false);
-    g.fillStyle(HEART_FILL_COLOR, 1);
-    const lobeR = size * 0.24;
-    const lobeY = size * 0.34;
-    const leftLobeX = size * 0.32;
-    const rightLobeX = size * 0.68;
-    g.fillCircle(leftLobeX, lobeY, lobeR);
-    g.fillCircle(rightLobeX, lobeY, lobeR);
-    // Tapered base: from the outer edges of the lobe row down to the bottom tip.
-    g.fillTriangle(
-      size * 0.08,
-      lobeY,
-      size * 0.92,
-      lobeY,
-      size * 0.5,
-      size * 0.9,
-    );
-    // Highlight: a small disc on the upper-left lobe so the heart reads as
-    // catching light from above-left, matching the coin's highlight direction.
-    g.fillStyle(HEART_HIGHLIGHT_COLOR, 1);
-    g.fillCircle(
-      leftLobeX - lobeR * 0.2,
-      lobeY - lobeR * 0.3,
-      Math.max(1, lobeR * 0.4),
-    );
-    g.generateTexture(HEART_TEXTURE_KEY, size, size);
+    g.fillStyle(HEAL_CROSS_COLOR, 1);
+    const arm = size / 6; // bar thickness
+    const inset = size / 6; // gap from each edge to the arm tip
+    const span = size - inset * 2; // bar length
+    const center = (size - arm) / 2; // offset that centres each bar
+    g.fillRect(center, inset, arm, span); // vertical bar
+    g.fillRect(inset, center, span, arm); // horizontal bar
+    g.generateTexture(HEAL_CROSS_TEXTURE_KEY, size, size);
     g.destroy();
     this.textures
-      .get(HEART_TEXTURE_KEY)
+      .get(HEAL_CROSS_TEXTURE_KEY)
       .setFilter(Phaser.Textures.FilterMode.LINEAR);
   }
 

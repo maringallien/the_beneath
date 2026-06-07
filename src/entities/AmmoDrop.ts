@@ -17,9 +17,9 @@ import {
   COIN_SPAWN_VELOCITY_Y_MIN,
   COIN_TEXTURE_KEY,
   ENTITY_DEPTH,
+  HEAL_CROSS_DROP_DISPLAY_SCALE,
+  HEAL_CROSS_TEXTURE_KEY,
   HEAL_PICKUP_AMOUNT,
-  HEART_DROP_DISPLAY_SCALE,
-  HEART_TEXTURE_KEY,
   KEY_DROP_DISPLAY_SCALE,
   KEY_PICKUP_AMOUNT,
   KEY_TEXTURE_KEY,
@@ -74,12 +74,16 @@ function textureForKind(kind: PickupKind): TextureChoice {
     return { key: MAGIC_ORB_TEXTURE_KEY, frame: undefined, scale: AMMO_DROP_DISPLAY_SCALE };
   }
   if (kind === 'heal') {
-    // Healing heart: 16px procedural texture. Slightly larger display scale
-    // than ammo/orb so the rarer pickup stands out; LINEAR-filtered in
-    // PreloadScene so the curves stay smooth at zoom. Uses the default ammo
-    // physics branch below (gravity + pop), so a dropped heart falls and
+    // Heal item: white "+" cross matching the HUD heal glyph. Slightly larger
+    // display scale than ammo/orb so the rarer pickup stands out; LINEAR-
+    // filtered in PreloadScene so the arms stay smooth at zoom. Uses the default
+    // ammo physics branch below (gravity + pop), so a dropped cross falls and
     // settles like an ammo pickup rather than hovering like a magic orb.
-    return { key: HEART_TEXTURE_KEY, frame: undefined, scale: HEART_DROP_DISPLAY_SCALE };
+    return {
+      key: HEAL_CROSS_TEXTURE_KEY,
+      frame: undefined,
+      scale: HEAL_CROSS_DROP_DISPLAY_SCALE,
+    };
   }
   if (kind === 'key_storms' || kind === 'key_widow') {
     // Boss key: 16px procedural gold key. Both keys share one texture (they're

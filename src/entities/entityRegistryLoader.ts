@@ -319,6 +319,63 @@ function validateBehavior(
       `${ctx}.encounterRadius is set but neither encounterSoundId nor engageDelayMs is — the radius has nothing to trigger.`,
     );
   }
+  let dormant:
+    | {
+        readonly wakeAnimation: string;
+        readonly trigger: 'lineOfSight';
+        readonly range?: number;
+        readonly sleepAnimation?: string;
+      }
+    | undefined;
+  if (b.dormant !== undefined) {
+    if (b.dormant === null || typeof b.dormant !== 'object') {
+      throw new Error(`${ctx}.dormant must be an object when set`);
+    }
+    const d = b.dormant as Record<string, unknown>;
+    const wakeAnimation = requireAnimKeyExists(
+      `${ctx}.dormant`,
+      'wakeAnimation',
+      d.wakeAnimation,
+      animations,
+    );
+    if (animations[wakeAnimation].loops) {
+      throw new Error(
+        `${ctx}.dormant.wakeAnimation "${wakeAnimation}" must be one-shot (loops: false) — it plays once on waking`,
+      );
+    }
+    if (d.trigger !== 'lineOfSight') {
+      throw new Error(
+        `${ctx}.dormant.trigger must be "lineOfSight" (got ${JSON.stringify(d.trigger)})`,
+      );
+    }
+    let dormantRange: number | undefined;
+    if (d.range !== undefined) {
+      if (
+        typeof d.range !== 'number' ||
+        !Number.isFinite(d.range) ||
+        d.range <= 0
+      ) {
+        throw new Error(
+          `${ctx}.dormant.range must be a positive number when set (got ${JSON.stringify(d.range)})`,
+        );
+      }
+      dormantRange = d.range;
+    }
+    // Optional looping clip held while dormant. Unlike wakeAnimation it may
+    // loop (it's the resting pose, not the one-shot wake), so no loops check.
+    const sleepAnimation = optionalAnimKey(
+      `${ctx}.dormant`,
+      'sleepAnimation',
+      d.sleepAnimation,
+      animations,
+    );
+    dormant = {
+      wakeAnimation,
+      trigger: 'lineOfSight',
+      range: dormantRange,
+      sleepAnimation,
+    };
+  }
   const deathAnimation = optionalAnimKey(
     ctx,
     'deathAnimation',
@@ -403,6 +460,29 @@ function validateBehavior(
     }
     healthBarOffsetY = b.healthBarOffsetY;
   }
+  // Patrol movement decoupled from attacks: lets an attack-less character
+  // (spirit walkers) walk its loiterPath via the shared loiter code, which
+  // falls back to these when attacks[0] supplies no walkAnimation/moveSpeed.
+  const walkAnimation = optionalAnimKey(
+    ctx,
+    'walkAnimation',
+    b.walkAnimation,
+    animations,
+  );
+  let moveSpeed: number | undefined;
+  if (b.moveSpeed !== undefined) {
+    if (
+      typeof b.moveSpeed !== 'number' ||
+      !Number.isFinite(b.moveSpeed) ||
+      b.moveSpeed <= 0
+    ) {
+      throw new Error(
+        `${ctx}.moveSpeed must be a positive number when set (got ${JSON.stringify(b.moveSpeed)})`,
+      );
+    }
+    moveSpeed = b.moveSpeed;
+  }
+
   const attack =
     b.attack === undefined
       ? undefined
@@ -501,6 +581,93 @@ function validateBehavior(
     };
   }
 
+  let wander:
+    | {
+        readonly radius: number;
+        readonly greet?: {
+          readonly group: string;
+          readonly proximityPx: number;
+          readonly chance: number;
+          readonly hops: number;
+          readonly cooldownMs: number;
+        };
+      }
+    | undefined;
+  if (b.wander !== undefined) {
+    if (b.wander === null || typeof b.wander !== 'object') {
+      throw new Error(`${ctx}.wander must be an object when set`);
+    }
+    const w = b.wander as Record<string, unknown>;
+    const wctx = `${ctx}.wander`;
+    const radiusRaw = w.radius;
+    if (
+      typeof radiusRaw !== 'number' ||
+      !Number.isFinite(radiusRaw) ||
+      radiusRaw <= 0
+    ) {
+      throw new Error(
+        `${wctx}.radius must be a positive number (got ${JSON.stringify(radiusRaw)})`,
+      );
+    }
+    let greet:
+      | {
+          readonly group: string;
+          readonly proximityPx: number;
+          readonly chance: number;
+          readonly hops: number;
+          readonly cooldownMs: number;
+        }
+      | undefined;
+    if (w.greet !== undefined) {
+      if (w.greet === null || typeof w.greet !== 'object') {
+        throw new Error(`${wctx}.greet must be an object when set`);
+      }
+      const g = w.greet as Record<string, unknown>;
+      const gctx = `${wctx}.greet`;
+      if (typeof g.group !== 'string' || g.group.length === 0) {
+        throw new Error(
+          `${gctx}.group must be a non-empty string (got ${JSON.stringify(g.group)})`,
+        );
+      }
+      const requirePositive = (field: string): number => {
+        const value = g[field];
+        if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+          throw new Error(`${gctx}.${field} must be a positive number`);
+        }
+        return value;
+      };
+      const chanceRaw = g.chance;
+      if (
+        typeof chanceRaw !== 'number' ||
+        !Number.isFinite(chanceRaw) ||
+        chanceRaw <= 0 ||
+        chanceRaw > 1
+      ) {
+        throw new Error(
+          `${gctx}.chance must be a number in (0, 1] (got ${JSON.stringify(chanceRaw)})`,
+        );
+      }
+      const hopsRaw = g.hops;
+      if (
+        typeof hopsRaw !== 'number' ||
+        !Number.isInteger(hopsRaw) ||
+        hopsRaw <= 0
+      ) {
+        throw new Error(
+          `${gctx}.hops must be a positive integer (got ${JSON.stringify(hopsRaw)})`,
+        );
+      }
+      greet = {
+        group: g.group,
+        proximityPx: requirePositive('proximityPx'),
+        chance: chanceRaw,
+        hops: hopsRaw,
+        cooldownMs: requirePositive('cooldownMs'),
+      };
+    }
+    wander = { radius: radiusRaw, greet };
+  }
+
   return {
     health,
     hurtAnimation,
@@ -508,6 +675,7 @@ function validateBehavior(
     encounterSoundId,
     encounterRadius,
     engageDelayMs,
+    dormant,
     deathAnimation,
     immovable,
     horizontalMovementOnly,
@@ -518,10 +686,13 @@ function validateBehavior(
     displayName,
     hideHealthBar,
     healthBarOffsetY,
+    walkAnimation,
+    moveSpeed,
     attack,
     attackPool,
     dodgeOnProjectile,
     deathExplosion,
+    wander,
   };
 }
 
@@ -547,10 +718,11 @@ function validateAttack(
     type !== 'heal' &&
     type !== 'dive' &&
     type !== 'aoe' &&
-    type !== 'teleport'
+    type !== 'teleport' &&
+    type !== 'summon'
   ) {
     throw new Error(
-      `${ctx}.type must be "melee" | "ranged" | "magic" | "contact" | "heal" | "dive" | "aoe" | "teleport" (got ${JSON.stringify(type)})`,
+      `${ctx}.type must be "melee" | "ranged" | "magic" | "contact" | "heal" | "dive" | "aoe" | "teleport" | "summon" (got ${JSON.stringify(type)})`,
     );
   }
 
@@ -635,6 +807,8 @@ function validateAttack(
   let projectileSpeed: number | undefined;
   let projectileOriginX: number | undefined;
   let projectileOriginY: number | undefined;
+  let projectileStraight: boolean | undefined;
+  let verticalAlignMarginPx: number | undefined;
   let vfxAnimation: string | undefined;
   let damageFrames: ReadonlyArray<number> | undefined;
   let requireGroundedTarget: boolean | undefined;
@@ -651,6 +825,25 @@ function validateAttack(
   let appearElevated: boolean | undefined;
   let comboNextAnimation: string | undefined;
   let comboChancePct: number | undefined;
+  let comboOnly: boolean | undefined;
+  let lungeDistance: number | undefined;
+  let summonKinds: ReadonlyArray<string> | undefined;
+  let summonCount: number | undefined;
+  let summonMaxAlive: number | undefined;
+
+  // comboOnly is parsed up front because the melee/ranged/magic branch reads it
+  // to relax the `range` requirement (a combo-only follow-up is never selected
+  // independently, so it needs no selection range). The type restriction (combo
+  // semantics only apply to melee/ranged/magic) is enforced below alongside
+  // comboNextAnimation.
+  if (a.comboOnly !== undefined) {
+    if (typeof a.comboOnly !== 'boolean') {
+      throw new Error(
+        `${ctx}.comboOnly must be a boolean when set (got ${JSON.stringify(a.comboOnly)})`,
+      );
+    }
+    comboOnly = a.comboOnly;
+  }
 
   // Hitbox parser shared by melee and teleport (both deliver damage via a
   // transient rect on a frame). Accepts either `hitbox` (single object) or
@@ -954,6 +1147,67 @@ function validateAttack(
       }
       appearElevated = a.appearElevated;
     }
+  } else if (type === 'summon') {
+    // Summon: plays a one-shot cast animation; on `frame` it spawns minions
+    // beside the caster. Deals no damage. `range` gates selection so the caster
+    // only summons once the player is engaged. summonKinds existence in the
+    // registry is checked at runtime (respawn returns null for an unknown /
+    // behavior-less id, which fireSummonAttack skips) — same deferral the
+    // comboNextAnimation cross-reference uses, since the full registry isn't
+    // built yet at validation time.
+    animation = requireAnimKeyExists(ctx, 'animation', a.animation, animations);
+    frame = requireNonNegativeInt('frame');
+    if (frame >= animations[animation].frameCount) {
+      throw new Error(
+        `${ctx}.frame ${frame} is out of range for "${animation}" (frameCount=${animations[animation].frameCount})`,
+      );
+    }
+    if (animations[animation].loops) {
+      throw new Error(
+        `${ctx}.animation "${animation}" must be one-shot (loops: false) — a summon cast that loops forever would trap the enemy in 'attack' state`,
+      );
+    }
+    range = requirePositive('range');
+    if (!Array.isArray(a.summonKinds) || a.summonKinds.length === 0) {
+      throw new Error(
+        `${ctx}.summonKinds must be a non-empty array of registry identifiers`,
+      );
+    }
+    const kinds: string[] = [];
+    for (let i = 0; i < a.summonKinds.length; i++) {
+      const k = a.summonKinds[i];
+      if (typeof k !== 'string' || k.length === 0) {
+        throw new Error(
+          `${ctx}.summonKinds[${i}] must be a non-empty string (got ${JSON.stringify(k)})`,
+        );
+      }
+      kinds.push(k);
+    }
+    summonKinds = kinds;
+    const countRaw = a.summonCount;
+    if (
+      typeof countRaw !== 'number' ||
+      !Number.isInteger(countRaw) ||
+      countRaw <= 0
+    ) {
+      throw new Error(
+        `${ctx}.summonCount must be a positive integer (got ${JSON.stringify(countRaw)})`,
+      );
+    }
+    summonCount = countRaw;
+    if (a.summonMaxAlive !== undefined) {
+      const maxRaw = a.summonMaxAlive;
+      if (
+        typeof maxRaw !== 'number' ||
+        !Number.isInteger(maxRaw) ||
+        maxRaw <= 0
+      ) {
+        throw new Error(
+          `${ctx}.summonMaxAlive must be a positive integer when set (got ${JSON.stringify(maxRaw)})`,
+        );
+      }
+      summonMaxAlive = maxRaw;
+    }
   } else {
     // melee / ranged / magic — animated, frame-gated, range-checked
     animation = requireAnimKeyExists(ctx, 'animation', a.animation, animations);
@@ -969,9 +1223,16 @@ function validateAttack(
       );
     }
     damage = requirePositive('damage');
-    range = requirePositive('range');
+    // A combo-only follow-up is never selected independently, so it needs no
+    // selection range; reachability is inherited from the lead attack's range
+    // check at combo time. Every other melee/ranged/magic attack requires one.
+    if (comboOnly === true) {
+      range = optionalPositive('range');
+    } else {
+      range = requirePositive('range');
+    }
     minRange = optionalPositive('minRange');
-    if (minRange !== undefined && minRange >= range) {
+    if (minRange !== undefined && range !== undefined && minRange >= range) {
       throw new Error(
         `${ctx}.minRange (${minRange}) must be less than range (${range})`,
       );
@@ -979,6 +1240,18 @@ function validateAttack(
 
     if (type === 'melee') {
       hitboxes = parseHitbox();
+      if (a.lungeDistance !== undefined) {
+        if (
+          typeof a.lungeDistance !== 'number' ||
+          !Number.isFinite(a.lungeDistance) ||
+          a.lungeDistance <= 0
+        ) {
+          throw new Error(
+            `${ctx}.lungeDistance must be a positive number when set (got ${JSON.stringify(a.lungeDistance)})`,
+          );
+        }
+        lungeDistance = a.lungeDistance;
+      }
     } else {
       projectileAnimIdle = requireAnimKeyExists(
         ctx,
@@ -1005,16 +1278,36 @@ function validateAttack(
       };
       projectileOriginX = requireFiniteNumber('projectileOriginX');
       projectileOriginY = requireFiniteNumber('projectileOriginY');
+      if (a.projectileStraight !== undefined) {
+        if (typeof a.projectileStraight !== 'boolean') {
+          throw new Error(
+            `${ctx}.projectileStraight must be a boolean when set (got ${JSON.stringify(a.projectileStraight)})`,
+          );
+        }
+        projectileStraight = a.projectileStraight;
+      }
+      verticalAlignMarginPx = requireFiniteNumber('verticalAlignMarginPx');
+      if (
+        verticalAlignMarginPx !== undefined &&
+        (verticalAlignMarginPx < 0 || projectileStraight !== true)
+      ) {
+        throw new Error(
+          `${ctx}.verticalAlignMarginPx requires projectileStraight=true and must be >= 0 (got ${JSON.stringify(a.verticalAlignMarginPx)})`,
+        );
+      }
     }
   }
 
   if (
     type !== 'ranged' &&
     type !== 'magic' &&
-    (a.projectileOriginX !== undefined || a.projectileOriginY !== undefined)
+    (a.projectileOriginX !== undefined ||
+      a.projectileOriginY !== undefined ||
+      a.projectileStraight !== undefined ||
+      a.verticalAlignMarginPx !== undefined)
   ) {
     throw new Error(
-      `${ctx}.projectileOriginX/Y are only valid on type "ranged" or "magic" (got type "${type}")`,
+      `${ctx}.projectileOriginX/Y/projectileStraight/verticalAlignMarginPx are only valid on type "ranged" or "magic" (got type "${type}")`,
     );
   }
 
@@ -1197,6 +1490,33 @@ function validateAttack(
     );
   }
 
+  // comboOnly shares the combo type restriction: chaining only runs on the
+  // animation-complete → recover path that melee/ranged/magic use. Reject it
+  // elsewhere so a misplaced flag fails loudly at boot.
+  if (comboOnly !== undefined && type !== 'melee' && type !== 'ranged' && type !== 'magic') {
+    throw new Error(
+      `${ctx}.comboOnly is only valid on type "melee" | "ranged" | "magic" (got type "${type}")`,
+    );
+  }
+
+  if (a.lungeDistance !== undefined && type !== 'melee') {
+    throw new Error(
+      `${ctx}.lungeDistance is only valid on type "melee" (got type "${type}")`,
+    );
+  }
+
+  // Summon fields are summon-only — reject on other types so a typo (e.g.
+  // summonKinds on a melee swing) fails at boot rather than silently no-opping.
+  if (type !== 'summon') {
+    for (const field of ['summonKinds', 'summonCount', 'summonMaxAlive'] as const) {
+      if (a[field] !== undefined) {
+        throw new Error(
+          `${ctx}.${field} is only valid on type "summon" (got type "${type}")`,
+        );
+      }
+    }
+  }
+
   let damageHalfWidth: number | undefined;
   let damageHalfHeight: number | undefined;
   const validateAoeHalfDim = (field: 'damageHalfWidth' | 'damageHalfHeight'): number | undefined => {
@@ -1245,6 +1565,8 @@ function validateAttack(
     projectileSpeed,
     projectileOriginX,
     projectileOriginY,
+    projectileStraight,
+    verticalAlignMarginPx,
     vfxAnimation,
     requireGroundedTarget,
     minAirborneDodgeClearancePx,
@@ -1262,6 +1584,11 @@ function validateAttack(
     appearElevated,
     comboNextAnimation,
     comboChancePct,
+    comboOnly,
+    lungeDistance,
+    summonKinds,
+    summonCount,
+    summonMaxAlive,
   };
 }
 

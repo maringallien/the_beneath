@@ -18,6 +18,10 @@ const PIXEL_ART_TEXTURE_KEYS: ReadonlySet<string> = new Set(['hud_ammo']);
 
 interface OpenOptions {
   readonly kind: ShopKind;
+  // LDtk identifier of the level the merchant stands in. Selects which capacity
+  // upgrade (if any) this shop offers — only the Level_9/11/18 merchants sell
+  // one. null (player in inter-level whitespace) yields just the restock items.
+  readonly levelId: string | null;
   readonly player: Player;
   // Invoked once the overlay finishes closing (after the user pressed ESC,
   // clicked the dim backdrop, or triggered a programmatic close). GameScene
@@ -61,7 +65,7 @@ export class ShopOverlay {
 
   open(options: OpenOptions): void {
     if (this.isOpen()) return;
-    this.items = shopItemsFor(options.kind);
+    this.items = shopItemsFor(options.kind, options.levelId);
     this.player = options.player;
     this.onClose = options.onClose;
     this.selectedIndex = 0;
@@ -172,7 +176,8 @@ export class ShopOverlay {
 
       const detail = document.createElement('div');
       detail.className = 'shop-item-detail';
-      detail.textContent = `+${item.grantAmount}`;
+      detail.textContent =
+        item.kind === 'upgrade' ? item.detail : `+${item.grantAmount}`;
       body.appendChild(detail);
 
       row.appendChild(body);
@@ -348,24 +353,33 @@ export class ShopOverlay {
       const selected = i === this.selectedIndex;
       row.classList.toggle('shop-item--selected', selected);
 
-      const atMax =
-        this.player.getResourceValue(item.pickupKind) >=
-        this.player.getResourceMax(item.pickupKind);
+      // "Sold out" means there's no point selling: a resource already at its
+      // cap (MAX) or a one-time upgrade already owned (OWNED). Both disable the
+      // row; the label/color differ so the buyer knows which case it is.
+      const soldOut =
+        item.kind === 'upgrade'
+          ? this.player.ownsUpgrade(item.id)
+          : this.player.getResourceValue(item.pickupKind) >=
+            this.player.getResourceMax(item.pickupKind);
       const cantAfford = this.player.getCoins() < item.price;
-      const disabled = atMax || cantAfford;
+      const disabled = soldOut || cantAfford;
 
       row.classList.toggle('shop-item--disabled', disabled);
-      row.classList.toggle('shop-item--cant-afford', cantAfford && !atMax);
+      row.classList.toggle('shop-item--cant-afford', cantAfford && !soldOut);
 
       const status = row.querySelector<HTMLDivElement>('.shop-item-status');
       if (status) {
         status.classList.remove(
           'shop-item-status--max',
           'shop-item-status--poor',
+          'shop-item-status--owned',
         );
-        if (atMax) {
-          status.textContent = 'MAX';
-          status.classList.add('shop-item-status--max');
+        if (soldOut) {
+          const isUpgrade = item.kind === 'upgrade';
+          status.textContent = isUpgrade ? 'OWNED' : 'MAX';
+          status.classList.add(
+            isUpgrade ? 'shop-item-status--owned' : 'shop-item-status--max',
+          );
           status.style.display = '';
         } else if (cantAfford) {
           status.textContent = 'NEED MORE';

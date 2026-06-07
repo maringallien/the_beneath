@@ -12,6 +12,7 @@ import {
 } from '../audio';
 import {
   BOSS_ROUND_FIRST_REINFORCED_ROUND,
+  BOSS_ESCAPE_GRACE_MS,
   CAMERA_MAX_VERTICAL_LAG_PX,
   CAMERA_VERTICAL_OFFSET_PX,
   BOSS_DEFEATED_EVENT,
@@ -57,18 +58,6 @@ import {
   SAVE_TOAST_TEXT,
   SCENE_KEYS,
   STARTING_LEVEL_IDENTIFIER,
-  LANDING_VIGNETTE_THICKNESS_PX,
-  LANDING_VIGNETTE_EDGE_ALPHA,
-  VIGNETTE_SAMPLE_HALF_W_CELLS,
-  VIGNETTE_SAMPLE_HALF_H_CELLS,
-  VIGNETTE_REFERENCE_DENSITY,
-  VIGNETTE_THICKNESS_DENSITY_SLOPE_PX,
-  VIGNETTE_MIN_THICKNESS_PX,
-  VIGNETTE_MAX_THICKNESS_PX,
-  VIGNETTE_ALPHA_DENSITY_SLOPE,
-  VIGNETTE_MIN_EDGE_ALPHA,
-  VIGNETTE_MAX_EDGE_ALPHA,
-  VIGNETTE_SMOOTH_LERP,
 } from '../constants';
 import { AmmoDrop } from '../entities/AmmoDrop';
 import type { AmmoDropSpawnerScene } from '../entities/AmmoDropSpawnerScene';
@@ -80,6 +69,7 @@ import {
   type BossSelfCopySpec,
 } from '../entities/bossSelfCopies';
 import { Enemy } from '../entities/Enemy';
+import { TeleportCoordinator } from '../entities/teleportCoordinator';
 import {
   EnemyProjectile,
   type EnemyProjectileSpawnOptions,
@@ -101,8 +91,8 @@ import {
   recordKeyCollected,
   resetRunProgress,
 } from '../state/runProgress';
+import { CombatZoneWarning } from '../ui/CombatZoneWarning';
 import { PlayerHudOverlay } from '../ui/PlayerHudOverlay';
-import { EdgeVignette } from '../ui/EdgeVignette';
 import { Save } from '../entities/Save';
 import type { ShopKind } from '../entities/shop/shopTypes';
 import { ShopOverlay } from '../ui/ShopOverlay';
@@ -121,9 +111,7 @@ import {
   getIntGrid,
   getLevel,
   parseLdtkProject,
-  type IntGridData,
 } from '../ldtk/parseLdtk';
-import { sampleSolidDensity } from '../level/GroundDensity';
 import type { LdtkProject } from '../ldtk/types';
 import { subscribeLdtkUpdate } from '../level/HotReloadBus';
 import { EnemyRespawnManager, type PendingRespawn } from '../level/EnemyRespawnManager';
@@ -150,9 +138,6 @@ interface LevelSlot {
   pxWid: number;
   pxHei: number;
   rendered: RenderedLevel;
-  // The level's IntGrid (solid-terrain CSV), kept for the dynamic vignette's
-  // per-frame ground-density sampling. null for levels with no IntGrid layer.
-  intGrid: IntGridData | null;
 }
 
 // Player state preserved across LDtk hot-reloads AND across save→death→
@@ -269,20 +254,10 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   // Screen-wide boss round-fight overlay (top bar + "Round N" banner). Created
   // alongside the player HUD; visible only while a round-fight boss is engaged.
   private bossHud: BossHud | null = null;
-  // The home-screen edge vignette applied over live gameplay. Created alongside
-  // the HUD (so it never stacks under the landing flow's own vignette) and
-  // shares the HUD's lifecycle — survives world rebuilds, dropped on Quit.
-  private vignette: EdgeVignette | null = null;
-  // Smoothed vignette params, eased toward the per-frame terrain-density target
-  // in updateVignette so the vignette breathes instead of snapping. Seeded at
-  // the landing set point — the value Level 3 (the reference) hovers around.
-  private vignetteThickness = LANDING_VIGNETTE_THICKNESS_PX;
-  private vignetteAlpha = LANDING_VIGNETTE_EDGE_ALPHA;
-  // IntGrid cell size (world px) used to size the density sample window.
-  // Captured from the first IntGrid in buildWorld; the LDtk project uses a
-  // uniform grid, so one value covers every level. Falls back to 16 (the
-  // project default) before any world is built.
-  private densityGridSize = 16;
+  // Screen-pinned "leaving combat zone" warning + countdown. Created alongside
+  // the boss HUD; visible only while the player is outside an engaged boss's
+  // arena and the escape grace timer is running (see updateBossLeash).
+  private combatWarning: CombatZoneWarning | null = null;
   // The round-fight boss the player is currently engaged with (encountered and
   // alive), resolved each frame in updateEnemies. null when none — drives the
   // BossHud's visibility and which boss's HP/round it reflects.
@@ -298,6 +273,11 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   // bar hidden / no active boss. Lets updateBossHud fire the Round 1 banner on
   // first engage and a new banner each time the boss's latched round climbs.
   private bossRoundShown = 0;
+  // Wall-clock deadline (scene time) at which the current boss fight resets
+  // because the player left the arena, or null when the player is inside the
+  // arena or no boss is engaged. Armed the frame the player first crosses out
+  // (see updateBossLeash); cleared on return or on reset.
+  private escapeDeadline: number | null = null;
   // World positions of the General_enemy_spawn markers, collected once at
   // world-build time. Reinforcement waves spawn at the subset that falls
   // inside the active boss's level. Empty when the level has no markers.
@@ -316,6 +296,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   // Monotonic counter for synthesizing unique iids for spawned reinforcements
   // (real LDtk entities carry their own iid; these don't).
   private reinforcementCounter = 0;
+  // Live minions spawned by 'summon' attacks (e.g. the summoner). Like
+  // reinforcements they live in the `enemies` group but outside
+  // `spawned.enemies`, so tearDownWorld destroys them explicitly. Kept separate
+  // from `reinforcements` so the boss-arena escape system (breakOffArena /
+  // resetBossFight) doesn't drop or despawn a summoner's minions, which aren't
+  // tied to a boss fight. Spliced on each one's DESTROY.
+  private summonedMinions: Enemy[] = [];
   // Hold-E interaction system. Built in buildWorld after entities spawn so
   // the registry has live targets; destroyed in tearDownWorld so HMR rebuilds
   // the icon and re-registers fresh chest references rather than holding on
@@ -484,6 +471,8 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // without a dangling reference to the just-destroyed boss.
     this.activeBoss = null;
     this.bossRoundShown = 0;
+    this.escapeDeadline = null;
+    this.combatWarning?.setVisible(false);
     // New Game / Quit / Return-to-Title all abandon the current run, so wipe the
     // persistent boss-key progress and re-arm the victory latch. This is the
     // ONLY place run progress is cleared — death/respawn and HMR deliberately
@@ -500,10 +489,8 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       this.hud = null;
       this.bossHud?.destroy();
       this.bossHud = null;
-      // Drop the vignette too — the title screen's own LandingScene vignette
-      // takes over, and leaving this one alive would double the edge darkening.
-      this.vignette?.destroy();
-      this.vignette = null;
+      this.combatWarning?.destroy();
+      this.combatWarning = null;
     }
 
     this.shouldShowLanding = showLanding;
@@ -567,6 +554,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.anims.pauseAll();
     this.shopOverlay.open({
       kind: payload.kind,
+      levelId: this.getCurrentLevelId(),
       player: this.player,
       onClose: () => {
         this.anims.resumeAll();
@@ -581,14 +569,9 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   // rather than per-frame world-space math; the boss HUD stays canvas-rendered.
   private setupHud(): void {
     const parent = this.game.canvas.parentElement ?? document.body;
-    this.hud = new PlayerHudOverlay(this, parent);
+    this.hud = new PlayerHudOverlay(parent);
     this.bossHud = new BossHud(this);
-    this.vignette = new EdgeVignette(this);
-    // Start at the landing set point so the first gameplay frame is neutral and
-    // the density easing begins from the reference rather than a stale value
-    // left by a previous run.
-    this.vignetteThickness = LANDING_VIGNETTE_THICKNESS_PX;
-    this.vignetteAlpha = LANDING_VIGNETTE_EDGE_ALPHA;
+    this.combatWarning = new CombatZoneWarning(this);
     // Drive HUD position+ratio updates from the main camera's PRE_RENDER
     // event. That fires after Camera.preRender() rebuilds the camera matrix
     // and refreshes midPoint, so the HUD positions are in sync with the
@@ -607,10 +590,10 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     const cam = this.cameras.main;
     cam.off(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateHud, this);
     cam.off(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateBossHud, this);
-    cam.off(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateVignette, this);
+    cam.off(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateCombatWarning, this);
     cam.on(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateHud, this);
     cam.on(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateBossHud, this);
-    cam.on(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateVignette, this);
+    cam.on(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateCombatWarning, this);
 
     // The DOM HUD renders above the canvas, so it would otherwise float over the
     // pause/shop/options dim instead of being covered by it. Hide it whenever
@@ -632,48 +615,6 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.hud?.setVisible(true);
   }
 
-  // Edge-vignette driver. Rides the same camera PRE_RENDER event as the HUDs so
-  // its world-space strips track the camera scroll after this frame's follow
-  // lerp — keeping the darkening pinned to the viewport edges.
-  //
-  // Grows the vignette in tight, rock-filled spaces and shrinks it in open
-  // caverns: each frame it samples the solid-tile fraction of a fixed cell
-  // window centered on the camera, maps that around the Level-3 set point to a
-  // target thickness + alpha, then eases the live values toward the target so
-  // the darkening breathes rather than snaps as tiles scroll through the window.
-  private updateVignette(): void {
-    if (!this.vignette) return;
-    const cam = this.cameras.main;
-
-    const density = sampleSolidDensity(
-      this.levelSlots,
-      cam.midPoint.x,
-      cam.midPoint.y,
-      VIGNETTE_SAMPLE_HALF_W_CELLS,
-      VIGNETTE_SAMPLE_HALF_H_CELLS,
-      this.densityGridSize,
-    );
-
-    const delta = density - VIGNETTE_REFERENCE_DENSITY;
-    const targetThickness = Phaser.Math.Clamp(
-      LANDING_VIGNETTE_THICKNESS_PX + delta * VIGNETTE_THICKNESS_DENSITY_SLOPE_PX,
-      VIGNETTE_MIN_THICKNESS_PX,
-      VIGNETTE_MAX_THICKNESS_PX,
-    );
-    const targetAlpha = Phaser.Math.Clamp(
-      LANDING_VIGNETTE_EDGE_ALPHA + delta * VIGNETTE_ALPHA_DENSITY_SLOPE,
-      VIGNETTE_MIN_EDGE_ALPHA,
-      VIGNETTE_MAX_EDGE_ALPHA,
-    );
-
-    this.vignetteThickness +=
-      (targetThickness - this.vignetteThickness) * VIGNETTE_SMOOTH_LERP;
-    this.vignetteAlpha +=
-      (targetAlpha - this.vignetteAlpha) * VIGNETTE_SMOOTH_LERP;
-
-    this.vignette.update(cam, this.vignetteThickness, this.vignetteAlpha);
-  }
-
   private updateHud(): void {
     if (!this.hud) return;
     this.hud.update({
@@ -691,6 +632,8 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       maxCoins: this.player.getMaxCoins(),
       healItems: this.player.getHealItems(),
       maxHealItems: this.player.getMaxHealItems(),
+      mode: this.player.getCurrentMode(),
+      magicSelected: this.player.isMagicMode(),
     });
   }
 
@@ -729,6 +672,20 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     );
   }
 
+  // Escape-warning driver, on the same camera PRE_RENDER event as the HUDs so
+  // its screen-pinned text stays in sync with this frame's scroll. The overlay
+  // is shown/hidden by updateBossLeash (UPDATE phase); here we just feed it the
+  // live seconds-remaining while a countdown is armed. ceil so the counter reads
+  // the grace seconds (e.g. 3 → 2 → 1) and only hits 0 at the deadline.
+  private updateCombatWarning(): void {
+    if (!this.combatWarning || this.escapeDeadline === null) return;
+    const secondsLeft = Math.max(
+      0,
+      Math.ceil((this.escapeDeadline - this.time.now) / 1000),
+    );
+    this.combatWarning.update(secondsLeft, this.cameras.main);
+  }
+
   update(): void {
     this.player.update();
     this.updateEnemies();
@@ -737,6 +694,10 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // round's reinforcement wave. Placed here, not in updateBossHud (a render
     // callback), so enemy spawns happen on the update tick after the AI loop.
     this.updateBossEncounter();
+    // After convergence/reinforcements: if the player has fled the arena, run
+    // the escape countdown (warning + break-off pursuit) and reset the fight
+    // when it lapses.
+    this.updateBossLeash();
     this.updateTraps();
     this.updateDoors();
     // Respawn scan runs after the per-entity ticks so any enemy that died
@@ -790,11 +751,11 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     const playerFootTileY = Math.floor((pb.bottom + 1) / TILE_SIZE_PX);
     const playerLevelId = this.getCurrentLevelId();
     for (const trap of this.spawned.traps) {
-      // Traps can be destroyed mid-play by a sword swing or projectile
-      // (onProjectileHitsTrap / applySwordHits). spawned.traps is never
-      // pruned, so the reference lingers — skip destroyed instances here
-      // before touching .body or calling methods that would .play() on a
-      // dead sprite (which throws and stalls the scene update loop).
+      // Traps are indestructible hazards — neither sword nor projectile can
+      // break one, and spawned.traps is never pruned mid-play. The !active
+      // guard is therefore defensive: it keeps this loop from touching .body or
+      // calling .play() on a sprite the group teardown has destroyed (a dead
+      // sprite throws and stalls the scene update loop).
       if (!trap.active) continue;
       // Swaying-sword fires on a different trigger semantic (player passes
       // UNDER the ceiling-hung blade) and runs its own state machine, so it
@@ -963,8 +924,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // enemies must not swarm until the fight is truly joined: the boss has
     // traded blows or committed an attack (isInConflict). Before that, every
     // enemy keeps its normal LOS-gated behavior, so walking into the room
-    // doesn't instantly yank every spider and wasp onto the player.
-    if (boss.isInConflict()) {
+    // doesn't instantly yank every spider and wasp onto the player. Also gated
+    // on the player being inside the arena: once they flee, updateBossLeash
+    // breaks off pursuit each frame, and re-converging here would fight it.
+    const playerInArena =
+      bounds !== null &&
+      this.isWithinBounds(this.player.x, this.player.y, bounds);
+    if (boss.isInConflict() && playerInArena) {
       for (const obj of this.enemies.getChildren()) {
         if (!(obj instanceof Enemy)) continue;
         if (obj === boss) continue;
@@ -991,6 +957,92 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       }
       this.lastReinforcedRound = round;
     }
+  }
+
+  // Boss-fight escape guard, run each frame after updateBossEncounter. While a
+  // round-fight boss is engaged, watches whether the player has left its arena —
+  // the boss's HOME level rect (getLevelBoundsAt at its spawn point), so the
+  // test is robust to a roaming boss and to the inter-level seams where
+  // getCurrentLevelId is null. Inside the arena: cancel any countdown. Outside:
+  // arm the BOSS_ESCAPE_GRACE_MS countdown, show the warning, and break off
+  // every arena enemy each frame so none trail the player out. Past the
+  // deadline: reset the fight.
+  private updateBossLeash(): void {
+    const boss = this.activeBoss;
+    if (!boss || !boss.active || boss.isDead()) {
+      this.clearEscape();
+      return;
+    }
+    const arena = this.getLevelBoundsAt(boss.getSpawnX(), boss.getSpawnY());
+    if (!arena || this.isWithinBounds(this.player.x, this.player.y, arena)) {
+      this.clearEscape();
+      return;
+    }
+    // Player is outside the arena while engaged. Arm the countdown on the first
+    // frame out and reveal the warning.
+    if (this.escapeDeadline === null) {
+      this.escapeDeadline = this.time.now + BOSS_ESCAPE_GRACE_MS;
+      this.combatWarning?.setVisible(true);
+    }
+    this.breakOffArena(boss, arena);
+    if (this.time.now >= this.escapeDeadline) {
+      this.resetBossFight(boss);
+    }
+  }
+
+  // Drops pursuit on every enemy tied to the fight so none follow the player out
+  // of the arena: all reinforcements/self-copies (wherever they are — they must
+  // never trail the player) plus the boss and any native arena enemy currently
+  // inside `arena`. Reverts each to its loiter/home/idle behavior instead of a
+  // through-walls chase. Called each frame while the player is outside (hold
+  // them at the room) and once more at reset.
+  private breakOffArena(
+    boss: Enemy,
+    arena: { worldX: number; worldY: number; pxWid: number; pxHei: number },
+  ): void {
+    boss.dropPursuit();
+    for (const enemy of this.reinforcements) {
+      if (enemy.active) enemy.dropPursuit();
+    }
+    for (const obj of this.enemies.getChildren()) {
+      if (!(obj instanceof Enemy) || obj === boss) continue;
+      if (!obj.active || obj.isDead()) continue;
+      if (!this.isWithinBounds(obj.x, obj.y, arena)) continue;
+      obj.dropPursuit();
+    }
+  }
+
+  // Cancels any in-progress escape countdown and hides the warning. Idempotent:
+  // early-returns when no countdown is armed, so the per-frame calls (player
+  // inside the arena, or no boss engaged) are cheap.
+  private clearEscape(): void {
+    if (this.escapeDeadline === null) return;
+    this.escapeDeadline = null;
+    this.combatWarning?.setVisible(false);
+  }
+
+  // Ends and resets an abandoned boss fight (player stayed out past the grace
+  // window). Breaks off lingering arena pursuit, despawns every reinforcement +
+  // self-copy, re-arms the wave/HUD trackers, resets the boss to its
+  // pre-encounter state (full HP, round 1, home position, encounter sting
+  // re-armed), and clears the boss HUD + escape warning. Because resetEncounter
+  // clears the boss's encounter latch, updateEnemies won't re-select it as the
+  // active boss until the player physically re-enters the arena.
+  private resetBossFight(boss: Enemy): void {
+    const arena = this.getLevelBoundsAt(boss.getSpawnX(), boss.getSpawnY());
+    if (arena) this.breakOffArena(boss, arena);
+    // Destroy reinforcements + self-copies (each DESTROY handler splices the
+    // live list, so iterate a copy).
+    for (const enemy of [...this.reinforcements]) {
+      if (enemy.active) enemy.destroy();
+    }
+    this.reinforcements = [];
+    this.lastReinforcedRound = 0;
+    this.bossRoundShown = 0;
+    boss.resetEncounter();
+    this.activeBoss = null;
+    this.bossHud?.setVisible(false);
+    this.clearEscape();
   }
 
   // Spawns one reinforcement wave for `round` of boss `bossId`: the roster from
@@ -1069,6 +1121,32 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     enemy.forceConverge();
   }
 
+  // Spawns a single summoned minion of `identifier` beside a 'summon' caster,
+  // drops it onto the floor beneath (x, y) so it doesn't free-fall into fall
+  // damage, wires it into the world WITHOUT respawn tracking, and forces it
+  // into pursuit. Tracked in `summonedMinions` (not `reinforcements`) so the
+  // boss-arena escape system never drops/despawns a summoner's minions, while
+  // tearDownWorld still cleans them up. Returns the new Enemy, or null when
+  // `identifier` isn't a behavior-bearing registry entry. Implements the
+  // EnemyHelperScene hook Enemy 'summon' attacks call.
+  summonEnemyAt(identifier: string, x: number, y: number): Enemy | null {
+    const groundY = this.groundYBelow(x, y);
+    const spawnY = groundY - REINFORCEMENT_SPAWN_LIFT_PX;
+    const iid = `summon-${this.reinforcementCounter}`;
+    this.reinforcementCounter += 1;
+    const enemy = respawnEnemyAt(this, identifier, x, spawnY, iid, null);
+    if (!enemy) return null;
+    registerEntitySound(this, identifier, iid, x, spawnY);
+    this.attachEnemyToWorld(enemy, false);
+    this.summonedMinions.push(enemy);
+    enemy.once(Phaser.GameObjects.Events.DESTROY, () => {
+      const idx = this.summonedMinions.indexOf(enemy);
+      if (idx >= 0) this.summonedMinions.splice(idx, 1);
+    });
+    enemy.forcePursue();
+    return enemy;
+  }
+
   // Spawns the boss's round "split": spec.count harmless copies of the boss
   // itself, flanking its current position. Each copy is built from the boss's
   // own registry identifier — inheriting every animation, attack, and AI
@@ -1086,6 +1164,15 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       | null,
   ): void {
     const identifier = boss.getIdentifier();
+    // One coordinator for the whole split. The boss joins immediately (it was
+    // built long before this round); each copy joins via its spawn overrides.
+    // Gates teleports to one member at a time and feeds the lateral-separation
+    // pass so the family never stacks into a single sprite.
+    const coordinator = new TeleportCoordinator();
+    boss.setTeleportCoordinator(coordinator);
+    boss.once(Phaser.GameObjects.Events.DESTROY, () => {
+      coordinator.unregister(boss);
+    });
     for (let i = 0; i < spec.count; i += 1) {
       // Alternate sides so copies flank the boss and never overlap it:
       // 1st left, 2nd right, 3rd further left, 4th further right, ...
@@ -1109,6 +1196,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
         harmless: true,
         maxHealth: spec.maxHealth,
         chaseStandoffX,
+        attackCoordinator: coordinator,
       });
       if (!copy) continue;
       registerEntitySound(this, identifier, iid, x, boss.y);
@@ -1117,6 +1205,9 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       copy.once(Phaser.GameObjects.Events.DESTROY, () => {
         const idx = this.reinforcements.indexOf(copy);
         if (idx >= 0) this.reinforcements.splice(idx, 1);
+        // Leave the group so the teleport lock can't strand on a dead copy and
+        // the separation pass stops scanning it.
+        coordinator.unregister(copy);
       });
       copy.forceConverge();
     }
@@ -1290,29 +1381,31 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     return 0;
   }
 
-  // Coarse line-of-sight test: samples points along the segment (x1,y1)→(x2,y2)
-  // and returns true if any sample lands on a solid collision tile. Sample
-  // spacing is one tile (16 px in this project) so a 1-tile wall directly on
-  // the line is always caught — finer spacing would only matter for sub-tile
-  // geometry, which doesn't exist on the collision grid. False positives are
-  // possible when the line clips a floor/ceiling tile (e.g. enemy on a ledge
-  // above the player); chase will reject the path even though a curved walk
-  // could close the gap. Acceptable for the current AI model.
-  // Returns the body-center position of the nearest live enemy to (x, y),
-  // or null if none exist. Used by the sword_master teleport attack to drop
-  // the player above their nearest target on the 'appear' frame. Body center
-  // (not sprite center) is the reliable reference because tall sprites
-  // anchored at frame-bottom (e.g. The_tarnished_widow: 188×90 sprite with
-  // 48×45 body anchored at frame bottom) have their sprite.y sitting at
-  // body.top — placing the player relative to sprite.y leaves the slash
-  // hitbox entirely above the body. body.center.y normalizes across all
-  // enemy sizes/anchors. Dead enemies (mid-death-anim corpses still in the
-  // group) are filtered so the move homes in on something actually fightable.
-  // Wasps and the_hive are also skipped — wasps are swarm minions where
-  // homing onto a single one feels arbitrary, and the_hive is a stationary
-  // spawner the player isn't meant to dive-bomb directly.
+  // Returns the body-center position of the nearest VALID teleport target to
+  // (x, y), or null if none qualify. Beyond "alive and not blocklisted" a
+  // target must clear two gates: (1) same level as (x, y) — enemies from every
+  // level share the one `enemies` group, so without scoping the teleport could
+  // blink the player into a different level; (2) clear line of sight — the
+  // isLineBlocked raycast (the same test the chase AI uses) must find no solid
+  // tile between (x, y) and the target, so an enemy behind a wall is skipped.
+  // Used by the sword_master teleport attack to drop the player above their
+  // nearest target on the 'appear' frame. Body center (not sprite center) is
+  // the reliable reference because tall sprites anchored at frame-bottom (e.g.
+  // The_tarnished_widow: 188×90 sprite with 48×45 body anchored at frame
+  // bottom) have their sprite.y sitting at body.top — placing the player
+  // relative to sprite.y leaves the slash hitbox entirely above the body.
+  // body.center.y normalizes across all enemy sizes/anchors. Dead enemies
+  // (mid-death-anim corpses still in the group) are filtered so the move homes
+  // in on something actually fightable. Wasps and the_hive are also skipped —
+  // wasps are swarm minions where homing onto a single one feels arbitrary,
+  // and the_hive is a stationary spawner the player isn't meant to dive-bomb.
   getNearestEnemy(x: number, y: number): { x: number; y: number } | null {
     if (!this.enemies) return null;
+    // Scope to the player's current level. getLevelBoundsAt returns the slot
+    // containing (x, y); a null means the point lies outside every level, so
+    // there's no current level to target within and we bail.
+    const bounds = this.getLevelBoundsAt(x, y);
+    if (!bounds) return null;
     let nearestX = 0;
     let nearestY = 0;
     let nearestDistSq = Infinity;
@@ -1323,6 +1416,19 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       if (TELEPORT_TARGET_BLOCKLIST.has(obj.getIdentifier())) continue;
       const targetX = obj.body.center.x;
       const targetY = obj.body.center.y;
+      // Same-level gate: the target's body center must lie inside the player's
+      // level slot, else it belongs to a different level.
+      if (
+        targetX < bounds.worldX ||
+        targetX >= bounds.worldX + bounds.pxWid ||
+        targetY < bounds.worldY ||
+        targetY >= bounds.worldY + bounds.pxHei
+      ) {
+        continue;
+      }
+      // Line-of-sight gate: skip a target with a solid tile on the straight
+      // line from (x, y) — the player can't blink to an enemy behind a wall.
+      if (this.isLineBlocked(x, y, targetX, targetY)) continue;
       const dx = targetX - x;
       const dy = targetY - y;
       const distSq = dx * dx + dy * dy;
@@ -1336,6 +1442,28 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     return found ? { x: nearestX, y: nearestY } : null;
   }
 
+  // Invokes `cb` once for every live Enemy in the world, including any caller
+  // that is itself an enemy. Dead enemies (corpses mid-death-anim still in the
+  // group) are skipped so callers only ever see active characters. Backs the
+  // EnemyHelperScene hook the wander greeting uses to find a nearby same-group
+  // partner; callers filter and throttle, so this stays a plain linear scan.
+  forEachEnemy(cb: (enemy: Enemy) => void): void {
+    if (!this.enemies) return;
+    for (const obj of this.enemies.getChildren()) {
+      if (!(obj instanceof Enemy)) continue;
+      if (obj.isDead()) continue;
+      cb(obj);
+    }
+  }
+
+  // Coarse line-of-sight test: samples points along the segment (x1,y1)→(x2,y2)
+  // and returns true if any sample lands on a solid collision tile. Sample
+  // spacing is one tile (16 px in this project) so a 1-tile wall directly on
+  // the line is always caught — finer spacing would only matter for sub-tile
+  // geometry, which doesn't exist on the collision grid. False positives are
+  // possible when the line clips a floor/ceiling tile (e.g. enemy on a ledge
+  // above the player); a target on a ledge can be rejected even though a
+  // curved approach exists. Acceptable for the coarse teleport/chase checks.
   isLineBlocked(x1: number, y1: number, x2: number, y2: number): boolean {
     const dx = x2 - x1;
     const dy = y2 - y1;
@@ -1421,11 +1549,9 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
         pxWid: lvl.pxWid,
         pxHei: lvl.pxHei,
         rendered,
-        intGrid,
       });
 
       if (intGrid) {
-        this.densityGridSize = intGrid.gridSize;
         const collisionLayer = buildIntGridCollision(
           this,
           intGrid,
@@ -1619,12 +1745,54 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // Doors are static walls. Immovable bodies on the Door side mean the
     // default Arcade collision response just pushes the player back.
     if (spawned.doors.length > 0) {
+      const doors = spawned.doors as Door[];
       this.colliders.push(
         this.physics.add.collider(
           this.player,
-          spawned.doors as Door[],
+          doors,
           undefined,
           (_player, door) => !(door as Door).isPassable(),
+          this,
+        ),
+      );
+      // Enemies obey the same closed-door wall as the player: a shut (or
+      // still-locked) door is solid, so a pursuing enemy is shoved back instead
+      // of phasing through to the player's side. The shared isPassable() process
+      // gate drops the collision the instant the door swings open — the same
+      // frame the player can walk through — so enemies only ever follow through
+      // a door the player has already opened. Group collider, so enemies the
+      // respawn manager adds later are covered without re-wiring.
+      this.colliders.push(
+        this.physics.add.collider(
+          this.enemies,
+          doors,
+          undefined,
+          (_enemy, door) => !(door as Door).isPassable(),
+          this,
+        ),
+      );
+      // A closed (still-locked, or mid-swing) door is solid to gunfire the same
+      // way it is to the player: bullets burst against it like they would
+      // against terrain instead of phasing through to whatever's behind. The
+      // shared isPassable() process gate lets shots pass only once the door has
+      // swung open — exactly the frame the player can walk through.
+      this.colliders.push(
+        this.physics.add.collider(
+          this.projectiles,
+          doors,
+          this.onProjectilePlatformImpact,
+          (_projectile, door) => !(door as Door).isPassable(),
+          this,
+        ),
+      );
+      // Enemy gunfire obeys the same closed-door wall so an enemy or boss can't
+      // shoot the player through a shut door.
+      this.colliders.push(
+        this.physics.add.collider(
+          this.enemyProjectiles,
+          doors,
+          this.onEnemyProjectilePlatformImpact,
+          (_projectile, door) => !(door as Door).isPassable(),
           this,
         ),
       );
@@ -1913,8 +2081,19 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       if (enemy.active) enemy.destroy();
     }
     this.reinforcements = [];
+    // Summoned minions live in the enemies group but outside spawned.enemies
+    // too (same rationale as reinforcements) — destroy any still alive here.
+    for (const enemy of [...this.summonedMinions]) {
+      if (enemy.active) enemy.destroy();
+    }
+    this.summonedMinions = [];
     this.lastReinforcedRound = 0;
     this.enemySpawnSites = [];
+    // Clear any in-flight escape countdown so a rebuilt world (HMR / respawn)
+    // never carries a stale warning. The overlay itself survives the rebuild
+    // and re-binds via setupHud, so just hide it here.
+    this.escapeDeadline = null;
+    this.combatWarning?.setVisible(false);
 
     if (this.enemies) {
       // Enemies are destroyed via destroyEntities below; clear(false, false)
@@ -2392,10 +2571,11 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // outlive the scene; reset the engagement trackers for a clean restart.
     this.bossHud?.destroy();
     this.bossHud = null;
-    this.vignette?.destroy();
-    this.vignette = null;
+    this.combatWarning?.destroy();
+    this.combatWarning = null;
     this.activeBoss = null;
     this.bossRoundShown = 0;
+    this.escapeDeadline = null;
     this.victoryShown = false;
     if (this.keyDoorMessageText) {
       this.tweens.killTweensOf(this.keyDoorMessageText);

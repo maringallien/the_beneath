@@ -80,6 +80,9 @@ export interface LdtkLayerInstance {
   __cWid: number;
   __cHei: number;
   __gridSize: number;
+  // Layer opacity in [0,1] (LDtk's per-layer-instance "__opacity"). Decoration
+  // entities on this layer composite their own tileOpacity on top of it.
+  __opacity: number;
   __tilesetDefUid: number | null;
   iid: string;
   levelId: number;
@@ -115,8 +118,23 @@ export interface LdtkTilesetDef {
   spacing: number;
 }
 
+// Subset of an LDtk entity definition. tileOpacity is the per-entity render
+// opacity authored in the editor (Entity settings → "Tile opacity"); the game
+// applies it as the decoration sprite's alpha so rendering matches LDtk.
+export interface LdtkEntityDef {
+  uid: number;
+  identifier: string;
+  tileOpacity: number;
+  // LDtk's per-entity "Can be out of level bounds" setting. When true, the
+  // renderer exempts this entity's decoration from the per-level mask so its
+  // overhang spills past the level rect and bleeds into the adjacent level
+  // (matching how LDtk's editor draws it) instead of being clipped at the edge.
+  allowOutOfBounds: boolean;
+}
+
 export interface LdtkProjectDefs {
   tilesets: LdtkTilesetDef[];
+  entities: LdtkEntityDef[];
 }
 
 export interface LdtkProject {

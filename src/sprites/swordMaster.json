@@ -150,6 +150,10 @@
         "appear": {
           "startFrame": 7,
           "endFrame": 26
+        },
+        "strike": {
+          "startFrame": 13,
+          "endFrame": 13
         }
       }
     },

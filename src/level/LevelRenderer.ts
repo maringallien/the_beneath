@@ -6,6 +6,7 @@ import {
   FOREGROUND_GLOW_FLICKER_MAX_ALPHA,
   FOREGROUND_GLOW_FLICKER_MIN_ALPHA,
   FOREGROUND_GLOW_LAYER_PREFIX,
+  FOREGROUND_OVERLAY_LAYER_DEPTHS,
   GENERAL_ENEMY_SPAWN_IDENTIFIER,
   LAYER_BRIGHTNESS_FACTORS,
   SIGN_FLICKER_BURST_SIZE_MAX,
@@ -23,6 +24,7 @@ import {
 import { bakeSignTextures, getLitConfig } from './SignTextureBaker';
 import { DYNAMIC_ENTITY_IDENTIFIERS } from '../entities/EntityFactory';
 import {
+  getEntityDefs,
   getRenderableEntityLayers,
   getRenderableLayers,
   getTilesetDefs,
@@ -80,7 +82,10 @@ export interface RenderedLevel {
   // Image-based layers (glow, decoration entities) so any LDtk-authored
   // spillage past the level rect doesn't show in inter-level gaps. Baked
   // tile layers don't use it — their RenderTexture is level-sized, so it
-  // clips spillage intrinsically. Null when a level has no Image layers.
+  // clips spillage intrinsically. Decorations whose entity def opts into
+  // "Can be out of level bounds" are also exempt — they render in their own
+  // unmasked sibling container so they can bleed into the next level. Null
+  // when a level has no maskable Image layers.
   maskGraphics: Phaser.GameObjects.Graphics | null;
   // See LevelAnimations.
   animations: LevelAnimations;
@@ -125,12 +130,19 @@ export function renderLevel(
     // levels visible while the camera scrolls that put tens of thousands of
     // Image GameObjects into the per-frame display-list walk — the dominant
     // frame-time cost (felt as choppiness once the camera moves). Baking
-    // collapses each layer to a single draw call. Depth comes from the layer's
+    // collapses each layer to a single draw call. Depth defaults to the layer's
     // position in level.layerInstances so layers stack at the LDtk-authored
     // position; ties resolve by display-list insertion order (base, then the
     // brightness overlay, then glow — all created below in that order).
+    // Foreground layers authored above the Entities layer (Foreground2/3) are
+    // lifted into the overlay band so they occlude dynamic entities; every
+    // other layer keeps its natural back-to-front depth. Computed once and
+    // shared by the base bake, the brightness overlay, and the glow sibling so
+    // all three stay co-planar at the lifted depth.
+    const layerDepth =
+      FOREGROUND_OVERLAY_LAYER_DEPTHS[src.identifier] ?? src.depth;
     const baseRt = bakeTileLayer(scene, level, src.tiles, textureKey);
-    baseRt.setDepth(src.depth);
+    baseRt.setDepth(layerDepth);
     out.push({ identifier: src.identifier, type: src.type, container: baseRt });
 
     // Per-layer brightness lift: for any layer whose identifier opts in via
@@ -150,7 +162,7 @@ export function renderLevel(
       // subtle brightness lift.
       const overlayAlpha = brightnessFactor - 1.0;
       const overlayRt = bakeTileLayer(scene, level, src.tiles, textureKey);
-      overlayRt.setDepth(src.depth);
+      overlayRt.setDepth(layerDepth);
       overlayRt.setBlendMode(Phaser.BlendModes.ADD);
       overlayRt.setAlpha(overlayAlpha);
       out.push({
@@ -183,7 +195,7 @@ export function renderLevel(
         // foreground tile count.
         const brightFrames = getBrightFrames(glowKey);
         const glowContainer = scene.add.container(level.worldX, level.worldY);
-        glowContainer.setDepth(src.depth);
+        glowContainer.setDepth(layerDepth);
         for (const t of src.tiles) {
           if (brightFrames && !brightFrames.has(t.t)) continue;
           const img = scene.add.image(t.px[0], t.px[1], glowKey, t.t);
@@ -223,10 +235,18 @@ export function renderLevel(
   const entityLayers = getRenderableEntityLayers(
     level,
     new Set([...DYNAMIC_ENTITY_IDENTIFIERS, GENERAL_ENEMY_SPAWN_IDENTIFIER]),
+    getEntityDefs(project),
   );
   for (const src of entityLayers) {
     const container = scene.add.container(level.worldX, level.worldY);
     container.setDepth(src.depth);
+    // Sibling container for decorations whose LDtk def opts into "Can be out of
+    // level bounds". It shares this layer's origin and depth but is kept OUT of
+    // maskTargets, so the per-level GeometryMask never clips it — letting the
+    // decoration spill past the level rect and bleed into the adjacent level the
+    // way LDtk's editor previews it. Created lazily so layers without any
+    // out-of-bounds entities don't pay for an extra (empty) container.
+    let oobContainer: Phaser.GameObjects.Container | null = null;
     for (const dec of src.decorations) {
       const tilesetDef = tilesetDefs.get(dec.tilesetUid);
       if (!tilesetDef) {
@@ -239,6 +259,17 @@ export function renderLevel(
         throw new Error(
           `Tileset texture "${textureKey}" not loaded — was preloadTilesets() called for level "${level.identifier}"?`,
         );
+      }
+      // Out-of-bounds decorations go to the unmasked sibling; everything else
+      // stays in the masked base container. Both share depth, so LDtk-authored
+      // stacking within the layer is preserved.
+      let target = container;
+      if (dec.allowOutOfBounds) {
+        if (!oobContainer) {
+          oobContainer = scene.add.container(level.worldX, level.worldY);
+          oobContainer.setDepth(src.depth);
+        }
+        target = oobContainer;
       }
       // Lit decoration entities (neon signs, lit windows on houses) split
       // into two co-located images: a static "structure" image (frame, walls)
@@ -272,8 +303,8 @@ export function renderLevel(
             signTextures.litKey,
             dec,
           );
-          container.add(structureImg);
-          container.add(litImg);
+          target.add(structureImg);
+          target.add(litImg);
           if (litConfig.mode === 'flicker') {
             startSignFlicker(scene, litImg);
           } else {
@@ -283,14 +314,31 @@ export function renderLevel(
         }
       }
       const img = createEntityTileImage(scene, textureKey, dec);
-      container.add(img);
+      target.add(img);
     }
-    maskTargets.push(container);
-    out.push({ identifier: src.identifier, type: 'Entities', container });
+    // Mask + keep the base container only if it actually holds decorations: a
+    // layer whose entities are all out-of-bounds leaves it empty, so drop it.
+    if (container.length > 0) {
+      maskTargets.push(container);
+      out.push({ identifier: src.identifier, type: 'Entities', container });
+    } else {
+      container.destroy();
+    }
+    // The out-of-bounds container is rendered, culled, and destroyed like any
+    // other layer (it's in `out`) but never masked (absent from maskTargets).
+    if (oobContainer) {
+      out.push({
+        identifier: src.identifier,
+        type: 'Entities',
+        container: oobContainer,
+      });
+    }
   }
 
   // Build a rectangular world-space mask matching the level's bounds and apply
-  // it to the Image-based layers (glow, decoration entities). scene.make.graphics()
+  // it to the Image-based layers collected in maskTargets (glow, in-bounds
+  // decoration entities — out-of-bounds decorations are deliberately omitted
+  // above so they bleed past the edge). scene.make.graphics()
   // (vs add) keeps the mask source off the display list — its geometry is
   // consumed by the GeometryMask without rendering on its own. Color choice
   // (white) is arbitrary; geometry masks ignore color and use only fill coverage.
@@ -413,6 +461,7 @@ function createEntityTileImage(
   const img = scene.add.image(dec.px, dec.py, textureKey, frameName);
   img.setOrigin(dec.pivotX, dec.pivotY);
   img.setDisplaySize(scaledW, scaledH);
+  img.setAlpha(dec.alpha);
   return img;
 }
 
@@ -487,6 +536,7 @@ function createSignLayerImage(
   const img = scene.add.image(dec.px, dec.py, textureKey);
   img.setOrigin(dec.pivotX, dec.pivotY);
   img.setDisplaySize(dec.srcW * scale, dec.srcH * scale);
+  img.setAlpha(dec.alpha);
   return img;
 }
 

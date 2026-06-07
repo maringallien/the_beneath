@@ -1,5 +1,6 @@
 import type {
   LdtkAutoLayerTile,
+  LdtkEntityDef,
   LdtkEntityInstance,
   LdtkFieldInstance,
   LdtkLayerType,
@@ -37,6 +38,17 @@ export function getTilesetDefs(project: LdtkProject): Map<number, LdtkTilesetDef
   const map = new Map<number, LdtkTilesetDef>();
   for (const ts of project.defs.tilesets) {
     map.set(ts.uid, ts);
+  }
+  return map;
+}
+
+// Entity definitions keyed by uid (matches an instance's defUid). Used to
+// resolve per-entity render properties — currently tileOpacity — that live on
+// the definition rather than the instance.
+export function getEntityDefs(project: LdtkProject): Map<number, LdtkEntityDef> {
+  const map = new Map<number, LdtkEntityDef>();
+  for (const def of project.defs.entities) {
+    map.set(def.uid, def);
   }
   return map;
 }
@@ -111,6 +123,16 @@ export interface RenderableEntityTile {
   // from their source tile size render at the wrong scale and position.
   entityW: number;
   entityH: number;
+  // Final render opacity in [0,1]: the entity definition's tileOpacity times
+  // the owning layer's __opacity, mirroring how LDtk composites the decoration
+  // in its editor. Applied as the sprite's alpha by the renderer (falls back to
+  // the layer opacity alone when no entity-def map is supplied).
+  alpha: number;
+  // Mirror of the entity def's "Can be out of level bounds" flag. The renderer
+  // routes a true decoration into an unmasked container so it can bleed past
+  // the level rect. Defaults to false when no entity-def map is supplied (the
+  // tileset-collection pass), which is correct — that pass never renders.
+  allowOutOfBounds: boolean;
 }
 
 export interface RenderableEntityLayer {
@@ -132,16 +154,27 @@ export interface RenderableEntityLayer {
 export function getRenderableEntityLayers(
   level: LdtkLevel,
   skipIdentifiers?: ReadonlySet<string>,
+  entityDefs?: ReadonlyMap<number, LdtkEntityDef>,
 ): RenderableEntityLayer[] {
   const total = level.layerInstances.length;
   const layers: RenderableEntityLayer[] = [];
   level.layerInstances.forEach((li, originalIndex) => {
     if (li.__type !== 'Entities') return;
     if (!li.entityInstances || li.entityInstances.length === 0) return;
+    // Composite each decoration's own tileOpacity onto the layer opacity, the
+    // way LDtk renders it. entityDefs is optional (the tileset-collection pass
+    // doesn't need opacity), so tileOpacity falls back to 1 when it's absent.
+    const layerOpacity = li.__opacity;
     const decorations: RenderableEntityTile[] = [];
     for (const inst of li.entityInstances) {
       if (!inst.__tile) continue;
       if (skipIdentifiers?.has(inst.__identifier)) continue;
+      // Resolve the def once for both the opacity composite and the
+      // out-of-bounds flag. ?? defaults cover a missing def map (tileset pass)
+      // or an older LDtk file authored before the field existed.
+      const def = entityDefs?.get(inst.defUid);
+      const tileOpacity = def?.tileOpacity ?? 1;
+      const allowOutOfBounds = def?.allowOutOfBounds ?? false;
       decorations.push({
         identifier: inst.__identifier,
         tilesetUid: inst.__tile.tilesetUid,
@@ -155,6 +188,8 @@ export function getRenderableEntityLayers(
         pivotY: inst.__pivot[1],
         entityW: inst.width,
         entityH: inst.height,
+        alpha: layerOpacity * tileOpacity,
+        allowOutOfBounds,
       });
     }
     if (decorations.length === 0) return;

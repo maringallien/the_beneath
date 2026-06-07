@@ -22,7 +22,7 @@ import {
 import { OptionsOverlay } from '../ui/OptionsOverlay';
 import type { GameScene } from './GameScene';
 
-// The four pause-menu actions, in display order (left → right). Continue is
+// The four pause-menu actions, in display order (top → bottom). Continue is
 // first so opening the menu pre-selects "resume" — a reflexive Enter keeps the
 // player in the game.
 type PauseAction = 'continue' | 'newGame' | 'options' | 'quit';
@@ -104,10 +104,10 @@ export class PauseScene extends Phaser.Scene {
     const kb = this.input.keyboard;
     if (kb) {
       kb.on('keydown-ESC', this.resumeGame, this);
-      kb.on('keydown-LEFT', this.selectPrevious, this);
-      kb.on('keydown-RIGHT', this.selectNext, this);
-      kb.on('keydown-A', this.selectPrevious, this);
-      kb.on('keydown-D', this.selectNext, this);
+      kb.on('keydown-UP', this.selectPrevious, this);
+      kb.on('keydown-DOWN', this.selectNext, this);
+      kb.on('keydown-W', this.selectPrevious, this);
+      kb.on('keydown-S', this.selectNext, this);
       kb.on('keydown-ENTER', this.confirmSelection, this);
       kb.on('keydown-SPACE', this.confirmSelection, this);
     }
@@ -135,7 +135,7 @@ export class PauseScene extends Phaser.Scene {
     this.optionsOverlay = null;
   }
 
-  // Centers the row of word sprites around the viewport midpoint with
+  // Centers the column of word sprites around the viewport midpoint with
   // PAUSE_WORD_GAP_PX between each, then draws the bounding-box frame around
   // their combined bounds plus PAUSE_FRAME_PADDING_PX.
   private layout(): void {
@@ -143,19 +143,19 @@ export class PauseScene extends Phaser.Scene {
     const cx = width / 2;
     const cy = height / 2;
 
-    const widths = this.buttons.map((button) => button.displayWidth);
-    const totalWidth =
-      widths.reduce((sum, w) => sum + w, 0) +
+    const heights = this.buttons.map((button) => button.displayHeight);
+    const totalHeight =
+      heights.reduce((sum, h) => sum + h, 0) +
       PAUSE_WORD_GAP_PX * (this.buttons.length - 1);
 
-    // Walk left → right placing each word's center half its own width past the
-    // running cursor, so the row stays symmetric around cx regardless of the
-    // per-word width differences.
-    let cursor = cx - totalWidth / 2;
+    // Walk top → bottom placing each word's center half its own height past the
+    // running cursor, so the column stays symmetric around cy regardless of the
+    // per-word height differences.
+    let cursor = cy - totalHeight / 2;
     this.buttons.forEach((button, index) => {
-      const w = widths[index];
-      button.setPosition(cursor + w / 2, cy);
-      cursor += w + PAUSE_WORD_GAP_PX;
+      const h = heights[index];
+      button.setPosition(cx, cursor + h / 2);
+      cursor += h + PAUSE_WORD_GAP_PX;
     });
 
     this.drawFrame();
