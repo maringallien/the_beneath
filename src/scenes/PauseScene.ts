@@ -19,7 +19,7 @@ import {
   SCENE_KEYS,
   UI_BUTTON_HOVER_SOUND_ID,
 } from '../constants';
-import { OptionsOverlay } from '../ui/OptionsOverlay';
+import { ManualOverlay } from '../ui/ManualOverlay';
 import type { GameScene } from './GameScene';
 
 // The four pause-menu actions, in display order (top → bottom). Continue is
@@ -47,16 +47,17 @@ const BUTTON_DEFS: ReadonlyArray<PauseButtonDef> = [
 // Actions:
 //   Continue → resume GameScene.
 //   New Game → abandon the run and rebuild GameScene straight into gameplay.
-//   Options  → open the OptionsOverlay (controls list + music toggle).
+//   Options  → open the How-to-Play manual (controls, combat, HUD, and more).
 //   Quit     → abandon the run and return to the home/title screen.
 export class PauseScene extends Phaser.Scene {
   private dim!: Phaser.GameObjects.Rectangle;
   private frame!: Phaser.GameObjects.Graphics;
   private buttons: Phaser.GameObjects.Image[] = [];
   private selectedIndex = 0;
-  // DOM options panel, created lazily on first open and reused thereafter.
-  // Destroyed in onShutdown if it happens to be open when the scene stops.
-  private optionsOverlay: OptionsOverlay | null = null;
+  // DOM "How to Play" manual, created lazily on first open and reused
+  // thereafter. Destroyed in onShutdown if it happens to be open when the scene
+  // stops.
+  private manualOverlay: ManualOverlay | null = null;
 
   constructor() {
     super({ key: SCENE_KEYS.PAUSE });
@@ -128,11 +129,11 @@ export class PauseScene extends Phaser.Scene {
 
   private onShutdown(): void {
     this.scale.off(Phaser.Scale.Events.RESIZE, this.onResize, this);
-    // If the scene is stopping while the options panel is still open (e.g. a
-    // forced teardown), drop its DOM + window listener so they don't outlive
-    // the scene.
-    this.optionsOverlay?.destroy();
-    this.optionsOverlay = null;
+    // If the scene is stopping while the manual is still open (e.g. a forced
+    // teardown), drop its DOM + window listener so they don't outlive the
+    // scene.
+    this.manualOverlay?.destroy();
+    this.manualOverlay = null;
   }
 
   // Centers the column of word sprites around the viewport midpoint with
@@ -239,7 +240,7 @@ export class PauseScene extends Phaser.Scene {
         this.restartRun(false);
         break;
       case 'options':
-        this.openOptions();
+        this.openManual();
         break;
       case 'quit':
         // Back to the home/title screen (landing overlay over a fresh world).
@@ -275,18 +276,18 @@ export class PauseScene extends Phaser.Scene {
     this.scene.stop();
   }
 
-  // Opens the DOM options panel over the menu. The full-viewport backdrop
+  // Opens the DOM "How to Play" manual over the menu. The full-viewport backdrop
   // intercepts mouse events so the pause buttons underneath can't be clicked
   // through it; this scene's keyboard is disabled so its ESC/arrow navigation
-  // doesn't fight the panel's own ESC/M handlers. Re-enabled on close.
-  private openOptions(): void {
-    if (this.optionsOverlay?.isOpen()) return;
-    if (!this.optionsOverlay) {
+  // doesn't fight the panel's own ESC/M/tab handlers. Re-enabled on close.
+  private openManual(): void {
+    if (this.manualOverlay?.isOpen()) return;
+    if (!this.manualOverlay) {
       const parent = this.game.canvas.parentElement ?? document.body;
-      this.optionsOverlay = new OptionsOverlay(parent);
+      this.manualOverlay = new ManualOverlay(parent, this);
     }
     if (this.input.keyboard) this.input.keyboard.enabled = false;
-    this.optionsOverlay.open({
+    this.manualOverlay.open({
       onClose: () => {
         // Re-enable on the next tick so the same ESC/click that closed the
         // panel isn't also handled by this scene's menu navigation this frame.

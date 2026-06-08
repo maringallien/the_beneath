@@ -4,8 +4,8 @@ import {
   GUN1_CAPACITY_UPGRADE_STEP,
   GUN2_CAPACITY_UPGRADE_STEP,
   HEAL_CROSS_TEXTURE_KEY,
-  MAGIC_CAPACITY_UPGRADE_STEP,
   MAGIC_ORB_TEXTURE_KEY,
+  MAGIC_UPGRADE_CAPACITY_STEPS,
   MAGIC_UPGRADE_LEVELS,
   MAGIC_UPGRADE_PRICES,
   SHOP_GUN1_GRANT_PER_PURCHASE,
@@ -134,12 +134,12 @@ function magicUpgradeItem(levelId: string, tierIndex: number): UpgradeShopItem {
     price: MAGIC_UPGRADE_PRICES[tierIndex],
     iconTextureKey: MAGIC_ORB_TEXTURE_KEY,
     label: 'Crystal Pouch',
-    detail: `+${MAGIC_CAPACITY_UPGRADE_STEP} crystal max`,
+    detail: `+${MAGIC_UPGRADE_CAPACITY_STEPS[tierIndex]} crystal max`,
   };
 }
 
 // The capacity upgrade this shop kind sells in `levelId`, or null when the
-// level's merchant of that kind sells no upgrade (every level but 9/11/18).
+// level's merchant of that kind sells no upgrade (every level but 23/21/16).
 function upgradeItemFor(
   kind: ShopKind,
   levelId: string | null,

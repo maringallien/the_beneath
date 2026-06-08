@@ -34,7 +34,7 @@ import {
   UI_BUTTON_HOVER_SOUND_ID,
 } from '../constants';
 import { CreditsOverlay } from '../ui/CreditsOverlay';
-import { OptionsOverlay } from '../ui/OptionsOverlay';
+import { ManualOverlay } from '../ui/ManualOverlay';
 import type { GameScene } from './GameScene';
 
 // First-boot landing overlay launched on top of GameScene. Renders the
@@ -44,8 +44,8 @@ import type { GameScene } from './GameScene';
 // Clicking START (or pressing Enter/Space) fades both scene cameras to black,
 // then at full black hands off to GameScene.beginGameplay() and stops this
 // scene; GameScene holds the black for a beat and fades the world + HUD back
-// in. OPTIONS opens the shared controls/audio panel (OptionsOverlay, same as
-// the pause menu) and CREDITS opens a short title + author panel.
+// in. OPTIONS opens the shared How-to-Play manual (ManualOverlay, same as the
+// pause menu) and CREDITS opens a short title + author panel.
 export class LandingScene extends Phaser.Scene {
   private startImage!: Phaser.GameObjects.Image;
   // Secondary menu banners stacked under START, positioned in layout().
@@ -53,7 +53,7 @@ export class LandingScene extends Phaser.Scene {
   private creditsImage!: Phaser.GameObjects.Image;
   // DOM overlays, created lazily on first open and reused thereafter. Destroyed
   // in onShutdown if either is still open when the scene stops.
-  private optionsOverlay: OptionsOverlay | null = null;
+  private manualOverlay: ManualOverlay | null = null;
   private creditsOverlay: CreditsOverlay | null = null;
   private titleText!: Phaser.GameObjects.Text;
   // Soft black gradient strips along each viewport edge, drawn beneath
@@ -133,9 +133,9 @@ export class LandingScene extends Phaser.Scene {
     // OPTIONS + CREDITS stacked beneath START (positioned in layout()). They
     // share START's hover/press feedback at a smaller base scale so the primary
     // action stays dominant. OPTIONS reuses the pause menu's word texture and
-    // its OptionsOverlay; CREDITS opens the title/author panel.
+    // its ManualOverlay; CREDITS opens the title/author panel.
     this.optionsImage = this.createMenuButton(PAUSE_OPTIONS_TEXTURE_KEY, () =>
-      this.openOptions(),
+      this.openManual(),
     );
     this.creditsImage = this.createMenuButton(LANDING_CREDITS_TEXTURE_KEY, () =>
       this.openCredits(),
@@ -180,8 +180,8 @@ export class LandingScene extends Phaser.Scene {
     // Drop either DOM panel + its window listener if it's still open when the
     // scene stops (e.g. Start committed while a panel was up), so it can't
     // outlive the scene.
-    this.optionsOverlay?.destroy();
-    this.optionsOverlay = null;
+    this.manualOverlay?.destroy();
+    this.manualOverlay = null;
     this.creditsOverlay?.destroy();
     this.creditsOverlay = null;
   }
@@ -421,25 +421,25 @@ export class LandingScene extends Phaser.Scene {
     );
   }
 
-  // OPTIONS → open the shared controls/audio panel (same OptionsOverlay the
-  // pause menu uses). Mirrors PauseScene.openOptions: while the panel is up this
-  // scene's keyboard is disabled so its Enter/Space → Start binding can't fire
+  // OPTIONS → open the shared How-to-Play manual (same ManualOverlay the pause
+  // menu uses). Mirrors PauseScene.openManual: while the panel is up this scene's
+  // keyboard is disabled so its Enter/Space → Start binding can't fire
   // underneath, and the full-viewport backdrop blocks clicks to the buttons.
-  private openOptions(): void {
+  private openManual(): void {
     if (!this.accepting) return;
-    if (this.optionsOverlay?.isOpen() || this.creditsOverlay?.isOpen()) return;
-    if (!this.optionsOverlay) {
-      this.optionsOverlay = new OptionsOverlay(this.overlayParent());
+    if (this.manualOverlay?.isOpen() || this.creditsOverlay?.isOpen()) return;
+    if (!this.manualOverlay) {
+      this.manualOverlay = new ManualOverlay(this.overlayParent(), this);
     }
     this.setKeyboardEnabled(false);
-    this.optionsOverlay.open({ onClose: () => this.reenableKeyboardNextTick() });
+    this.manualOverlay.open({ onClose: () => this.reenableKeyboardNextTick() });
   }
 
   // CREDITS → open the title/author panel (CreditsOverlay). Same input handling
   // as openOptions.
   private openCredits(): void {
     if (!this.accepting) return;
-    if (this.optionsOverlay?.isOpen() || this.creditsOverlay?.isOpen()) return;
+    if (this.manualOverlay?.isOpen() || this.creditsOverlay?.isOpen()) return;
     if (!this.creditsOverlay) {
       this.creditsOverlay = new CreditsOverlay(this.overlayParent());
     }

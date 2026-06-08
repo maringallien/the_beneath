@@ -43,7 +43,8 @@ import {
   BASE_MAX_MAGIC,
   GUN1_CAPACITY_UPGRADE_STEP,
   GUN2_CAPACITY_UPGRADE_STEP,
-  MAGIC_CAPACITY_UPGRADE_STEP,
+  MAGIC_UPGRADE_CAPACITY_STEPS,
+  MAGIC_UPGRADE_LEVELS,
   MAX_HEAL_ITEMS,
   MAX_STAMINA,
   AMMO_COST_PER_SHOT,
@@ -61,6 +62,7 @@ import {
   hasUpgrade,
   recordKeyCollected,
   recordUpgradePurchased,
+  upgradeId,
 } from '../state/runProgress';
 import { Trap } from './Trap';
 import {
@@ -87,6 +89,7 @@ import { PlayerGun } from './PlayerGun';
 // circular dependency between Player ↔ GameScene).
 interface ProjectileSpawnerScene {
   spawnProjectile(options: ProjectileSpawnOptions): void;
+  alertEnemiesToGunshot(x: number, y: number): void;
 }
 
 // Same circular-dependency dodge as ProjectileSpawnerScene — Player calls
@@ -1683,6 +1686,11 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       velocityY: config.speed * sinA,
       damage: config.damage,
     });
+    // Gunfire is loud — alert nearby enemies to where we fired from so they
+    // investigate it. Only guns spawn projectiles (the sword/magic stay silent),
+    // so this runs for gunshots only. The player's position is "the place the
+    // gun was fired", the exact spot enemies path toward.
+    spawner.alertEnemiesToGunshot(this.x, this.y);
   }
 
   // Per-frame overlap scan during a sword attack. Builds a forward rect and
@@ -1797,7 +1805,15 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   // (not stored) so it stays correct across level transitions and death/respawn
   // — the upgrade count lives in runProgress, which survives world rebuilds.
   getMaxMagic(): number {
-    return BASE_MAX_MAGIC + countUpgrades('magic') * MAGIC_CAPACITY_UPGRADE_STEP;
+    // The three tiers raise the cap unevenly (3 → 6 → 8 → 10), so sum the gain
+    // of each purchased tier rather than multiplying a count by a uniform step.
+    let max = BASE_MAX_MAGIC;
+    MAGIC_UPGRADE_LEVELS.forEach((levelId, tier) => {
+      if (hasUpgrade(upgradeId('magic', levelId))) {
+        max += MAGIC_UPGRADE_CAPACITY_STEPS[tier];
+      }
+    });
+    return max;
   }
 
   getGun1Ammo(): number {

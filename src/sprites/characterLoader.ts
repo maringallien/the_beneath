@@ -380,6 +380,38 @@ export function getAnimationNaturalDurationMs(
   return (anim.frames.frameCount * 1000) / DEFAULT_CHARACTER_FPS;
 }
 
+// Frame metadata with the optional anchor/scale fields resolved to their
+// rendering defaults (anchorX → horizontal centre, anchorY → bottom row, scale
+// → 1). The "How to Play" manual's animated sprite previews draw spritesheet
+// frames straight to a DOM canvas, so they need these raw numbers rather than
+// the physics-oriented view getSpriteAnchor returns. Reads from the same
+// registry map every other consumer uses, so the previews can never drift from
+// the in-game frame layout.
+export interface AnimationFrameInfo {
+  readonly frameWidth: number;
+  readonly frameHeight: number;
+  readonly frameCount: number;
+  readonly anchorX: number;
+  readonly anchorY: number;
+  readonly displayScale: number;
+}
+
+export function getAnimationFrameInfo(
+  fullAnimKey: string,
+): AnimationFrameInfo | null {
+  const anim = animationByFullKey.get(fullAnimKey);
+  if (!anim) return null;
+  const f = anim.frames;
+  return {
+    frameWidth: f.frameWidth,
+    frameHeight: f.frameHeight,
+    frameCount: f.frameCount,
+    anchorX: f.anchorX ?? f.frameWidth / 2,
+    anchorY: f.anchorY ?? f.frameHeight,
+    displayScale: f.displayScale ?? 1,
+  };
+}
+
 // Normalized frame metadata shared by player registries (SimpleAnimation)
 // and the entity registry (AnimatedEntityAnimConfig). Both shapes carry the
 // same anchor fields under different nesting; this view lets getSpriteAnchor

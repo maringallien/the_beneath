@@ -1,0 +1,315 @@
+/* "How to Play" manual — the expanded options panel. Reuses the merchant-shop
+ * frame (.shop-overlay / .shop-window) and the options-tab chrome (.options-*
+ * header, key chips, category titles) imported alongside this file, and adds the
+ * tab bar, the scrolling content host, and the per-tab content layouts (combat
+ * animation rows, HUD/item glyph legends). Same dark monochrome palette as the
+ * options panel so it reads as the same piece of in-world UI, just larger. */
+
+.manual-window {
+  /* Wider than the options panel so a combat animation and its description sit
+   * side by side; a flex column so only the content area scrolls while the
+   * header, tab bar, and footer stay put. */
+  width: 640px;
+  max-width: 94vw;
+  max-height: 90vh;
+  padding: 22px 26px 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+.manual-header {
+  flex-shrink: 0;
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+}
+
+/* === TAB BAR ======================================================== */
+
+.manual-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 14px;
+  flex-shrink: 0;
+}
+
+.manual-tab {
+  flex: 1 1 0;
+  min-width: 64px;
+  padding: 7px 6px;
+  background: #1a1a1a;
+  border: 1px solid #3a3a3a;
+  border-radius: 3px;
+  color: #9a9a9a;
+  font-family: 'Arial', 'Helvetica', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    background 100ms linear,
+    color 100ms linear,
+    border-color 100ms linear;
+}
+
+.manual-tab:hover,
+.manual-tab:focus-visible {
+  background: #333333;
+  color: #e6e6e6;
+  outline: none;
+}
+
+.manual-tab--active {
+  background: #383838;
+  color: #ffffff;
+  border-color: #5a5a5a;
+}
+
+/* === CONTENT HOST (scrolls) ======================================== */
+
+.manual-content {
+  flex: 1 1 auto;
+  min-height: 360px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.manual-content::-webkit-scrollbar {
+  width: 10px;
+}
+.manual-content::-webkit-scrollbar-track {
+  background: #1a1a1a;
+}
+.manual-content::-webkit-scrollbar-thumb {
+  background: #3a3a3a;
+  border-radius: 5px;
+}
+.manual-content::-webkit-scrollbar-thumb:hover {
+  background: #4a4a4a;
+}
+
+.manual-footer {
+  flex-shrink: 0;
+  margin-top: 14px;
+  padding-top: 12px;
+}
+
+/* === SHARED SECTION TYPOGRAPHY ===================================== */
+
+.manual-section {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 2px 2px 6px;
+}
+
+.manual-lead {
+  font-size: 15px;
+  line-height: 1.5;
+  color: #e8e8e8;
+  margin: 0;
+}
+
+.manual-p {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: #c2c2c2;
+  margin: 0;
+}
+
+.manual-block {
+  display: flex;
+  flex-direction: column;
+}
+
+.manual-block-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Name + detail rows (Basics loop, enemy types, world features). */
+.manual-loop {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.manual-loop-step {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.manual-loop-name {
+  flex-shrink: 0;
+  width: 112px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #ffffff;
+}
+
+.manual-loop-detail {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #bcbcbc;
+}
+
+/* === CONTROLS TAB ================================================== */
+
+.manual-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* === COMBAT TAB =================================================== */
+
+.manual-combat-row {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 14px 2px;
+  border-bottom: 1px solid #303030;
+}
+
+.manual-combat-row:last-child {
+  border-bottom: none;
+}
+
+/* Full-width stage; the animation is centred with its feet on the floor
+ * (align-items:flex-end). Stacking the animation above its description gives the
+ * wide swing frames room to play at a readable size. */
+.manual-combat-stage {
+  width: 100%;
+  min-height: 138px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid #383838;
+  border-radius: 4px;
+}
+
+.manual-sprite-preview {
+  display: block;
+  /* Character art is pixel art — keep it crisp when the canvas is upscaled. */
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.manual-combat-info {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.manual-combat-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.manual-combat-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.manual-combat-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* "+" between chips for a simultaneous combo (e.g. Space + L-Click). */
+.manual-key-plus {
+  color: #8a8a8a;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.manual-combat-blurb {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #bdbdbd;
+  margin: 0;
+}
+
+.manual-combat-missing {
+  align-self: center;
+  font-size: 12px;
+  color: #c87a78;
+}
+
+/* === HUD / ITEMS GLYPH ROWS ======================================= */
+
+.manual-glyph-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 4px;
+  border-bottom: 1px solid #2b2b2b;
+}
+
+.manual-glyph-row:last-child {
+  border-bottom: none;
+}
+
+.manual-glyph {
+  flex-shrink: 0;
+  width: 34px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* currentColor drives the HUD SVG glyphs. */
+  color: #ffffff;
+}
+
+.manual-glyph-svg {
+  display: block;
+  width: 26px;
+  height: 26px;
+}
+
+.manual-glyph-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.manual-glyph-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.manual-glyph-desc {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #b6b6b6;
+}
+
+/* Typographic markers used where there's no SVG glyph (detection ?/! icons). */
+.manual-marker {
+  font-family: 'Arial', 'Helvetica', sans-serif;
+  font-size: 18px;
+  font-weight: 800;
+  color: #e6e6e6;
+}
+
+.manual-marker--warn {
+  color: #e6c84e; /* yellow — investigating */
+}
+
+.manual-marker--alarm {
+  color: #d6584f; /* red — detected */
+}

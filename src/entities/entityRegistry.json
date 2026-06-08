@@ -1506,89 +1506,106 @@
     "behavior": {
       "health": 25,
       "hurtAnimation": "take_hit",
-      "attack": {
-        "type": "melee",
-        "animation": "attack",
-        "frame": 6,
-        "damage": 12,
-        "range": 55,
-        "cooldownMs": 1800,
-        "aggressive": true,
-        "chaseRange": 80,
-        "moveSpeed": 60,
-        "walkAnimation": "walk",
-        "hitboxes": [
-          {
-            "offsetX": 13,
+      "attackPool": [
+        {
+          "type": "melee",
+          "animation": "attack",
+          "frame": 6,
+          "damage": 12,
+          "range": 55,
+          "cooldownMs": 1800,
+          "aggressive": true,
+          "chaseRange": 80,
+          "moveSpeed": 60,
+          "walkAnimation": "walk",
+          "hitboxes": [
+            {
+              "offsetX": 13,
+              "offsetY": 18,
+              "width": 46,
+              "height": 21
+            },
+            {
+              "offsetX": 6,
+              "offsetY": 20,
+              "width": 29,
+              "height": 12,
+              "frame": 3
+            },
+            {
+              "offsetX": 11,
+              "offsetY": 19,
+              "width": 29,
+              "height": 15,
+              "frame": 4
+            },
+            {
+              "offsetX": 13,
+              "offsetY": 19,
+              "width": 31,
+              "height": 17,
+              "frame": 5
+            },
+            {
+              "offsetX": 12,
+              "offsetY": 17,
+              "width": 51,
+              "height": 30,
+              "frame": 7
+            },
+            {
+              "offsetX": 12,
+              "offsetY": 16,
+              "width": 51,
+              "height": 31,
+              "frame": 8
+            },
+            {
+              "offsetX": 11,
+              "offsetY": 15,
+              "width": 54,
+              "height": 33,
+              "frame": 9
+            },
+            {
+              "offsetX": 10,
+              "offsetY": 19,
+              "width": 44,
+              "height": 16,
+              "frame": 10
+            },
+            {
+              "offsetX": 9,
+              "offsetY": 19,
+              "width": 47,
+              "height": 15,
+              "frame": 11
+            },
+            {
+              "offsetX": 13,
+              "offsetY": 18,
+              "width": 46,
+              "height": 18,
+              "frame": 12
+            }
+          ]
+        },
+        {
+          "type": "melee",
+          "animation": "death",
+          "frame": 8,
+          "damage": 10,
+          "range": 60,
+          "cooldownMs": 2000,
+          "aggressive": true,
+          "hitbox": {
+            "offsetX": -17,
             "offsetY": 18,
-            "width": 46,
-            "height": 21
-          },
-          {
-            "offsetX": 6,
-            "offsetY": 20,
-            "width": 29,
-            "height": 12,
-            "frame": 3
-          },
-          {
-            "offsetX": 11,
-            "offsetY": 19,
-            "width": 29,
-            "height": 15,
-            "frame": 4
-          },
-          {
-            "offsetX": 13,
-            "offsetY": 19,
-            "width": 31,
-            "height": 17,
-            "frame": 5
-          },
-          {
-            "offsetX": 12,
-            "offsetY": 17,
-            "width": 51,
-            "height": 30,
-            "frame": 7
-          },
-          {
-            "offsetX": 12,
-            "offsetY": 16,
-            "width": 51,
-            "height": 31,
-            "frame": 8
-          },
-          {
-            "offsetX": 11,
-            "offsetY": 15,
-            "width": 54,
-            "height": 33,
-            "frame": 9
-          },
-          {
-            "offsetX": 10,
-            "offsetY": 19,
-            "width": 44,
-            "height": 16,
-            "frame": 10
-          },
-          {
-            "offsetX": 9,
-            "offsetY": 19,
-            "width": 47,
-            "height": 15,
-            "frame": 11
-          },
-          {
-            "offsetX": 13,
-            "offsetY": 18,
-            "width": 46,
-            "height": 18,
-            "frame": 12
+            "width": 36,
+            "height": 20
           }
-        ]
-      }
+        }
+      ]
     },
     "animations": {
       "attack": {

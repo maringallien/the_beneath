@@ -74,7 +74,7 @@ export const PROJECTILE_GUN2_DAMAGE = 15;
 // every fight. The BASE_MAX is the unupgraded magazine cap — low so guns read
 // as an emergency burst to be saved for trouble (with melee as the default),
 // and INITIAL spawns BELOW it. The player widens the cap by buying the "Ammo
-// Storage" upgrade at the three tech shops (Level_9/11/18); each tier adds the
+// Storage" upgrade at the three tech shops (Level_23/21/16); each tier adds the
 // CAPACITY_UPGRADE_STEP below, so a fully-upgraded run carries
 // BASE + 3·step = 30 pistol / 20 shotgun. The live cap is derived in
 // Player.getMaxGun1Ammo()/getMaxGun2Ammo() from this base plus the purchased-
@@ -106,13 +106,14 @@ export const AMMO_COST_PER_SHOT = 1;
 // pickups (chest2 and boss drops, plus the shop), one orb per pickup. The HUD
 // renders this as an orb icon + carried count (see PlayerHudOverlay), matching
 // the coin and heal counters rather than the old three-segment bar.
-// BASE_MAX_MAGIC is the unupgraded cap; the "Orb Pouch" upgrade sold at the
-// three mushroom merchants (Level_9/11/18) adds MAGIC_CAPACITY_UPGRADE_STEP per
-// tier, so BASE + 3·step = 20 carried orbs once fully upgraded. The live cap is
-// derived in Player.getMaxMagic() from the purchased-upgrade count.
+// BASE_MAX_MAGIC is the unupgraded cap. The three mushroom merchants
+// (Level_23/21/16, encountered in that order while descending) each sell one
+// "Orb Pouch" upgrade; MAGIC_UPGRADE_CAPACITY_STEPS (below, index-aligned with
+// MAGIC_UPGRADE_LEVELS) lists the per-tier cap gain, so the cap climbs
+// 3 → 6 → 8 → 10 once all three are bought. The live cap is summed per purchased
+// tier in Player.getMaxMagic() — the steps are uneven, so it can't just count.
 export const INITIAL_MAGIC = 3;
-export const BASE_MAX_MAGIC = 8;
-export const MAGIC_CAPACITY_UPGRADE_STEP = 4;
+export const BASE_MAX_MAGIC = 3;
 export const MAGIC_PICKUP_AMOUNT = 1;
 export const MAGIC_COST_PER_SWING = 1;
 
@@ -516,6 +517,12 @@ export const ENEMY_SEARCH_FLIP_MS = 600;
 // Distance (world px) within which a searching/returning enemy counts as having
 // reached its last-seen or post target and advances to the next behavior.
 export const ENEMY_SEARCH_REACH_DIST_PX = 20;
+// Gunfire is loud. Any stealth-enabled enemy within this radius (world px) of a
+// shot the player fires is alerted to it — no line of sight needed, sound
+// carries through walls — and investigates the exact spot it was fired from.
+// Deliberately much larger than the vision range (ENEMY_DETECTION_RANGE_PX, 220)
+// so guns are conspicuous and the silent sword/magic stay the stealthy option.
+export const ENEMY_GUNSHOT_HEARING_RADIUS_PX = 900;
 // Sound id (soundRegistry) for the one-shot detection sting played the instant
 // an enemy spots the player. A no-op when the id isn't registered (playOneShot
 // returns null), so the system runs fine until an asset is wired in.
@@ -994,25 +1001,29 @@ export const SHOP_HEAL_GRANT_PER_PURCHASE = HEAL_PICKUP_AMOUNT;
 // One-time purchases that permanently raise the player's carry cap, sold
 // alongside the normal restock items. Each tech shop (Tech_shop_spawn) sells
 // one Ammo Storage tier; each mushroom merchant (Mushroom_merchant_spawn) sells
-// one Orb Pouch tier. The SELLING LEVEL is the identity of the upgrade — a given
-// shop's tier can be bought exactly once — so these arrays list which levels
-// sell a tier and the index-aligned price charged there (Level_9 cheapest,
-// Level_18 priciest, since later tiers are reached with more coins in hand).
-// Purchases are recorded in runProgress (so they survive death/respawn) and the
-// COUNT of purchases per line drives the derived caps in Player; the specific
-// tiers bought don't matter, so any visiting order works.
+// one Orb Pouch tier. Both shop types live in Level_23/21/16, so these arrays
+// MUST list those levels (the level is the upgrade's identity — a shop's tier
+// can be bought exactly once). They're ordered by descent: Level_23 (reached
+// first) is cheapest, Level_16 (reached last) priciest, since later tiers are
+// reached with more coins in hand. Purchases persist in runProgress (surviving
+// death/respawn). Ammo caps derive from the COUNT of purchases (uniform step),
+// while magic sums each bought tier's MAGIC_UPGRADE_CAPACITY_STEPS (uneven), so
+// either way any visiting order yields the same fully-upgraded total.
 export const AMMO_UPGRADE_LEVELS: ReadonlyArray<string> = [
-  'Level_9',
-  'Level_11',
-  'Level_18',
+  'Level_23',
+  'Level_21',
+  'Level_16',
 ];
 export const MAGIC_UPGRADE_LEVELS: ReadonlyArray<string> = [
-  'Level_9',
-  'Level_11',
-  'Level_18',
+  'Level_23',
+  'Level_21',
+  'Level_16',
 ];
 export const AMMO_UPGRADE_PRICES: ReadonlyArray<number> = [30, 45, 60];
 export const MAGIC_UPGRADE_PRICES: ReadonlyArray<number> = [30, 45, 60];
+// Per-tier magic cap gain, index-aligned with MAGIC_UPGRADE_LEVELS / _PRICES:
+// Level_23 +3, Level_21 +2, Level_16 +2 → BASE_MAX_MAGIC (3) climbs to 10.
+export const MAGIC_UPGRADE_CAPACITY_STEPS: ReadonlyArray<number> = [3, 2, 2];
 
 // Landing page. Shown on first boot via a LandingScene overlay launched on
 // top of GameScene. The START word sprite uses the same word-banner pattern

@@ -34,7 +34,7 @@
       "path": "assets/audio/ambience/metro_station.ogg",
       "category": "ambience",
       "loop": true,
-      "defaultVolume": 0.65
+      "defaultVolume": 0.85
     },
     "turbine_subby": {
       "path": "assets/audio/ambience/turbine_subby.ogg",
@@ -53,14 +53,14 @@
       "category": "ambience",
       "loop": true,
       "defaultVolume": 0.48,
-      "spatial": { "minRadius": 64, "maxRadius": 320 }
+      "spatial": { "minRadius": 64, "maxRadius": 160 }
     },
     "hvac_aircon": {
       "path": "assets/audio/entity/hvac_aircon.ogg",
       "category": "ambience",
       "loop": true,
       "defaultVolume": 0.6,
-      "spatial": { "minRadius": 64, "maxRadius": 320 }
+      "spatial": { "minRadius": 64, "maxRadius": 160 }
     },
     "light_bulb_buzz": {
       "path": "assets/audio/entity/light_bulb_buzz.ogg",

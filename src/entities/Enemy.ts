@@ -2636,6 +2636,32 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
+  // React to the player firing a gun nearby. Gunfire is loud, so — unlike the
+  // silent sword/magic — the enemy is alerted even with no line of sight and
+  // investigates the EXACT spot the shot came from. Reuses the spot machinery
+  // (aggro window + "?" stop-telegraph + sting) but points last-seen at the
+  // gunshot rather than the player, so the existing search code (isSearching →
+  // updateSearch) walks the enemy straight there. GameScene calls this on every
+  // stealth-enabled enemy within ENEMY_GUNSHOT_HEARING_RADIUS_PX of a shot;
+  // isStealthEnabled() already excludes bosses, wasps, attack-less NPCs, and any
+  // enemy during a boss fight (they use legacy always-on aggro instead).
+  hearGunshot(x: number, y: number): void {
+    if (this.isDead() || !this.isStealthEnabled()) return;
+    const fresh = !this.isAggro();
+    this.lastSeenX = x;
+    this.lastSeenY = y;
+    this.hasLastSeen = true;
+    if (fresh) {
+      this.onSpotted();
+    } else {
+      // Already hunting — retarget to the newer, louder cue and keep the aggro
+      // window (and the search) alive without re-flashing the telegraph.
+      this.refreshAggro();
+      this.returningToPost = false;
+      this.searchLookUntil = 0;
+    }
+  }
+
   // Per-frame detection pass (pure parts in enemyDetection.ts). Resolves line of
   // sight, opens aggro on a fresh spot, classifies the alert state from the
   // active-combat window, and flashes the transient overhead glyph. No-op for

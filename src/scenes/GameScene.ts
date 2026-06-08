@@ -19,6 +19,7 @@ import {
   BOSS_DEFEATED_EVENT,
   BOSS_KEYS,
   CAMERA_ZOOM,
+  ENEMY_GUNSHOT_HEARING_RADIUS_PX,
   ENTITY_DEPTH,
   FINAL_BOSS_IDENTIFIER,
   VICTORY_DELAY_MS,
@@ -1597,6 +1598,23 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
         }
       }
     }
+  }
+
+  // The player's gun is loud: alert every stealth-enabled enemy within
+  // ENEMY_GUNSHOT_HEARING_RADIUS_PX of (x, y) so it investigates the exact spot
+  // the shot was fired from (no line of sight needed — sound carries through
+  // walls). Called from Player when a gun projectile is fired; the silent
+  // sword/magic don't call it. Skipped during boss fights, where stealth is off
+  // and enemies are already always-aggro (Enemy.hearGunshot also guards this).
+  alertEnemiesToGunshot(x: number, y: number): void {
+    if (this.isStealthDisabled()) return;
+    const radiusSq =
+      ENEMY_GUNSHOT_HEARING_RADIUS_PX * ENEMY_GUNSHOT_HEARING_RADIUS_PX;
+    this.forEachEnemy((enemy) => {
+      const dx = enemy.x - x;
+      const dy = enemy.y - y;
+      if (dx * dx + dy * dy <= radiusSq) enemy.hearGunshot(x, y);
+    });
   }
 
   // Structural entry point used by Enemy.fireProjectileAttack — kept here

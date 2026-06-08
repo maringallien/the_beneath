@@ -706,6 +706,14 @@
         "soundId": "bandit_death",
         "frameIndex": 1
       }
+    ],
+    "entity_Wheel_bot_spawn_attack1": [
+      {
+        "name": "attack1_sound",
+        "soundId": "gun1_electric_blast",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 83.33333333333333
+      }
     ]
   }
 }
