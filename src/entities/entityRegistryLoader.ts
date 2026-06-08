@@ -418,12 +418,69 @@ function validateBehavior(
     }
     homeLeashRange = b.homeLeashRange;
   }
+  // Stealth/detection tuning — all optional, validated like the other
+  // positive-number knobs. Defaults are applied at runtime (see Enemy /
+  // constants), so absence just means "use the global default".
+  let detectionRange: number | undefined;
+  if (b.detectionRange !== undefined) {
+    if (
+      typeof b.detectionRange !== 'number' ||
+      !Number.isFinite(b.detectionRange) ||
+      b.detectionRange <= 0
+    ) {
+      throw new Error(
+        `${ctx}.detectionRange must be a positive number when set (got ${JSON.stringify(b.detectionRange)})`,
+      );
+    }
+    detectionRange = b.detectionRange;
+  }
+  let visionHalfAngleDeg: number | undefined;
+  if (b.visionHalfAngleDeg !== undefined) {
+    if (
+      typeof b.visionHalfAngleDeg !== 'number' ||
+      !Number.isFinite(b.visionHalfAngleDeg) ||
+      b.visionHalfAngleDeg <= 0 ||
+      b.visionHalfAngleDeg > 180
+    ) {
+      throw new Error(
+        `${ctx}.visionHalfAngleDeg must be a number in (0, 180] when set (got ${JSON.stringify(b.visionHalfAngleDeg)})`,
+      );
+    }
+    visionHalfAngleDeg = b.visionHalfAngleDeg;
+  }
+  let alertSpeedMul: number | undefined;
+  if (b.alertSpeedMul !== undefined) {
+    if (
+      typeof b.alertSpeedMul !== 'number' ||
+      !Number.isFinite(b.alertSpeedMul) ||
+      b.alertSpeedMul <= 0
+    ) {
+      throw new Error(
+        `${ctx}.alertSpeedMul must be a positive number when set (got ${JSON.stringify(b.alertSpeedMul)})`,
+      );
+    }
+    alertSpeedMul = b.alertSpeedMul;
+  }
+  let ignoresStealth: boolean | undefined;
+  if (b.ignoresStealth !== undefined) {
+    if (typeof b.ignoresStealth !== 'boolean') {
+      throw new Error(`${ctx}.ignoresStealth must be a boolean when set`);
+    }
+    ignoresStealth = b.ignoresStealth;
+  }
   let isBoss: boolean | undefined;
   if (b.isBoss !== undefined) {
     if (typeof b.isBoss !== 'boolean') {
       throw new Error(`${ctx}.isBoss must be a boolean when set`);
     }
     isBoss = b.isBoss;
+  }
+  let stationary: boolean | undefined;
+  if (b.stationary !== undefined) {
+    if (typeof b.stationary !== 'boolean') {
+      throw new Error(`${ctx}.stationary must be a boolean when set`);
+    }
+    stationary = b.stationary;
   }
   let roundFight: boolean | undefined;
   if (b.roundFight !== undefined) {
@@ -678,9 +735,14 @@ function validateBehavior(
     dormant,
     deathAnimation,
     immovable,
+    stationary,
     horizontalMovementOnly,
     stayInSpawnLevel,
     homeLeashRange,
+    detectionRange,
+    visionHalfAngleDeg,
+    alertSpeedMul,
+    ignoresStealth,
     isBoss,
     roundFight,
     displayName,

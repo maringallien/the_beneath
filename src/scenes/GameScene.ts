@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import {
   clearEntitySounds,
+  debugAudioCounts,
   playOneShot,
   registerEnemyWalkSound,
   registerEntityPeriodicSound,
@@ -92,6 +93,7 @@ import {
   resetRunProgress,
 } from '../state/runProgress';
 import { CombatZoneWarning } from '../ui/CombatZoneWarning';
+import { DetectionCorners } from '../ui/DetectionCorners';
 import { PlayerHudOverlay } from '../ui/PlayerHudOverlay';
 import { Save } from '../entities/Save';
 import type { ShopKind } from '../entities/shop/shopTypes';
@@ -258,10 +260,24 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   // the boss HUD; visible only while the player is outside an engaged boss's
   // arena and the escape grace timer is running (see updateBossLeash).
   private combatWarning: CombatZoneWarning | null = null;
+  // Detection-state corner brackets (DOM overlay, sibling of the player HUD).
+  // Recoloured each render frame from maxAlertLevel: faint-white / yellow / red.
+  // Created, hidden-on-pause, and destroyed on the same lifecycle as the HUD.
+  private detectionCorners: DetectionCorners | null = null;
   // The round-fight boss the player is currently engaged with (encountered and
   // alive), resolved each frame in updateEnemies. null when none — drives the
   // BossHud's visibility and which boss's HP/round it reflects.
   private activeBoss: Enemy | null = null;
+  // True while any boss is engaged (encountered + alive) anywhere in the world,
+  // recomputed each frame in updateEnemies. Drives isStealthDisabled(): during
+  // a boss fight stealth is off for every enemy. Distinct from activeBoss, which
+  // only tracks round-fight bosses — this also covers plain bosses
+  // (The_blood_king, The_hive) so their arenas disable stealth too.
+  private bossEngaged = false;
+  // Aggregate detection level across all enemies this frame (0 normal,
+  // 1 investigating, 2 conflict), resolved in updateEnemies and pushed to the
+  // HUD corner brackets on the next render. Highest-wins.
+  private maxAlertLevel = 0;
   // Active "you must find the key" message, or null when none is showing.
   // Reused (its fade restarted) rather than stacked when retriggered, so
   // repeated locked-door attempts don't pile up overlapping text.
@@ -358,6 +374,39 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
 
   create(): void {
     this.buildWorld(parseLdtkProject(ldtkRaw));
+    // TEMP DIAGNOSTIC (audio regression): 1 Hz snapshot of audio/runtime
+    // counters to find the dominant cost — `sounds` climbing = a node leak;
+    // `fps` falling = main-thread cost (LOS raycasts); flat counts while audio
+    // still dies = audio-thread saturation. Flip DEBUG_AUDIO to false or delete
+    // this block once diagnosed (see /home/marin/.claude/plans/floating-roaming-acorn.md).
+    const DEBUG_AUDIO = true;
+    if (DEBUG_AUDIO) {
+      this.time.addEvent({
+        delay: 1000,
+        loop: true,
+        callback: () => {
+          const c = debugAudioCounts();
+          // The live-sound array is a protected member of BaseSoundManager
+          // (present at runtime, not in the public typings), so reach it through
+          // a minimal shape cast and guard at runtime.
+          const soundMgr = this.game.sound as unknown as {
+            sounds?: Phaser.Sound.BaseSound[];
+          };
+          const allSounds = soundMgr.sounds ?? [];
+          const playing = allSounds.filter((s) => s.isPlaying).length;
+          // eslint-disable-next-line no-console
+          console.log('[audio]', {
+            sounds: allSounds.length, // total instances (incl. paused loops)
+            playing, // actually rendering on the audio thread — the load metric
+            fps: Math.round(this.game.loop.actualFps),
+            enemies: this.enemies?.getChildren().length ?? 0,
+            anchors: c.anchors,
+            sequences: c.sequences,
+            periodic: c.periodic,
+          });
+        },
+      });
+    }
     if (this.shouldShowLanding) {
       // Landing path: freeze the player, snap the camera to the landing
       // framing, and launch LandingScene on top. HUD + ambience are deferred
@@ -491,6 +540,8 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       this.bossHud = null;
       this.combatWarning?.destroy();
       this.combatWarning = null;
+      this.detectionCorners?.destroy();
+      this.detectionCorners = null;
     }
 
     this.shouldShowLanding = showLanding;
@@ -572,6 +623,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.hud = new PlayerHudOverlay(parent);
     this.bossHud = new BossHud(this);
     this.combatWarning = new CombatZoneWarning(this);
+    this.detectionCorners = new DetectionCorners(parent);
     // Drive HUD position+ratio updates from the main camera's PRE_RENDER
     // event. That fires after Camera.preRender() rebuilds the camera matrix
     // and refreshes midPoint, so the HUD positions are in sync with the
@@ -591,9 +643,11 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     cam.off(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateHud, this);
     cam.off(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateBossHud, this);
     cam.off(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateCombatWarning, this);
+    cam.off(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateDetectionCorners, this);
     cam.on(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateHud, this);
     cam.on(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateBossHud, this);
     cam.on(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateCombatWarning, this);
+    cam.on(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateDetectionCorners, this);
 
     // The DOM HUD renders above the canvas, so it would otherwise float over the
     // pause/shop/options dim instead of being covered by it. Hide it whenever
@@ -609,10 +663,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
 
   private hideHud(): void {
     this.hud?.setVisible(false);
+    this.detectionCorners?.setVisible(false);
   }
 
   private showHud(): void {
     this.hud?.setVisible(true);
+    this.detectionCorners?.setVisible(true);
   }
 
   private updateHud(): void {
@@ -684,6 +740,21 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       Math.ceil((this.escapeDeadline - this.time.now) / 1000),
     );
     this.combatWarning.update(secondsLeft, this.cameras.main);
+  }
+
+  // Recolours the detection corner brackets from the highest enemy alert level
+  // resolved this frame in updateEnemies (0 normal → faint white, 1 investigating
+  // → yellow, 2 conflict → red). On the camera PRE_RENDER event with the other
+  // HUDs; setLevel dedups so a steady state touches no DOM.
+  private updateDetectionCorners(): void {
+    if (!this.detectionCorners) return;
+    const level =
+      this.maxAlertLevel >= 2
+        ? 'conflict'
+        : this.maxAlertLevel >= 1
+          ? 'investigating'
+          : 'clear';
+    this.detectionCorners.setLevel(level);
   }
 
   update(): void {
@@ -870,29 +941,50 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   private updateEnemies(): void {
     if (!this.enemies) {
       this.activeBoss = null;
+      this.bossEngaged = false;
+      this.maxAlertLevel = 0;
       return;
     }
     const children = this.enemies.getChildren();
     // Resolve the engaged round-fight boss in the same pass that ticks AI.
     // First encountered, still-living round-fight boss wins (only one is
     // engageable at a time in practice). update() can destroy an enemy
-    // (off-world cleanup / death-anim complete), so the `active` guard checks
-    // obj.active before reading its flags.
+    // (off-world cleanup / death-anim complete), so we skip destroyed ones
+    // before reading their flags. The same pass also resolves the fight-wide
+    // stealth-off flag (any engaged boss) and the highest per-enemy detection
+    // level (for the HUD corner brackets) so detection costs one loop, not three.
     let active: Enemy | null = null;
+    let bossEngaged = false;
+    let maxAlert = 0;
     for (const obj of children) {
       if (!(obj instanceof Enemy)) continue;
       obj.update(this.player);
+      if (!obj.active) continue;
       if (
         active === null &&
-        obj.active &&
         obj.isRoundFight() &&
         obj.hasEncountered() &&
         !obj.isDead()
       ) {
         active = obj;
       }
+      // Stealth disables during any boss fight — round-fight or not. A boss
+      // counts as engaged once the player has entered its encounter zone
+      // (hasEncountered) or traded blows with it (isInConflict), covering
+      // bosses that carry no encounter sting (e.g. The_hive, The_blood_king).
+      if (
+        obj.isBoss() &&
+        !obj.isDead() &&
+        (obj.hasEncountered() || obj.isInConflict())
+      ) {
+        bossEngaged = true;
+      }
+      const level = obj.getAlertLevel();
+      if (level > maxAlert) maxAlert = level;
     }
     this.activeBoss = active;
+    this.bossEngaged = bossEngaged;
+    this.maxAlertLevel = maxAlert;
   }
 
   // Round-fight convergence + reinforcement driver. Runs each frame after
@@ -1483,6 +1575,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     return false;
   }
 
+  // True while a boss fight is active anywhere in the world — stealth is then
+  // disabled for every enemy (Enemy.isStealthEnabled reads this through the
+  // EnemyHelperScene interface). Resolved once per frame in updateEnemies, so
+  // this is a cheap field read with one-frame latency.
+  isStealthDisabled(): boolean {
+    return this.bossEngaged;
+  }
+
   spawnProjectile(options: ProjectileSpawnOptions): void {
     const projectile = new Projectile(this, options);
     projectile.setDepth(ENTITY_DEPTH);
@@ -1878,6 +1978,10 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // tracks. No deadzone: a deadzone pins the player at its edge instead of
     // returning to the follow offset, so a long fall would leave them stuck
     // at the bottom of the screen.
+    //
+    // roundPixels (2nd arg) = true: in Phaser's WebGL batch, sprites are only
+    // snapped to whole pixels when the *camera's* roundPixels is on, so this
+    // is what keeps the pixel-art crisp. Leave it on.
     this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
     // Phaser subtracts followOffset from the follow target's position when
     // setting scroll — a positive Y offset pulls the camera up so the player
@@ -2573,6 +2677,8 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.bossHud = null;
     this.combatWarning?.destroy();
     this.combatWarning = null;
+    this.detectionCorners?.destroy();
+    this.detectionCorners = null;
     this.activeBoss = null;
     this.bossRoundShown = 0;
     this.escapeDeadline = null;

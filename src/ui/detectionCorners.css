@@ -1,0 +1,70 @@
+/* Detection-state corner brackets — four L-shaped accents pinned to the
+ * viewport corners, layered over the Phaser canvas in the #game parent as a
+ * sibling of the player HUD. They recolour with the player's detection state
+ * (faint white → yellow → red) while the deliberately-monochrome HUD panels stay
+ * untouched. pointer-events:none so gameplay input passes through; sits just
+ * below the HUD panels (z-index 50) and well below the modal overlays. */
+
+.detection-corners {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  user-select: none;
+  z-index: 45;
+}
+
+/* A square whose two relevant borders form the corner's L; the outer angle is
+ * rounded so it reads as a frame accent, not a box. border-color is driven by
+ * the root state class below and transitions smoothly. */
+.detection-corner {
+  position: absolute;
+  width: 52px;
+  height: 52px;
+  border: 3px solid transparent;
+  transition:
+    border-color 240ms ease-out,
+    filter 240ms ease-out;
+}
+
+.detection-corner--tl {
+  top: 9px;
+  left: 9px;
+  border-right: none;
+  border-bottom: none;
+  border-top-left-radius: 8px;
+}
+.detection-corner--tr {
+  top: 9px;
+  right: 9px;
+  border-left: none;
+  border-bottom: none;
+  border-top-right-radius: 8px;
+}
+.detection-corner--bl {
+  bottom: 9px;
+  left: 9px;
+  border-right: none;
+  border-top: none;
+  border-bottom-left-radius: 8px;
+}
+.detection-corner--br {
+  bottom: 9px;
+  right: 9px;
+  border-left: none;
+  border-top: none;
+  border-bottom-right-radius: 8px;
+}
+
+/* Clear: a faint white — present but unobtrusive, the "no enemy is searching"
+ * baseline. Investigating: amber. Conflict: red with a soft outward glow so an
+ * active fight reads instantly. Colours match the overhead "?"/"!" glyphs. */
+.detection-corners.is-clear .detection-corner {
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.detection-corners.is-investigating .detection-corner {
+  border-color: rgba(255, 210, 63, 0.92);
+}
+.detection-corners.is-conflict .detection-corner {
+  border-color: rgba(255, 59, 48, 0.96);
+  filter: drop-shadow(0 0 4px rgba(255, 59, 48, 0.7));
+}

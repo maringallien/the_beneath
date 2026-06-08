@@ -418,6 +418,11 @@ export function registerEnemyWalkSound(
     const duration = sound.duration ?? 0;
     const seek = duration > 0 ? Math.random() * duration : 0;
     sound.play({ seek });
+    // Created disabled (enabled:false below): pause immediately so an idle
+    // enemy's footstep loop costs nothing on the audio thread until it actually
+    // moves and is in earshot (updateEntitySounds resumes it). The position is
+    // retained, so the random seek above still gives each loop its own phase.
+    sound.pause();
     ENTITY_ANCHORS.set(anchorKey, {
       sound,
       spatial: def.spatial,
@@ -474,14 +479,16 @@ export function setEnemyWalkSoundEnabled(
     if (!anchor) continue;
     if (!enabled) {
       anchor.enabled = false;
-      continue;
-    }
-    if (anchor.surface === undefined || anchor.surface === 'always') {
+    } else if (anchor.surface === undefined || anchor.surface === 'always') {
       anchor.enabled = true;
     } else {
       anchor.enabled = anchor.surface === surface;
     }
   }
+  // Note: only the `enabled` flag is set here. The actual pause/resume (and the
+  // distance cull) is owned by updateEntitySounds — driving playback from one
+  // place keeps this per-frame chase call from fighting the distance gate, which
+  // would otherwise thrash pause/resume every frame for a far, moving enemy.
 }
 
 // Per-sprite playlist state for `entitySoundSequences`. The sequencer plays
@@ -739,16 +746,23 @@ export function registerEntityPeriodicSound(
 // don't bother with squared-distance shortcuts or spatial partitioning.
 // Also caches the player position so the periodic-call scheduler can gate
 // distant emitters on the same coordinates without an extra plumbing path.
+//
+// Past maxRadius + AUDIBLE_CULL_MARGIN_PX an active loop is paused (not just
+// muted) so it stops costing audio-thread time when many emitters are live; the
+// margin is hysteresis so an enemy hovering at the edge doesn't pause/resume
+// every frame (the band past maxRadius is silent regardless).
+const AUDIBLE_CULL_MARGIN_PX = 96;
 export function updateEntitySounds(playerX: number, playerY: number): void {
   lastPlayerX = playerX;
   lastPlayerY = playerY;
   for (const anchor of ENTITY_ANCHORS.values()) {
-    // Disabled anchors (walk sound while the enemy is idle/attacking/etc.)
-    // hold their loop at volume 0 — keeping the BaseSound alive means the
-    // next state transition resumes from the loop's current position rather
-    // than restarting from frame 0, so the cadence stays natural.
+    const sound = anchor.sound;
+    // A disabled loop (idle enemy) is always silent — pause it so it stops
+    // costing audio-thread time, and skip the distance math entirely. Pause
+    // retains the loop position, so the cadence resumes mid-cycle when the
+    // enemy moves again rather than snapping back to frame 0.
     if (!anchor.enabled) {
-      (anchor.sound as Phaser.Sound.WebAudioSound).setVolume(0);
+      if (sound.isPlaying) sound.pause();
       continue;
     }
     const ax =
@@ -763,6 +777,16 @@ export function updateEntitySounds(playerX: number, playerY: number): void {
     const dy = ay - playerY;
     const dist = Math.sqrt(dx * dx + dy * dy);
     const { minRadius, maxRadius } = anchor.spatial;
+    // Distance cull: render only within earshot. A source past maxRadius is
+    // inaudible anyway, so pausing it (with the hysteresis margin) caps how many
+    // loops actually compete on the audio thread when a crowd of enemies is up.
+    if (dist < maxRadius) {
+      if (sound.isPaused) sound.resume();
+    } else if (dist >= maxRadius + AUDIBLE_CULL_MARGIN_PX) {
+      if (sound.isPlaying) sound.pause();
+    }
+    if (sound.isPaused) continue;
+
     let volume: number;
     if (dist <= minRadius) {
       volume = anchor.defaultVolume;
@@ -776,7 +800,7 @@ export function updateEntitySounds(playerX: number, playerY: number): void {
     // /HTML5Audio/NoAudio) but not on BaseSound. All three implement it, so
     // a single cast through WebAudioSound is safe regardless of which the
     // runtime SoundManager produced.
-    (anchor.sound as Phaser.Sound.WebAudioSound).setVolume(volume);
+    (sound as Phaser.Sound.WebAudioSound).setVolume(volume);
   }
 
   // Sequence playlists track sprite position too. Paused clips keep their
@@ -800,6 +824,22 @@ export function updateEntitySounds(playerX: number, playerY: number): void {
     }
     (sound as Phaser.Sound.WebAudioSound).setVolume(volume);
   }
+}
+
+// TEMP DIAGNOSTIC — remove together with the GameScene DEBUG_AUDIO logger. Live
+// sizes of the long-lived audio collections, so a 1 Hz log can distinguish a
+// leak (a count climbing without bound) from audio-thread saturation (flat
+// counts, audio still dying) at runtime.
+export function debugAudioCounts(): {
+  anchors: number;
+  sequences: number;
+  periodic: number;
+} {
+  return {
+    anchors: ENTITY_ANCHORS.size,
+    sequences: SEQUENCE_STATES.size,
+    periodic: PERIODIC_TIMERS.size,
+  };
 }
 
 // Destroys every registered entity sound. Called from tearDownWorld before
@@ -936,14 +976,27 @@ export function playOneShot(
     volume,
     rate: def.rate ?? 1,
   });
-  sound.once(Phaser.Sound.Events.COMPLETE, () => {
+  // Reclaim the WebAudio node when the clip ends. COMPLETE is the normal path,
+  // but a one-shot that's interrupted — stopped, or re-triggered faster than its
+  // own length (e.g. animation-frame SFX during fast enemy state churn) — may
+  // never fire COMPLETE, leaking live nodes that progressively saturate the
+  // audio thread. So also free on STOP, plus a duration-based safety net.
+  // `freed` guards against a double destroy when more than one path fires.
+  let freed = false;
+  const free = (): void => {
+    if (freed) return;
+    freed = true;
     sound.destroy();
-  });
+  };
+  sound.once(Phaser.Sound.Events.COMPLETE, free);
+  sound.once(Phaser.Sound.Events.STOP, free);
   if (seekSec > 0) {
     sound.play({ seek: seekSec });
   } else {
     sound.play();
   }
+  const remainingMs = Math.ceil(((sound.duration ?? 0) - seekSec) * 1000);
+  scene.time.delayedCall(Math.max(remainingMs, 0) + 250, free);
   return sound;
 }
 

@@ -15,6 +15,7 @@ export {
   unregisterEntityAudio,
   updateEntitySounds,
   clearEntitySounds,
+  debugAudioCounts,
   playOneShot,
   setPlayerStateSoundActive,
   AMBIENCE_CROSSFADE_MS,

@@ -16,7 +16,16 @@ export const gameConfig: Phaser.Types.Core.GameConfig = {
     default: 'arcade',
     arcade: {
       gravity: { x: 0, y: GRAVITY_Y },
-      debug: false
+      debug: false,
+      // Step physics once per rendered frame using the real frame delta,
+      // instead of Phaser's default fixed 60 Hz step (fixedStep: true). The
+      // fixed step advances bodies only ~every other frame on a 120 Hz display
+      // while the camera follow-lerp runs every frame, so the player's on-screen
+      // position oscillated — reading as blur/ghosting and, at high fall speed,
+      // a second trailing copy of the character; enemies juddered the same way.
+      // Stepping per frame keeps physics aligned with render at ANY refresh rate
+      // (60/120/144/240). Movement is velocity/delta-based, so feel is unchanged.
+      fixedStep: false
     }
   },
   // RESIZE mode locks the canvas to the parent #game element (which is 100vw x

@@ -515,6 +515,24 @@ export interface AnimatedEntityBehaviorConfig {
   // where the default 6 px gap above body.top reads as "inside the sprite"
   // rather than "above its head".
   readonly healthBarOffsetY?: number;
+  // ── Stealth / detection tuning (optional; defaults live in constants) ──────
+  // Sight range (world px) at which this enemy spots the player. Defaults to the
+  // enemy's chaseRange when it has one, otherwise ENEMY_DETECTION_RANGE_PX.
+  readonly detectionRange?: number;
+  // Forward vision half-angle in degrees: the player must be within ±this of the
+  // way the enemy faces (it faces left/right only) to be seen, so a turned back
+  // is a blind spot. Defaults to ENEMY_VISION_HALF_ANGLE_DEG.
+  readonly visionHalfAngleDeg?: number;
+  // Chase-speed multiplier once this enemy has detected the player. Defaults to
+  // ENEMY_ALERT_SPEED_MUL. Lets a specific enemy lunge harder (or calmer) on the
+  // hunt without retuning its base moveSpeed.
+  readonly alertSpeedMul?: number;
+  // If true, this enemy opts out of the stealth/detection system entirely: no
+  // vision cone, no "?"/"!" telegraph, no HUD contribution — it just uses its
+  // legacy always-on aggro/chase (e.g. hive-leashed wasps that swarm on
+  // proximity and shouldn't be sneakable-past). Bosses are already exempt via
+  // isBoss; this is the opt-out for non-boss swarmers.
+  readonly ignoresStealth?: boolean;
   // When the player fires a projectile within `triggerRangePx`, the entity
   // immediately interrupts whatever it's doing and fires one of its own
   // `type: 'teleport'` attacks from the attackPool — closing the gap and
@@ -554,12 +572,21 @@ export interface AnimatedEntityBehaviorConfig {
     // death animation's frameCount at boot when the death anim exists.
     readonly frame: number;
   };
-  // Spawn-anchored ground wander (see Enemy.updateAreaWander). When set on a
-  // grounded character that has no authored loiterPath, it strolls within
+  // Spawn-anchored ground wander (see Enemy.updateAreaWander). A grounded
+  // character with no authored loiterPath wanders by default, strolling within
   // `radius` px of its spawn point — resting between strolls and using the
-  // shared leap probe to hop level gaps that land back in-bounds — instead of
-  // standing idle. Without this block such a character just idles (unchanged).
+  // shared leap probe to hop level gaps that land back in-bounds. This block is
+  // optional: set it only to tune the stroll (custom radius, social greeting);
+  // omitted, the character strolls at DEFAULT_WANDER_RADIUS. To keep a character
+  // standing still instead, set `stationary` (below) or mark it a boss (isBoss).
   readonly wander?: AnimatedEntityWanderConfig;
+  // If true, this grounded character holds idle when out of combat instead of
+  // default-wandering — the opt-out from the no-patrol-path wander default. Use
+  // for enemies meant to guard a fixed spot (ambushers, turret-like melee).
+  // Distinct from `immovable` (knockback/physics) and redundant with `isBoss`
+  // (which already suppresses default wandering). No effect on a character with
+  // a loiterPath (it patrols) or an authored `wander` block (that wins).
+  readonly stationary?: boolean;
 }
 
 // Spawn-anchored wander parameters (behavior.wander). Presence on a grounded

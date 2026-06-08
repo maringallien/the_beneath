@@ -10,8 +10,19 @@ import {
 import {
   BOSS_DEFEATED_EVENT,
   BOSS_ROUND_BREAK_MS,
+  ENEMY_ALERT_ICON_HOLD_MS,
+  ENEMY_ALERT_SPEED_MUL,
+  ENEMY_ALERT_STING_SOUND_ID,
   ENEMY_COMBAT_TIMEOUT_MS,
+  ENEMY_CONFLICT_WINDOW_MS,
+  ENEMY_DETECTION_RANGE_PX,
   ENEMY_HEALTH_MULTIPLIER,
+  ENEMY_SEARCH_FLIP_MS,
+  ENEMY_SEARCH_LOOK_MS,
+  ENEMY_SEARCH_REACH_DIST_PX,
+  ENEMY_SPOT_STOP_MS,
+  ENEMY_VISION_HALF_ANGLE_DEG,
+  ENEMY_VISION_NEAR_RADIUS_PX,
   GRAVITY_Y,
   HOARDER_SEPARATION_MIN_DX_PX,
   HOARDER_SEPARATION_PUSH_SPEED,
@@ -24,6 +35,13 @@ import { rollDrop } from './AmmoDrop';
 import type { AmmoDropSpawnerScene } from './AmmoDropSpawnerScene';
 import { AnimatedEntity } from './AnimatedEntity';
 import { roundForRatio } from './bossRounds';
+import { EnemyAlertIcon, type AlertGlyph } from './EnemyAlertIcon';
+import {
+  alertLevel,
+  classifyAlert,
+  isInDetectionCone,
+  type AlertState,
+} from './enemyDetection';
 import { EnemyHealthBar } from './EnemyHealthBar';
 import type { EnemyProjectileSpawnOptions } from './EnemyProjectile';
 import {
@@ -225,10 +243,17 @@ const PATH_WALK_INTERVAL_MIN_MS = 2500;
 const PATH_WALK_INTERVAL_MAX_MS = 5500;
 const PATH_PAUSE_DURATION_MIN_MS = 700;
 const PATH_PAUSE_DURATION_MAX_MS = 1800;
-// Spawn-anchored ground wander (behavior.wander; see updateAreaWander). A
-// grounded character with no authored loiterPath strolls within wander.radius
-// of its spawn X, reusing the path dwell timers/constants above for its rest
-// breaks. These tune the parts not authored per-entity.
+// Spawn-anchored ground wander (see updateAreaWander). A grounded character
+// with no authored loiterPath wanders by default, strolling within a radius of
+// its spawn X and reusing the path dwell timers/constants above for its rest
+// breaks. An authored behavior.wander block only overrides the tuning (radius,
+// social greeting). These tune the parts not authored per-entity.
+// Default stroll radius (world px) for a character that wanders by default — no
+// authored loiterPath and no explicit behavior.wander. An authored
+// behavior.wander.radius overrides this; bosses and behavior.stationary
+// characters never default-wander (they hold idle). Matches the spirit walkers'
+// authored radius so the ambient stroll reads consistently.
+const DEFAULT_WANDER_RADIUS = 200;
 // Minimum step (px) between consecutive wander targets so a fresh pick is never
 // so close it "arrives" instantly and stutters the stroller in place.
 const WANDER_MIN_TARGET_STEP_PX = 24;
@@ -339,6 +364,13 @@ interface EnemyHelperScene {
   // same-group partner; callers do their own group/proximity/self filtering and
   // throttle the scan since this is O(enemy count).
   forEachEnemy(cb: (enemy: Enemy) => void): void;
+  // True while a boss fight is active anywhere in the world. Stealth is
+  // disabled entirely during boss fights — every enemy is always detectable
+  // (the vision-cone / cover gate is bypassed and pursuit falls back to the
+  // legacy always-on aggro), so the player can't sneak inside an arena. Cheaply
+  // recomputed once per frame in GameScene.updateEnemies (one-frame latency,
+  // which is fine for a fight-wide flag).
+  isStealthDisabled(): boolean;
 }
 
 // IntGrid values from the LDtk source. Match the constants in Player.ts —
@@ -592,11 +624,14 @@ export class Enemy extends AnimatedEntity {
   // resumed after a chase starts clean rather than pausing immediately.
   private pathPauseUntil = 0;
   private nextPathPauseAt = 0;
-  // Spawn-anchored wander (behavior.wander). wanderConfig null = this entity
-  // doesn't wander (no block, or airborne/path-bound). wanderTargetX is the
-  // current stroll target X; wanderWalkAnimOn tracks whether the walk clip (vs
-  // the resting idle pose) is currently showing so updateAreaWander only swaps
-  // animations on change rather than every frame. See updateAreaWander.
+  // Authored wander config (behavior.wander) only — null for everything else.
+  // Whether a character actually area-wanders is decided live in wanderRadius(),
+  // which falls back to a default stroll for grounded path-less characters; this
+  // field just carries the authored radius + greet for the spirit walkers.
+  // wanderTargetX is the current stroll target X; wanderWalkAnimOn tracks whether
+  // the walk clip (vs the resting idle pose) is currently showing so
+  // updateAreaWander only swaps animations on change rather than every frame.
+  // See updateAreaWander / wanderRadius.
   private readonly wanderConfig: AnimatedEntityWanderConfig | null;
   private wanderTargetX = 0;
   private wanderWalkAnimOn = false;
@@ -654,6 +689,64 @@ export class Enemy extends AnimatedEntity {
   // idling behind cover. Lapses like the aggro window once the boss is gone;
   // sentinel 0 == respect LOS (normal exploration behavior).
   private convergeUntil = 0;
+  // ── Stealth / detection ──────────────────────────────────────────────────
+  // Derived awareness state (see enemyDetection.ts), recomputed every frame in
+  // updateAlertState from line-of-sight + the active-combat window. Persistent —
+  // it drives the aggregated HUD corner brackets via getAlertLevel. The overhead glyph
+  // is a SEPARATE, transient flash keyed off escalations of this state.
+  private alertState: AlertState = 'normal';
+  // Previous frame's alertState, so an escalation edge (normal→investigating, or
+  // →conflict) can flash the momentary overhead "?"/"!" glyph exactly once.
+  private prevAlertState: AlertState = 'normal';
+  // Whether the enemy could see the player on the most recent frame. Cached so
+  // the chase/facing/search code can branch on "currently has eyes on" without
+  // recomputing the line-of-sight raycast.
+  private lastVisible = false;
+  // Player's last-seen world position + whether one has been recorded. A
+  // searching enemy heads here (not to the live player) so a hidden player isn't
+  // magically tracked through walls.
+  private lastSeenX = 0;
+  private lastSeenY = 0;
+  private hasLastSeen = false;
+  // Resolved sight range / vision-cone half-angle (radians) for this instance —
+  // authored overrides fall back to the global detection constants (computed
+  // once in the constructor).
+  private readonly detectionRange: number;
+  private readonly visionHalfAngleRad: number;
+  // On-the-hunt chase-speed multiplier for this instance (behavior.alertSpeedMul
+  // or the global default), resolved once in the constructor.
+  private readonly alertSpeedMul: number;
+  // True when this enemy opts out of the stealth/detection system entirely
+  // (behavior.ignoresStealth) — no vision cone, no glyph, no HUD contribution;
+  // legacy always-on aggro/chase instead. Used by hive-leashed wasps.
+  private readonly ignoresStealth: boolean;
+  // Scene-time at which the active-combat window closes. Refreshed each time the
+  // enemy commits an attack or lands contact damage; while it's open the enemy
+  // reads as "conflict" (red "!"), otherwise an aware enemy is merely
+  // "investigating" (yellow "?"). Decouples the red state from mere attack range
+  // so a spotted enemy doesn't snap straight to "!" before it actually engages.
+  private conflictUntil = 0;
+  // Scene-time until which a freshly-spotting enemy holds still (the "stop and
+  // show ?" telegraph) before it rushes to investigate. Sentinel 0 == not in the
+  // stop beat.
+  private investigateStopUntil = 0;
+  // Transient overhead glyph + the scene-time it auto-hides at. The glyph flashes
+  // on an escalation (a fresh spot → "?", an engage → "!") and clears after
+  // ENEMY_ALERT_ICON_HOLD_MS even while the enemy stays aware — a momentary tell,
+  // not a persistent label (the HUD corner brackets is the persistent readout).
+  private iconGlyph: AlertGlyph = 'none';
+  private iconHideAt = 0;
+  // ── Search-after-losing-sight (last-seen hunt + return to post) ───────────
+  // Scene-time at which the current "look around the last-seen spot" scan ends.
+  private searchLookUntil = 0;
+  // Scene-time of the next facing flip while scanning ("looks around").
+  private searchNextFlipAt = 0;
+  // True once the enemy has given up the hunt and is walking back toward its
+  // spawn / patrol post; cleared on arrival or on re-detecting the player.
+  private returningToPost = false;
+  // Overhead "?"/"!" detection glyph. Built only for enemies that can fight
+  // (attack-less NPCs never detect), disposed via the DESTROY listener.
+  private alertIcon: EnemyAlertIcon | null = null;
   // Latches true the moment the death-explosion AoE fires so the frame-
   // trigger path in onAnimUpdate and the no-anim fallback in enterDeadState
   // can't double-fire. No-op for entities without behavior.deathExplosion.
@@ -737,8 +830,13 @@ export class Enemy extends AnimatedEntity {
       );
     }
     this.behavior = behavior;
-    // Cached spawn-anchored wander config (null unless this is a grounded
-    // character authored with behavior.wander). Drives updateAreaWander.
+    // Authored spawn-anchored wander config (behavior.wander), or null. Only
+    // carries the per-entity tuning (radius + social greeting) for characters
+    // that author it — the spirit walkers. The *default* wander for any other
+    // grounded, path-less, non-boss character is decided live in wanderRadius()
+    // (not cached here): doing it at update time reads the body's final gravity
+    // state and keeps the rule correct even for enemy instances that predate a
+    // hot-reload, rather than freezing a constructor-time decision.
     this.wanderConfig = behavior.wander ?? null;
     this.dormantWakeAnim = behavior.dormant?.wakeAnimation ?? null;
     // A "harmless copy" (boss self-clone, see EnemySpawnOverrides) keeps the
@@ -776,6 +874,20 @@ export class Enemy extends AnimatedEntity {
     this.attacks =
       behavior.attackPool ??
       (behavior.attack ? [behavior.attack] : []);
+
+    // Detection tuning. Sight range falls back to the lead attack's chaseRange
+    // (an enemy "sees" about as far as it would give chase), then to the global
+    // default; the cone half-angle and on-the-hunt speed boost fall back to
+    // their global constants.
+    this.detectionRange =
+      behavior.detectionRange ??
+      this.attacks[0]?.chaseRange ??
+      ENEMY_DETECTION_RANGE_PX;
+    this.visionHalfAngleRad = Phaser.Math.DegToRad(
+      behavior.visionHalfAngleDeg ?? ENEMY_VISION_HALF_ANGLE_DEG,
+    );
+    this.alertSpeedMul = behavior.alertSpeedMul ?? ENEMY_ALERT_SPEED_MUL;
+    this.ignoresStealth = behavior.ignoresStealth === true;
 
     if (behavior.immovable) {
       // Anchor the entity to its LDtk spawn position. Gravity off so it
@@ -829,6 +941,16 @@ export class Enemy extends AnimatedEntity {
       this.healthBar = null;
     }
 
+    // Overhead "?"/"!" detection glyph: only for enemies that can fight (attack-
+    // less NPCs never enter the detection machine) and that aren't exempt from
+    // stealth (ignoresStealth — wasps), mirroring the health bar's lazy build.
+    // Harmless self-copies keep it so a chasing copy still reads as alerted
+    // during a boss fight.
+    this.alertIcon =
+      this.attacks.length > 0 && !this.ignoresStealth
+        ? new EnemyAlertIcon(scene)
+        : null;
+
     this.on(
       Phaser.Animations.Events.ANIMATION_UPDATE,
       this.onAnimUpdate,
@@ -873,8 +995,10 @@ export class Enemy extends AnimatedEntity {
       this.stopActiveTriggerSounds();
       // Phaser doesn't auto-destroy plain Graphics objects when a sibling
       // sprite is destroyed; without this the bar would survive HMR teardown
-      // (which clears the enemies group without restarting the scene).
+      // (which clears the enemies group without restarting the scene). The
+      // alert glyph is a Text object with the same lifecycle, so reclaim it too.
       this.healthBar?.destroy();
+      this.alertIcon?.destroy();
     });
   }
 
@@ -1040,7 +1164,18 @@ export class Enemy extends AnimatedEntity {
       );
     }
 
-    if (this.enemyState === 'dead' || this.enemyState === 'hurt') return;
+    if (this.enemyState === 'dead' || this.enemyState === 'hurt') {
+      // A corpse skips the detection pass below, so clear its alert glyph AND
+      // its alert state here — otherwise a stale glyph floats over the body and
+      // getAlertLevel keeps the HUD corner brackets lit for a dead enemy.
+      if (this.enemyState === 'dead') {
+        this.alertState = 'normal';
+        this.prevAlertState = 'normal';
+        this.iconGlyph = 'none';
+        this.alertIcon?.setGlyph('none');
+      }
+      return;
+    }
 
     // Lateral de-stacking for grouped self-copies — runs across every live
     // state (idle / chase / attack / recover) so a hoarder pile that formed in
@@ -1159,10 +1294,17 @@ export class Enemy extends AnimatedEntity {
     // recover. The player's own invuln window prevents tick-storms.
     this.applyContactDamage(player);
 
-    // Face the player whenever we're free to — locked while attacking so
-    // the committed swing's hitbox direction matches what the animation
-    // showed.
-    if (this.enemyState !== 'attack') {
+    // Stealth/detection pass: resolve whether the enemy can see the player this
+    // frame, ramp suspicion → detection (opening the aggro window on a lock-on),
+    // and drive the overhead "?"/"!" glyph. Runs before the facing/chase logic
+    // below so both read this frame's alert state. No-op for attack-less NPCs.
+    this.updateAlertState(player, dx, dist);
+
+    // Face the player only while engaging or with eyes on them — in normal and
+    // searching states the movement code (loiter/wander/search) owns facing, so
+    // a turned back stays a real blind spot. Locked while attacking so the
+    // committed swing's hitbox direction matches the animation shown.
+    if (this.enemyState !== 'attack' && this.shouldFacePlayer()) {
       this.facingDirection = dx >= 0 ? 1 : -1;
       this.setFacing(this.facingDirection === -1);
     }
@@ -1234,6 +1376,40 @@ export class Enemy extends AnimatedEntity {
       return;
     }
 
+    // ── Stealth/detection gates ───────────────────────────────────────────
+    // Stealth-enabled enemies only; bosses and boss-fight enemies skip these
+    // and engage on range as before.
+    //
+    // 1. Spotting telegraph: a freshly-spotted enemy holds still and shows the
+    //    "?" for a beat before it commits — the readable "stop, then rush" tell.
+    if (
+      this.isStealthEnabled() &&
+      this.isAggro() &&
+      this.scene.time.now < this.investigateStopUntil
+    ) {
+      if (this.enemyState !== 'idle') this.enterIdle();
+      return;
+    }
+    // 2. Lost the player while aware → hunt the last-seen spot (rush there, look
+    //    around, give up) rather than tracking a player it can't see. Returns
+    //    before attack-picking so it can't swing at a hidden target through a wall.
+    if (this.isSearching()) {
+      this.updateSearch(player);
+      return;
+    }
+    // 3. Gave up the hunt and can't passively drift home (a stationary guard):
+    //    walk back to the spawn post before resuming idle.
+    if (this.isReturningToPost()) {
+      this.updateReturnToPost();
+      return;
+    }
+    // 4. Oblivious: not yet detected, so it neither attacks nor chases — the
+    //    player can slip past or behind it even within attack range.
+    if (this.isStealthEnabled() && !this.isAggro()) {
+      this.enterIdleOrLoiter(player);
+      return;
+    }
+
     const pick = this.pickAttack(dist);
     if (pick) {
       // Ranged/magic attacks need a clear line to the player — firing at a
@@ -1276,7 +1452,13 @@ export class Enemy extends AnimatedEntity {
     // chaseRange, abandoning any loiter path to focus on attacking. The aggro
     // window is the leash, so a player who fully disengages is eventually
     // dropped and the entity resumes patrolling.
+    // The legacy "aggressive enemy auto-chases anything in chaseRange" trigger.
+    // For stealth-enabled enemies it's replaced by the detection gate — sight
+    // opens the aggro window in updateAlertState — so they only pursue once
+    // they've actually spotted the player. Bosses and boss-fight enemies keep
+    // the always-on trigger.
     const inConfiguredChaseRange =
+      !this.isStealthEnabled() &&
       chaseLead.aggressive === true &&
       chaseLead.chaseRange != null &&
       dist <= chaseLead.chaseRange;
@@ -1384,8 +1566,13 @@ export class Enemy extends AnimatedEntity {
       // anchors while still letting `'always'` anchors play (e.g. ghoul mud).
       setEnemyWalkSoundEnabled(this, chaseMoving, this.currentWalkSurface());
       // Per-instance chase-speed spread so a same-frame swarm desyncs instead
-      // of chasing in lockstep. Bosses keep their exact hand-tuned speed.
-      const speedMul = this.isBoss() ? 1 : this.chaseSpeedMul;
+      // of chasing in lockstep. Bosses keep their exact hand-tuned speed. A
+      // stealth enemy that has detected the player also gets the on-the-hunt
+      // speed boost (the spec's "moves at a higher speed than its walk") on top
+      // of the jitter; bosses/boss-fight enemies are unaffected.
+      const alertBoost =
+        this.isStealthEnabled() && this.isAggro() ? this.alertSpeedMul : 1;
+      const speedMul = (this.isBoss() ? 1 : this.chaseSpeedMul) * alertBoost;
       if (this.body.allowGravity) {
         // Ground-bound chase. Each grounded frame, in priority order:
         //   1. Hop a short solid wall directly ahead (≤2 tiles) — small steps.
@@ -1595,6 +1782,11 @@ export class Enemy extends AnimatedEntity {
       // A player-dealt hit puts the entity into conflict: it drops whatever
       // it was loitering at and pursues until the aggro window lapses.
       this.refreshAggro();
+      // Being struck counts as being spotted — remember where the player is so
+      // an enemy hit from concealment (a player ducking behind cover between
+      // shots) heads over to investigate instead of standing there. Guarded on
+      // playerRef so a hit landed before this enemy's first update() is safe.
+      if (this.playerRef) this.recordLastSeen(this.playerRef);
     }
     // Push the new HP value into the bar regardless of source — if the
     // player already engaged this enemy, a trap finishing it off should
@@ -1882,8 +2074,11 @@ export class Enemy extends AnimatedEntity {
     this.enemyState = 'attack';
     // Committing an attack means the entity is engaged — sustain the aggro
     // window so it keeps pursuing between swings (chasing past chaseRange,
-    // not drifting back to its patrol) for the whole fight.
+    // not drifting back to its patrol) for the whole fight, and open the
+    // shorter active-combat window that flips the alert state to conflict
+    // (red "!") and keeps it there between swings.
     this.refreshAggro();
+    this.conflictUntil = this.scene.time.now + ENEMY_CONFLICT_WINDOW_MS;
     this.attackFired = false;
     this.firedMeleeHitboxes.clear();
     this.firedAoeDamageFrames.clear();
@@ -2356,6 +2551,301 @@ export class Enemy extends AnimatedEntity {
     this.aggroUntil = this.scene.time.now + ENEMY_COMBAT_TIMEOUT_MS;
   }
 
+  // ── Stealth / detection ──────────────────────────────────────────────────
+
+  // Aggregated detection level for the HUD corner brackets (0 normal,
+  // 1 investigating, 2 conflict). GameScene takes the max across all live
+  // enemies each frame and recolours the corners faint-white / yellow / red.
+  getAlertLevel(): 0 | 1 | 2 {
+    return alertLevel(this.alertState);
+  }
+
+  // Stealth applies when this enemy can fight, isn't a boss, and no boss fight
+  // is active. Bosses and every enemy during a boss fight are "always
+  // detectable" — they bypass the facing gate and the stop-and-investigate
+  // telegraph and fall back to the legacy always-on aggro/chase.
+  private isStealthEnabled(): boolean {
+    if (this.alertIcon == null) return false; // attack-less / stealth-exempt
+    if (this.ignoresStealth) return false; // wasps & other legacy swarmers
+    if (this.isBoss()) return false;
+    return !(this.scene as unknown as EnemyHelperScene).isStealthDisabled();
+  }
+
+  // Whether to point the enemy at the live player this frame. Only while
+  // engaging or with eyes on them; in normal/searching states the movement code
+  // owns facing, so a turned back is a genuine blind spot. Stealth-off enemies
+  // always face the player (legacy look-at-player-every-frame behavior).
+  private shouldFacePlayer(): boolean {
+    if (!this.isStealthEnabled()) return true;
+    if (this.alertState === 'conflict') return true;
+    if (this.alertState === 'investigating') return this.lastVisible;
+    return false; // normal
+  }
+
+  private recordLastSeen(player: Player): void {
+    this.lastSeenX = player.x;
+    this.lastSeenY = player.y;
+    this.hasLastSeen = true;
+  }
+
+  // Can the enemy see the player this frame? Stealth on: within the detection
+  // radius AND inside the forward vision cone (a turned back is a blind spot),
+  // with a clear line — no collision tile between them (the player "behind tiles
+  // on the collision layer"). Stealth off (boss fight / boss): within range +
+  // clear line only, no cone. The cone/range test is cheap and gates the LOS
+  // raycast so the per-tile walk only runs for a player who's already close and
+  // in front.
+  private canSeePlayer(
+    player: Player,
+    dx: number,
+    dist: number,
+    stealthEnabled: boolean,
+    helper: EnemyHelperScene,
+  ): boolean {
+    if (stealthEnabled) {
+      if (
+        !isInDetectionCone(
+          dx,
+          dist,
+          this.facingDirection,
+          this.detectionRange,
+          this.visionHalfAngleRad,
+          ENEMY_VISION_NEAR_RADIUS_PX,
+        )
+      ) {
+        return false;
+      }
+    } else if (dist > this.detectionRange) {
+      return false;
+    }
+    return !helper.isLineBlocked(this.x, this.y, player.x, player.y);
+  }
+
+  // The moment of spotting (fresh line of sight while not already aware): open
+  // the aggro window, arm the stop-and-investigate telegraph, and play the
+  // one-shot alert sting — spatial, so distant lock-ons stay quiet, and a no-op
+  // until an 'enemy_alert' sound is registered. Harmless copies stay silent.
+  // last-seen is recorded by the caller before this runs.
+  private onSpotted(): void {
+    this.refreshAggro();
+    this.returningToPost = false;
+    this.searchLookUntil = 0;
+    this.investigateStopUntil = this.scene.time.now + ENEMY_SPOT_STOP_MS;
+    if (!this.harmless) {
+      playOneShot(this.scene, ENEMY_ALERT_STING_SOUND_ID, 0, this);
+    }
+  }
+
+  // Per-frame detection pass (pure parts in enemyDetection.ts). Resolves line of
+  // sight, opens aggro on a fresh spot, classifies the alert state from the
+  // active-combat window, and flashes the transient overhead glyph. No-op for
+  // attack-less NPCs (no icon).
+  private updateAlertState(player: Player, dx: number, dist: number): void {
+    if (this.alertIcon == null) return;
+    const now = this.scene.time.now;
+    const helper = this.scene as unknown as EnemyHelperScene;
+    const stealthEnabled = this.isStealthEnabled();
+
+    const visible = this.canSeePlayer(player, dx, dist, stealthEnabled, helper);
+    this.lastVisible = visible;
+
+    if (visible) {
+      this.returningToPost = false;
+      this.searchLookUntil = 0;
+      const wasAware = this.isAggro();
+      this.recordLastSeen(player);
+      if (stealthEnabled && !wasAware) {
+        // Fresh spot: stop, telegraph, then rush (handled by the update() gates).
+        this.onSpotted();
+      } else {
+        // Already aware, or stealth off — keep the window alive (no telegraph).
+        this.refreshAggro();
+      }
+    }
+
+    // Conflict = actively engaging: mid-swing/recover, or inside the post-attack
+    // combat window (refreshed on each attack / contact hit). Decoupling the red
+    // "!" from mere attack range is what stops a spotted enemy snapping straight
+    // to "!" before it has actually closed in and engaged.
+    const aware = this.isAggro();
+    const inConflict =
+      this.enemyState === 'attack' ||
+      this.enemyState === 'recover' ||
+      now < this.conflictUntil;
+    this.alertState = classifyAlert({ inConflict, aware });
+
+    this.alertIcon.setAnchor(this.body.center.x, this.body.top);
+    this.updateAlertIcon(now);
+  }
+
+  // Drives the transient overhead glyph: flash a yellow "?" on a fresh spot
+  // (normal→investigating) and a red "!" on engaging (→conflict), then auto-hide
+  // after ENEMY_ALERT_ICON_HOLD_MS even while the enemy stays aware. No re-flash
+  // on de-escalation (conflict→investigating shows nothing). The HUD corner brackets,
+  // driven separately off the persistent alertState, is the lasting readout.
+  private updateAlertIcon(now: number): void {
+    const icon = this.alertIcon;
+    if (icon == null) return;
+    let flash: AlertGlyph = 'none';
+    if (this.prevAlertState === 'normal' && this.alertState === 'investigating') {
+      flash = 'suspect';
+    } else if (
+      this.prevAlertState !== 'conflict' &&
+      this.alertState === 'conflict'
+    ) {
+      flash = 'detect';
+    }
+    this.prevAlertState = this.alertState;
+
+    if (flash !== 'none') {
+      this.iconGlyph = flash;
+      this.iconHideAt = now + ENEMY_ALERT_ICON_HOLD_MS;
+      icon.setGlyph(flash);
+    } else if (this.iconGlyph !== 'none' && now >= this.iconHideAt) {
+      this.iconGlyph = 'none';
+      icon.setGlyph('none');
+    }
+  }
+
+  // True when alerted but currently without eyes on the player — the enemy
+  // should hunt the last-seen spot rather than track the hidden player. Only
+  // stealth-enabled fighters search; boss-fight enemies keep legacy pursuit.
+  private isSearching(): boolean {
+    return (
+      this.isStealthEnabled() &&
+      this.isAggro() &&
+      !this.lastVisible &&
+      this.hasLastSeen
+    );
+  }
+
+  // Hunt the player's last-seen location: walk to it, scan the area ("looks
+  // around"), then give up. Bounded by ENEMY_SEARCH_LOOK_MS so a hunt that never
+  // reaches the spot (blocked path) still ends. Re-seeing the player drops out
+  // of search immediately (isSearching → false the moment lastVisible flips).
+  private updateSearch(player: Player): void {
+    const now = this.scene.time.now;
+    if (this.searchLookUntil === 0) {
+      // First frame of this hunt — arm the overall budget + first scan flip.
+      this.searchLookUntil = now + ENEMY_SEARCH_LOOK_MS;
+      this.searchNextFlipAt = now + ENEMY_SEARCH_FLIP_MS;
+    }
+    if (now >= this.searchLookUntil) {
+      this.giveUpHunt();
+      this.enterIdleOrLoiter(player);
+      return;
+    }
+
+    const dxSeen = this.lastSeenX - this.x;
+    const dySeen = this.lastSeenY - this.y;
+    const distSeen = Math.hypot(dxSeen, dySeen);
+    const moveSpeed = this.effectiveMoveSpeed();
+    const canMove = moveSpeed != null && !this.behavior.immovable;
+    const arrived = distSeen <= ENEMY_SEARCH_REACH_DIST_PX;
+
+    if (!arrived && canMove) {
+      // Travel toward the last-seen spot at the on-the-hunt pace, facing the way
+      // it moves. Grounded enemies steer X only; airborne steer in 2D.
+      const speed = moveSpeed * this.alertSpeedMul * this.chaseSpeedMul;
+      this.facingDirection = dxSeen >= 0 ? 1 : -1;
+      this.setFacing(this.facingDirection === -1);
+      // Play the walk clip only on entry — replaying it every frame would freeze
+      // it on frame 0 (play() restarts), matching the chase block's care.
+      if (this.enemyState !== 'chase') {
+        this.enemyState = 'chase';
+        const walkAnim = this.effectiveWalkAnimation();
+        if (walkAnim) this.playLogical(walkAnim);
+      }
+      setEnemyWalkSoundEnabled(this, true, this.currentWalkSurface());
+      if (this.body.allowGravity) {
+        if (this.shouldJumpOverObstacle()) this.setVelocityY(ENEMY_JUMP_VELOCITY);
+        this.setVelocityX(speed * this.facingDirection);
+      } else {
+        const len = distSeen || 1;
+        this.setVelocityX((dxSeen / len) * speed);
+        this.setVelocityY(
+          this.behavior.horizontalMovementOnly ? 0 : (dySeen / len) * speed,
+        );
+      }
+      return;
+    }
+
+    // Arrived (or can't move): stop and scan, flipping to look the other way on
+    // a steady cadence.
+    if (!this.behavior.immovable) {
+      this.setVelocityX(0);
+      if (!this.body.allowGravity) this.setVelocityY(0);
+    }
+    setEnemyWalkSoundEnabled(this, false);
+    if (this.enemyState !== 'idle') this.enterIdle();
+    if (now >= this.searchNextFlipAt) {
+      this.facingDirection = (this.facingDirection === 1 ? -1 : 1) as 1 | -1;
+      this.setFacing(this.facingDirection === -1);
+      this.searchNextFlipAt = now + ENEMY_SEARCH_FLIP_MS;
+    }
+  }
+
+  // Ends the hunt now: drop the aggro/converge windows, clear the last-seen
+  // memory, and (for enemies that can't passively drift home — stationary
+  // guards) arm an explicit walk back to the spawn post.
+  private giveUpHunt(): void {
+    this.aggroUntil = 0;
+    this.convergeUntil = 0;
+    this.investigateStopUntil = 0;
+    this.searchLookUntil = 0;
+    this.hasLastSeen = false;
+    this.returningToPost = !this.canLoiter();
+  }
+
+  // True while walking back to the spawn post after giving up (only for enemies
+  // that don't loiter/wander home on their own). Cleared on arrival or the
+  // instant the player is re-detected (aggro re-opens).
+  private isReturningToPost(): boolean {
+    return (
+      this.returningToPost && this.isStealthEnabled() && !this.isAggro()
+    );
+  }
+
+  // Walks the enemy back toward its spawn point at a calm pace, then resumes
+  // idle. Grounded enemies steer X only (gravity carries the rest).
+  private updateReturnToPost(): void {
+    const moveSpeed = this.effectiveMoveSpeed();
+    if (moveSpeed == null || this.behavior.immovable) {
+      this.returningToPost = false;
+      this.enterIdle();
+      return;
+    }
+    const dxHome = this.spawnX - this.x;
+    const dyHome = this.spawnY - this.y;
+    const distHome = Math.hypot(dxHome, dyHome);
+    if (distHome <= ENEMY_SEARCH_REACH_DIST_PX) {
+      this.returningToPost = false;
+      this.enterIdle();
+      return;
+    }
+    const speed = moveSpeed * LOITER_SPEED_MULTIPLIER;
+    this.facingDirection = dxHome >= 0 ? 1 : -1;
+    this.setFacing(this.facingDirection === -1);
+    // Walk clip on entry only (play() restarts, so a per-frame call would freeze
+    // it on frame 0).
+    if (this.enemyState !== 'chase') {
+      this.enemyState = 'chase';
+      const walkAnim = this.effectiveWalkAnimation();
+      if (walkAnim) this.playLogical(walkAnim);
+    }
+    setEnemyWalkSoundEnabled(this, true, this.currentWalkSurface());
+    if (this.body.allowGravity) {
+      if (this.shouldJumpOverObstacle()) this.setVelocityY(ENEMY_JUMP_VELOCITY);
+      this.setVelocityX(speed * this.facingDirection);
+    } else {
+      const len = distHome || 1;
+      this.setVelocityX((dxHome / len) * speed);
+      this.setVelocityY(
+        this.behavior.horizontalMovementOnly ? 0 : (dyHome / len) * speed,
+      );
+    }
+  }
+
   // External trigger to force this entity into pursuit without a blow having
   // landed — used by the boss round-fight system to make every enemy in the
   // arena abandon its loiter path and converge on the player when a round
@@ -2597,11 +3087,32 @@ export class Enemy extends AnimatedEntity {
       return false;
     }
     if (this.loiterPath) return true;
-    // Grounded characters normally stand idle when they have no authored path;
-    // a behavior.wander block opts them into spawn-anchored strolling instead.
-    // Airborne enemies keep their legacy player-anchored drift unconditionally.
-    if (this.body.allowGravity) return this.wanderConfig != null;
+    // No patrol path: grounded characters area-wander by default. wanderRadius()
+    // returns a radius for grounded, non-boss, non-stationary characters (and
+    // for any authored behavior.wander), and null for bosses / stationary
+    // characters so they hold idle here. Airborne enemies keep their legacy
+    // player-anchored drift.
+    if (this.body.allowGravity) return this.wanderRadius() != null;
     return true;
+  }
+
+  // Effective spawn-anchored wander radius, or null when this character must not
+  // area-wander. An authored behavior.wander.radius wins; otherwise wandering is
+  // the default for a grounded, path-less, non-boss, non-stationary character,
+  // at DEFAULT_WANDER_RADIUS. Computed live (never cached at construction) so it
+  // reads the body's final gravity state and so the rule reaches every such
+  // character — including instances that predate a hot-reload.
+  private wanderRadius(): number | null {
+    if (this.wanderConfig) return this.wanderConfig.radius;
+    if (
+      this.body.allowGravity &&
+      !this.loiterPath &&
+      !this.behavior.isBoss &&
+      !this.behavior.stationary
+    ) {
+      return DEFAULT_WANDER_RADIUS;
+    }
+    return null;
   }
 
   private enterLoiter(player: Player): void {
@@ -2609,7 +3120,7 @@ export class Enemy extends AnimatedEntity {
     this.clearCurrentAttack();
     const walkAnim = this.effectiveWalkAnimation();
     if (walkAnim) this.playLogical(walkAnim);
-    setEnemyWalkSoundEnabled(this, true);
+    setEnemyWalkSoundEnabled(this, true, this.currentWalkSurface());
     if (this.loiterPath) {
       // Snap to the nearest waypoint so the entity resumes patrol from where
       // a chase/knockback left it, rather than stubbornly walking back to a
@@ -2621,7 +3132,7 @@ export class Enemy extends AnimatedEntity {
       // immediately stop to idle.
       this.pathPauseUntil = 0;
       this.scheduleNextPathPause(this.scene.time.now);
-    } else if (this.body.allowGravity && this.wanderConfig) {
+    } else if (this.body.allowGravity && this.wanderRadius() != null) {
       // Spawn-anchored stroll. Start the rest-break cadence fresh and pick a
       // first target within the wander band. Clear any greeting carried over
       // from a prior loiter session (e.g. interrupted by a knockback) so a
@@ -2643,7 +3154,7 @@ export class Enemy extends AnimatedEntity {
       this.updatePathLoiter();
       return;
     }
-    if (this.body.allowGravity && this.wanderConfig) {
+    if (this.body.allowGravity && this.wanderRadius() != null) {
       this.updateAreaWander();
       return;
     }
@@ -2720,7 +3231,7 @@ export class Enemy extends AnimatedEntity {
       this.pathPauseUntil = 0;
       const walkAnim = this.effectiveWalkAnimation();
       if (walkAnim) this.playLogical(walkAnim);
-      setEnemyWalkSoundEnabled(this, true);
+      setEnemyWalkSoundEnabled(this, true, this.currentWalkSurface());
       this.scheduleNextPathPause(now);
     } else if (now >= this.nextPathPauseAt) {
       // Time to stop and observe for a beat.
@@ -2866,7 +3377,7 @@ export class Enemy extends AnimatedEntity {
   // the pick never resolves as "already arrived". Y is left to gravity — the
   // band is horizontal, matching the grounded patrol convention.
   private pickWanderTarget(): void {
-    const radius = this.wanderConfig?.radius ?? 0;
+    const radius = this.wanderRadius() ?? 0;
     const minX = this.spawnX - radius;
     const maxX = this.spawnX + radius;
     let target = minX + Math.random() * (maxX - minX);
@@ -2885,7 +3396,7 @@ export class Enemy extends AnimatedEntity {
   // steps up or down to nearby platforms, but turns back at a too-tall climb or
   // a deep pit rather than stranding itself or diving to its death).
   private isWanderLandingAllowed(landing: { x: number; y: number }): boolean {
-    const radius = this.wanderConfig?.radius ?? 0;
+    const radius = this.wanderRadius() ?? 0;
     if (Math.abs(landing.x - this.spawnX) > radius) return false;
     // Y grows downward: dy > 0 = landing below the foot (a drop), dy < 0 = above
     // (a climb). Allow drops up to MAX_DROP and climbs up to MAX_RISE.
@@ -2900,7 +3411,7 @@ export class Enemy extends AnimatedEntity {
   // frame. The net effect is the stroller paces between the gaps that bound its
   // area.
   private turnBackFromEdge(blockedDir: 1 | -1): void {
-    const radius = this.wanderConfig?.radius ?? 0;
+    const radius = this.wanderRadius() ?? 0;
     const back = (-blockedDir) as 1 | -1;
     const step = Math.max(WANDER_MIN_TARGET_STEP_PX, radius * 0.5);
     const target = this.x + back * step;
@@ -2919,7 +3430,7 @@ export class Enemy extends AnimatedEntity {
     if (walking) {
       const walkAnim = this.effectiveWalkAnimation();
       if (walkAnim) this.playLogical(walkAnim);
-      setEnemyWalkSoundEnabled(this, true);
+      setEnemyWalkSoundEnabled(this, true, this.currentWalkSurface());
     } else {
       this.playLogical(this.config.defaultAnimation);
       setEnemyWalkSoundEnabled(this, false);
@@ -3971,9 +4482,12 @@ export class Enemy extends AnimatedEntity {
       if (this.scene.time.now < ready) continue;
       if (!this.scene.physics.world.overlap(this, player)) continue;
       if (!this.harmless) player.hurt(damage, this.x, this.y);
-      // Landing contact damage counts as an exchange of blows — keep the
-      // entity engaged so it pursues a player who backs out of touch range.
+      // Landing contact damage counts as an exchange of blows — keep the entity
+      // engaged so it pursues a player who backs out of touch range, and open
+      // the active-combat window so a stinging swarmer reads as conflict (red
+      // "!"), not merely investigating.
       this.refreshAggro();
+      this.conflictUntil = this.scene.time.now + ENEMY_CONFLICT_WINDOW_MS;
       this.contactCooldowns.set(
         attack,
         this.scene.time.now + attack.cooldownMs,

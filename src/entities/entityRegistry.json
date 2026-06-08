@@ -1048,7 +1048,7 @@
         "file": "DarkSpriteLib/characters/the_dark_warden/walk.png",
         "frameWidth": 97,
         "frameHeight": 32,
-        "frameCount": 16,
+        "frameCount": 12,
         "loops": true,
         "anchorX": 26,
         "anchorY": 32
@@ -2053,6 +2053,16 @@
           "aggressive": true,
           "groundProjectVfx": true,
           "vfxDelayMs": 450
+        },
+        {
+          "type": "heal",
+          "animation": "buff",
+          "frame": 10,
+          "heal": 20,
+          "healThreshold": 0.5,
+          "cooldownMs": 2000,
+          "recastCooldownMs": 12000,
+          "aggressive": true
         }
       ]
     },
@@ -2778,7 +2788,8 @@
         "walkAnimation": "walk",
         "projectileAnimIdle": "projectile_idle",
         "projectileAnimExplode": "projectile_explode",
-        "projectileSpeed": 250
+        "projectileSpeed": 250,
+        "projectileStraight": true
       }
     },
     "animations": {
@@ -4306,6 +4317,7 @@
       "health": 5,
       "hurtAnimation": "take_hit",
       "homeLeashRange": 180,
+      "ignoresStealth": true,
       "attack": {
         "type": "contact",
         "damage": 4,
@@ -4373,7 +4385,7 @@
         "animation": "summon",
         "frame": 5,
         "range": 180,
-        "cooldownMs": 15000,
+        "cooldownMs": 30000,
         "aggressive": false,
         "summonKinds": [
           "Ghoul_spawn",

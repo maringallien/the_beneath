@@ -567,6 +567,145 @@
         "soundId": "heal_spell_cast",
         "frameIndex": 1
       }
+    ],
+    "entity_Hell_bot_spawn_attack1": [
+      {
+        "name": "attack1_sound1",
+        "soundId": "caged_shocker_attack1_swing",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 83.33333333333333
+      },
+      {
+        "name": "attack1_sound2",
+        "soundId": "caged_shocker_attack1_swing",
+        "frameIndex": 3
+      }
+    ],
+    "entity_Hell_bot_spawn_attack2": [
+      {
+        "name": "attack2_sound",
+        "soundId": "gun2_laser_shot",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 750
+      }
+    ],
+    "entity_Hell_bot_spawn_take_hit": [
+      {
+        "name": "bandit_hurt",
+        "soundId": "bandit_hurt",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Hell_bot_spawn_death": [
+      {
+        "name": "death_sound1",
+        "soundId": "crow_death_blast",
+        "frameIndex": 5
+      },
+      {
+        "name": "death_sound2",
+        "soundId": "player_jump_land",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 166.66666666666666
+      }
+    ],
+    "entity_Flame_dude_spawn_take_hit": [
+      {
+        "name": "bandit_hurt",
+        "soundId": "bandit_hurt",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Wheel_bot_spawn_take_hit": [
+      {
+        "name": "bandit_hurt",
+        "soundId": "bandit_hurt",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Flame_dude_spawn_attack": [
+      {
+        "name": "attack1_sound",
+        "soundId": "dark_warden_attack_fireball",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 83.33333333333333
+      },
+      {
+        "name": "attack1_sound2",
+        "soundId": "widow_buff_steam_hiss",
+        "frameIndex": 2
+      }
+    ],
+    "entity_Flame_dude_spawn_death": [
+      {
+        "name": "death_sound1",
+        "soundId": "orb_mage_attack1_boom",
+        "frameIndex": 7
+      },
+      {
+        "name": "dealth_sound2",
+        "soundId": "player_jump_land",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 83.33333333333333
+      },
+      {
+        "name": "death_sound3",
+        "soundId": "widow_walk_stone_smash",
+        "frameIndex": 7
+      }
+    ],
+    "entity_Assassin_spawn_attack1": [
+      {
+        "name": "attack1_sound",
+        "soundId": "sword_slash_impact_1",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 83.33333333333333
+      }
+    ],
+    "entity_Assassin_spawn_attack2": [
+      {
+        "name": "attack2_sound",
+        "soundId": "sword_slash_impact_2",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 83.33333333333333
+      }
+    ],
+    "entity_Assassin_spawn_attack3": [
+      {
+        "name": "attack3_sound",
+        "soundId": "sword_slash_impact_3",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 83.33333333333333
+      }
+    ],
+    "entity_Assassin_spawn_attack4": [
+      {
+        "name": "attack4_sound",
+        "soundId": "heart_hoarder_attack3_chop1",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Assassin_spawn_land": [
+      {
+        "name": "land_sound",
+        "soundId": "player_jump_land",
+        "frameIndex": 1,
+        "audioStartOffsetMs": 83.33333333333333
+      }
+    ],
+    "entity_Assassin_spawn_take_hit": [
+      {
+        "name": "assassin_hurt",
+        "soundId": "bandit_hurt",
+        "frameIndex": 1
+      }
+    ],
+    "entity_Assassin_spawn_death": [
+      {
+        "name": "assassin_death_voice",
+        "soundId": "bandit_death",
+        "frameIndex": 1
+      }
     ]
   }
 }

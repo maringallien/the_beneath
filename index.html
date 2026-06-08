@@ -33,6 +33,16 @@
       }
       #game canvas {
         display: block;
+        /* Phaser (Scale.RESIZE) sizes the canvas backing store in CSS pixels,
+           so on a HiDPI/Retina/4K display (devicePixelRatio > 1) the browser
+           upscales the canvas to physical pixels with bilinear filtering. That
+           softens the pixel art and, worse, makes the blend boundaries shift
+           every frame as a sprite moves — reading as blur/ghosting/doubling
+           during fast motion. Force nearest-neighbour scaling so the upscale
+           stays crisp. Mirrors image-rendering on the DOM pixel-art overlays.
+           No-op on a 1:1 (DPR 1) display. */
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
       }
     </style>
   </head>

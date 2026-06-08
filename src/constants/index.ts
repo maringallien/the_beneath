@@ -475,6 +475,69 @@ export const ENEMY_HEALTH_BAR_OUTLINE_COLOR = 0x000000;
 // foreground overlay and stays readable over foreground tiles.
 export const ENEMY_HEALTH_BAR_DEPTH = FOREGROUND_OVERLAY_BASE_DEPTH + 10;
 
+// ── Stealth / enemy detection ───────────────────────────────────────────
+// A stealth-enabled enemy spots the player within a detection radius AND inside
+// its forward vision cone (it faces left/right, so a turned back is a blind
+// spot), with a clear line — no collision tile between them.
+//
+// Default sight range (world px). Used when an entity authors no
+// behavior.detectionRange and has no chaseRange to derive one from. ~14 tiles.
+export const ENEMY_DETECTION_RANGE_PX = 220;
+// Half-angle (degrees) of the forward vision cone — the player is spotted just
+// inside ±this of the facing direction. 55° ≈ a 110° frontal cone. Per-enemy
+// override: behavior.visionHalfAngleDeg.
+export const ENEMY_VISION_HALF_ANGLE_DEG = 55;
+// Point-blank radius (world px) inside which an enemy notices the player
+// regardless of facing — you can't stand on its head undetected. Evaluated
+// below the cone test, so a player pressed against the enemy is always seen.
+export const ENEMY_VISION_NEAR_RADIUS_PX = 26;
+// Stop-and-investigate telegraph: ms a freshly-spotting enemy holds still
+// (showing the yellow "?") before it rushes to investigate. The readable "stop,
+// then rush" beat — long enough to notice, short enough to feel reactive.
+export const ENEMY_SPOT_STOP_MS = 500;
+// Active-combat window: ms after an attack / contact hit during which the enemy
+// reads as "conflict" (red "!") rather than merely "investigating" (yellow
+// "?"). Refreshed on each blow, so a sustained fight stays red and only relaxes
+// to yellow once the enemy stops landing hits. Keeps the red state off mere
+// approach so enemies don't snap straight to "!".
+export const ENEMY_CONFLICT_WINDOW_MS = 1500;
+// On-the-hunt chase speed multiplier applied on top of an enemy's moveSpeed once
+// it has detected the player, so the hunt visibly quickens versus its walk.
+// Bosses are exempt (movement is hand-tuned). Per-enemy override:
+// behavior.alertSpeedMul.
+export const ENEMY_ALERT_SPEED_MUL = 1.25;
+// Search-after-losing-sight: how long (ms) an enemy hunts the player's
+// last-seen spot — walking to it, then scanning — before giving up and
+// returning to its post. Capped by the aggro window (ENEMY_COMBAT_TIMEOUT_MS).
+export const ENEMY_SEARCH_LOOK_MS = 2500;
+// Cadence (ms) at which a searching enemy flips to face the other way while
+// scanning its last-seen area ("looks around").
+export const ENEMY_SEARCH_FLIP_MS = 600;
+// Distance (world px) within which a searching/returning enemy counts as having
+// reached its last-seen or post target and advances to the next behavior.
+export const ENEMY_SEARCH_REACH_DIST_PX = 20;
+// Sound id (soundRegistry) for the one-shot detection sting played the instant
+// an enemy spots the player. A no-op when the id isn't registered (playOneShot
+// returns null), so the system runs fine until an asset is wired in.
+export const ENEMY_ALERT_STING_SOUND_ID = 'enemy_alert';
+
+// Transient overhead "?"/"!" glyph painted above an enemy's head, mirroring the
+// health-bar band. One step above the bar so the two stack cleanly.
+export const ENEMY_ALERT_ICON_DEPTH = ENEMY_HEALTH_BAR_DEPTH + 2;
+// Gap (source px) between body.top and the bottom of the glyph. Larger than the
+// health bar's gap so the glyph clears the bar when both are visible.
+export const ENEMY_ALERT_ICON_OFFSET_Y_PX = 13;
+// Glyph height (source px) → font size; camera zoom scales the visible size.
+export const ENEMY_ALERT_ICON_HEIGHT_PX = 9;
+// How long (ms) a flashed glyph stays up before auto-hiding. The "?"/"!" are
+// momentary tells, not persistent labels — they pop on an escalation then clear
+// even while the enemy stays aware (the HUD corners are the lasting readout).
+export const ENEMY_ALERT_ICON_HOLD_MS = 1200;
+// Investigating = amber "?", conflict = red "!". Red matches the health-bar
+// crimson so "spotted" reads as danger.
+export const ENEMY_ALERT_ICON_SUSPECT_COLOR = 0xffd23f;
+export const ENEMY_ALERT_ICON_DETECT_COLOR = 0xff3b30;
+
 // Player HUD: now a DOM/HTML overlay (src/ui/PlayerHudOverlay.ts) styled in
 // src/ui/playerHud.css, so its layout and typography live in CSS rather than
 // here. Only the depth anchor remains — the boss HUD (still canvas-rendered)

@@ -24,6 +24,18 @@
       "loop": true,
       "defaultVolume": 0.5
     },
+    "cave_stone_falling_quiet": {
+      "path": "assets/audio/ambience/cave_stone_falling.ogg",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.2
+    },
+    "metro_station": {
+      "path": "assets/audio/ambience/metro_station.ogg",
+      "category": "ambience",
+      "loop": true,
+      "defaultVolume": 0.65
+    },
     "turbine_subby": {
       "path": "assets/audio/ambience/turbine_subby.ogg",
       "category": "ambience",
@@ -474,6 +486,13 @@
       "defaultVolume": 0.5,
       "spatial": { "minRadius": 50, "maxRadius": 280 }
     },
+    "wheel_bot_rolling": {
+      "path": "assets/audio/entity/wheel_bot_rolling.ogg",
+      "category": "sfx",
+      "loop": true,
+      "defaultVolume": 0.45,
+      "spatial": { "minRadius": 50, "maxRadius": 280 }
+    },
     "boss_encounter": {
       "path": "assets/audio/sfx/boss_encounter.wav",
       "category": "sfx",
@@ -771,10 +790,12 @@
     "Level_17": { "ambience": ["cave_wind_howling"] },
     "Level_19": { "ambience": ["cave_wind_howling"] },
     "Level_13": { "ambience": ["cave_stone_falling"] },
-    "Level_16": { "ambience": ["cave_stone_falling"] },
+    "Level_16": { "ambience": ["cave_stone_falling_quiet", "metro_station"] },
     "Level_9":  { "ambience": ["turbine_subby", "factory_hum_industrial"] },
     "Level_11": { "ambience": ["turbine_subby", "factory_hum_industrial"] },
-    "Level_18": { "ambience": ["turbine_subby", "factory_hum_industrial"] }
+    "Level_18": { "ambience": ["turbine_subby", "factory_hum_industrial"] },
+    "Level_21": { "ambience": ["metro_station"] },
+    "Level_23": { "ambience": ["metro_station"] }
   },
   "entitySounds": {
     "House2": ["fan_window"],
@@ -799,9 +820,11 @@
     "Dark_warden_spawn": { "ground": "entity_footsteps_pebbles", "bridge": "entity_footsteps_metal_stairs" },
     "Doberman_spawn": { "ground": "entity_footsteps_pebbles", "bridge": "entity_footsteps_metal_stairs" },
     "Flame_dude_spawn": { "ground": "entity_footsteps_pebbles", "bridge": "entity_footsteps_metal_stairs" },
+    "Hell_bot_spawn": { "ground": "entity_footsteps_pebbles", "bridge": "entity_footsteps_metal_stairs" },
     "Orb_mage_spawn": { "ground": "entity_footsteps_pebbles", "bridge": "entity_footsteps_metal_stairs" },
     "Shadow_of_storms_spawn": { "ground": "entity_footsteps_pebbles", "bridge": "entity_footsteps_metal_stairs" },
-    "The_blood_king_spawn": { "ground": "entity_footsteps_pebbles", "bridge": "entity_footsteps_metal_stairs" }
+    "The_blood_king_spawn": { "ground": "entity_footsteps_pebbles", "bridge": "entity_footsteps_metal_stairs" },
+    "Wheel_bot_spawn": "wheel_bot_rolling"
   },
   "entitySoundSequences": {
     "The_tarnished_widow_spawn": [
