@@ -4,3 +4,11 @@ dist/
 *.log
 .vscode/
 .idea/
+
+# LDtk auto-backups (recreated next to the project on every save)
+the_beneath/backups/
+# Manual LDtk snapshots
+*.ldtk.bak*
+*.ldtk.before_*
+# Re-encoded audio backup tree
+.audio_backup_96k/
