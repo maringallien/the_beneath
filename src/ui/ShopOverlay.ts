@@ -8,6 +8,7 @@ import {
 } from '../entities/shop/shopTypes';
 import { COIN_TEXTURE_KEY } from '../constants';
 import { frameCanvas } from './textureCanvas';
+import { DomOverlay } from './DomOverlay';
 import './shop.css';
 
 // Icon texture keys that ship as pixel art (spritesheets loaded as PNGs) and
@@ -39,94 +40,51 @@ interface OpenOptions {
 // Graphics + Image + Text would be much heavier and less flexible to tune.
 // All transactions still route through Player.tryPurchase so the validation
 // (enough coins? at max?) lives in one place.
-export class ShopOverlay {
+export class ShopOverlay extends DomOverlay {
   private readonly scene: Phaser.Scene;
-  private readonly parent: HTMLElement;
 
-  private overlayEl: HTMLDivElement | null = null;
   private balanceTextEl: HTMLSpanElement | null = null;
   private itemEls: HTMLDivElement[] = [];
 
   private items: ReadonlyArray<ShopItem> = [];
   private player: Player | null = null;
-  private onClose: (() => void) | null = null;
   private selectedIndex = 0;
 
-  private keydownHandler: ((e: KeyboardEvent) => void) | null = null;
-
   constructor(scene: Phaser.Scene, parent: HTMLElement) {
+    super(parent);
     this.scene = scene;
-    this.parent = parent;
-  }
-
-  isOpen(): boolean {
-    return this.overlayEl !== null;
   }
 
   open(options: OpenOptions): void {
     if (this.isOpen()) return;
     this.items = shopItemsFor(options.kind, options.levelId);
     this.player = options.player;
-    this.onClose = options.onClose;
+    this.openShell(options.onClose);
     this.selectedIndex = 0;
     this.buildDom(options.kind);
     this.attachKeyboard();
     this.refresh();
   }
 
-  // Public-facing close: called by the user (ESC, backdrop click) and by the
-  // user-initiated purchase flow. Invokes the onClose callback so GameScene
-  // resumes.
-  close(): void {
-    if (!this.isOpen()) return;
-    const cb = this.onClose;
-    this.teardown();
-    if (cb) cb();
-  }
-
-  // Force-close path used by GameScene.tearDownWorld during HMR. Drops the DOM
-  // and listeners without invoking onClose — the GameScene is being rebuilt,
-  // so resuming a torn-down scene would crash.
-  destroy(): void {
-    if (!this.isOpen()) return;
-    this.teardown();
-  }
-
-  private teardown(): void {
-    this.detachKeyboard();
-    if (this.overlayEl) {
-      this.overlayEl.remove();
-      this.overlayEl = null;
-    }
+  protected onTeardown(): void {
     this.balanceTextEl = null;
     this.itemEls = [];
     this.items = [];
     this.player = null;
-    this.onClose = null;
     this.selectedIndex = 0;
   }
 
   private buildDom(kind: ShopKind): void {
-    const overlay = document.createElement('div');
-    overlay.className = 'shop-overlay';
-
-    // Clicking the dim backdrop (outside the window) closes the shop —
-    // matches the conventional "click outside to dismiss" overlay idiom.
-    overlay.addEventListener('mousedown', (e) => {
-      if (e.target === overlay) this.close();
-    });
-
-    const win = document.createElement('div');
-    win.className = `shop-window shop-window--${kind}`;
+    const { overlay, win } = this.createBackdrop(
+      `shop-window shop-window--${kind}`,
+    );
 
     win.appendChild(this.buildHeader(kind));
     win.appendChild(this.buildItemsList());
     win.appendChild(this.buildFooter());
 
     overlay.appendChild(win);
-    this.parent.appendChild(overlay);
-
-    this.overlayEl = overlay;
+    this.mount(overlay);
   }
 
   private buildHeader(kind: ShopKind): HTMLDivElement {
@@ -256,47 +214,34 @@ export class ShopOverlay {
     return canvas;
   }
 
-  private attachKeyboard(): void {
-    const handler = (e: KeyboardEvent): void => {
-      switch (e.key) {
-        case 'Escape':
-          e.preventDefault();
-          this.close();
-          break;
-        case 'ArrowUp':
-        case 'w':
-        case 'W':
-          e.preventDefault();
-          this.selectPrevious();
-          break;
-        case 'ArrowDown':
-        case 's':
-        case 'S':
-          e.preventDefault();
-          this.selectNext();
-          break;
-        case 'Enter':
-        case ' ':
-          e.preventDefault();
-          this.attemptPurchase();
-          break;
-        default:
-          break;
-      }
-    };
-    // Capture phase + window-level so the listener catches keys regardless of
-    // whether focus is on the canvas (most common while playing) or somewhere
-    // else in the document. Phaser's own keyboard handlers run on the canvas
-    // and are paused along with GameScene, so there's no risk of duplicate
-    // dispatch.
-    window.addEventListener('keydown', handler, true);
-    this.keydownHandler = handler;
-  }
-
-  private detachKeyboard(): void {
-    if (this.keydownHandler) {
-      window.removeEventListener('keydown', this.keydownHandler, true);
-      this.keydownHandler = null;
+  // Phaser's own keyboard handlers run on the canvas and are paused along
+  // with GameScene, so there's no risk of duplicate dispatch (and no
+  // stopPropagation needed, unlike the manual/credits panels).
+  protected onKeydown(e: KeyboardEvent): void {
+    switch (e.key) {
+      case 'Escape':
+        e.preventDefault();
+        this.close();
+        break;
+      case 'ArrowUp':
+      case 'w':
+      case 'W':
+        e.preventDefault();
+        this.selectPrevious();
+        break;
+      case 'ArrowDown':
+      case 's':
+      case 'S':
+        e.preventDefault();
+        this.selectNext();
+        break;
+      case 'Enter':
+      case ' ':
+        e.preventDefault();
+        this.attemptPurchase();
+        break;
+      default:
+        break;
     }
   }
 

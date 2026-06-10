@@ -4,6 +4,7 @@ import {
   OPTIONS_SOUND_ON_ICON_PATH,
 } from '../constants';
 import { getMusicVolume, setMusicVolume, toggleMusicMuted } from '../audio';
+import { DomOverlay } from './DomOverlay';
 import './shop.css';
 import './options.css';
 import './manual.css';
@@ -53,77 +54,41 @@ interface BuiltTab {
 // never both react to a key. This overlay owns its keys via a window-level
 // capture listener (ESC/M plus tab navigation), and the full-viewport backdrop
 // intercepts mouse events so the pause buttons underneath can't be clicked.
-export class ManualOverlay {
-  private readonly parent: HTMLElement;
+export class ManualOverlay extends DomOverlay {
   private readonly scene: Phaser.Scene;
 
-  private overlayEl: HTMLDivElement | null = null;
   private contentHostEl: HTMLDivElement | null = null;
   private volumeIconEl: HTMLImageElement | null = null;
   private volumeSliderEl: HTMLInputElement | null = null;
-  private onClose: (() => void) | null = null;
-  private keydownHandler: ((e: KeyboardEvent) => void) | null = null;
 
   private builtTabs: BuiltTab[] = [];
   private activeIndex = 0;
 
   constructor(parent: HTMLElement, scene: Phaser.Scene) {
-    this.parent = parent;
+    super(parent);
     this.scene = scene;
-  }
-
-  isOpen(): boolean {
-    return this.overlayEl !== null;
   }
 
   open(options: OpenOptions): void {
     if (this.isOpen()) return;
-    this.onClose = options.onClose;
+    this.openShell(options.onClose);
     this.buildDom();
     this.attachKeyboard();
   }
 
-  // User-facing close (ESC, backdrop click). Tears down and invokes onClose.
-  close(): void {
-    if (!this.isOpen()) return;
-    const cb = this.onClose;
-    this.teardown();
-    if (cb) cb();
-  }
-
-  // Force-close path: drops DOM + listeners WITHOUT invoking onClose. Used when
-  // PauseScene shuts down while the panel happens to be open.
-  destroy(): void {
-    if (!this.isOpen()) return;
-    this.teardown();
-  }
-
-  private teardown(): void {
-    this.detachKeyboard();
+  protected onTeardown(): void {
     for (const tab of this.builtTabs) {
       for (const preview of tab.section.previews) preview.destroy();
     }
     this.builtTabs = [];
-    if (this.overlayEl) {
-      this.overlayEl.remove();
-      this.overlayEl = null;
-    }
     this.contentHostEl = null;
     this.volumeIconEl = null;
     this.volumeSliderEl = null;
-    this.onClose = null;
     this.activeIndex = 0;
   }
 
   private buildDom(): void {
-    const overlay = document.createElement('div');
-    overlay.className = 'shop-overlay';
-    overlay.addEventListener('mousedown', (e) => {
-      if (e.target === overlay) this.close();
-    });
-
-    const win = document.createElement('div');
-    win.className = 'shop-window manual-window';
+    const { overlay, win } = this.createBackdrop('shop-window manual-window');
 
     win.appendChild(this.buildHeader());
     win.appendChild(this.buildTabBar());
@@ -131,9 +96,7 @@ export class ManualOverlay {
     win.appendChild(this.buildFooter());
 
     overlay.appendChild(win);
-    this.parent.appendChild(overlay);
-
-    this.overlayEl = overlay;
+    this.mount(overlay);
     this.syncVolumeUI();
     this.setActiveTab(0);
   }
@@ -303,60 +266,48 @@ export class ManualOverlay {
     this.volumeSliderEl.style.setProperty('--volume-fill', `${pct}%`);
   }
 
-  private attachKeyboard(): void {
-    const handler = (e: KeyboardEvent): void => {
-      // When the volume slider has focus, let it own arrow / Home / End / digit
-      // keys for fine-tuning (otherwise the panel would hijack arrows for tab
-      // navigation). ESC still falls through so the panel always closes.
-      if (e.target === this.volumeSliderEl && e.key !== 'Escape') {
-        return;
-      }
-      switch (e.key) {
-        case 'Escape':
+  // stopPropagation keeps keys from also reaching Phaser. PauseScene disables
+  // its own keyboard while open, so this is the only active handler.
+  protected onKeydown(e: KeyboardEvent): void {
+    // When the volume slider has focus, let it own arrow / Home / End / digit
+    // keys for fine-tuning (otherwise the panel would hijack arrows for tab
+    // navigation). ESC still falls through so the panel always closes.
+    if (e.target === this.volumeSliderEl && e.key !== 'Escape') {
+      return;
+    }
+    switch (e.key) {
+      case 'Escape':
+        e.preventDefault();
+        e.stopPropagation();
+        this.close();
+        break;
+      case 'm':
+      case 'M':
+        e.preventDefault();
+        e.stopPropagation();
+        toggleMusicMuted();
+        this.syncVolumeUI();
+        break;
+      case 'ArrowRight':
+        e.preventDefault();
+        e.stopPropagation();
+        this.cycleTab(1);
+        break;
+      case 'ArrowLeft':
+        e.preventDefault();
+        e.stopPropagation();
+        this.cycleTab(-1);
+        break;
+      default: {
+        // Number keys 1..N jump straight to a tab.
+        const digit = Number.parseInt(e.key, 10);
+        if (!Number.isNaN(digit) && digit >= 1 && digit <= TABS.length) {
           e.preventDefault();
           e.stopPropagation();
-          this.close();
-          break;
-        case 'm':
-        case 'M':
-          e.preventDefault();
-          e.stopPropagation();
-          toggleMusicMuted();
-          this.syncVolumeUI();
-          break;
-        case 'ArrowRight':
-          e.preventDefault();
-          e.stopPropagation();
-          this.cycleTab(1);
-          break;
-        case 'ArrowLeft':
-          e.preventDefault();
-          e.stopPropagation();
-          this.cycleTab(-1);
-          break;
-        default: {
-          // Number keys 1..N jump straight to a tab.
-          const digit = Number.parseInt(e.key, 10);
-          if (!Number.isNaN(digit) && digit >= 1 && digit <= TABS.length) {
-            e.preventDefault();
-            e.stopPropagation();
-            this.setActiveTab(digit - 1);
-          }
-          break;
+          this.setActiveTab(digit - 1);
         }
+        break;
       }
-    };
-    // Capture phase + window-level so the key is caught regardless of focus, and
-    // stopPropagation keeps it from also reaching Phaser. PauseScene disables its
-    // own keyboard while open, so this is the only active handler.
-    window.addEventListener('keydown', handler, true);
-    this.keydownHandler = handler;
-  }
-
-  private detachKeyboard(): void {
-    if (this.keydownHandler) {
-      window.removeEventListener('keydown', this.keydownHandler, true);
-      this.keydownHandler = null;
     }
   }
 }

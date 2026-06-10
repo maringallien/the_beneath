@@ -1,4 +1,5 @@
 import { CREDITS_TITLE_TEXT } from '../constants';
+import { DomOverlay } from './DomOverlay';
 import './shop.css';
 import './credits.css';
 
@@ -42,67 +43,20 @@ interface OpenCredits {
 // owns ESC via a window-level capture listener (same approach as OptionsOverlay),
 // and the full-viewport backdrop intercepts mouse events so the menu buttons
 // underneath can't be clicked through it.
-export class CreditsOverlay {
-  private readonly parent: HTMLElement;
-
-  private overlayEl: HTMLDivElement | null = null;
-  private onClose: (() => void) | null = null;
-
-  private keydownHandler: ((e: KeyboardEvent) => void) | null = null;
-
+export class CreditsOverlay extends DomOverlay {
   constructor(parent: HTMLElement) {
-    this.parent = parent;
-  }
-
-  isOpen(): boolean {
-    return this.overlayEl !== null;
+    super(parent);
   }
 
   open(options: OpenCredits): void {
     if (this.isOpen()) return;
-    this.onClose = options.onClose;
+    this.openShell(options.onClose);
     this.buildDom();
     this.attachKeyboard();
   }
 
-  // User-facing close (ESC, backdrop click). Tears down the DOM/listeners and
-  // invokes onClose so LandingScene re-enables its keyboard.
-  close(): void {
-    if (!this.isOpen()) return;
-    const cb = this.onClose;
-    this.teardown();
-    if (cb) cb();
-  }
-
-  // Force-close path: drops the DOM and listeners WITHOUT invoking onClose. Used
-  // when LandingScene shuts down (e.g. Start is committed) while the panel
-  // happens to be open — there is no menu left to hand back to.
-  destroy(): void {
-    if (!this.isOpen()) return;
-    this.teardown();
-  }
-
-  private teardown(): void {
-    this.detachKeyboard();
-    if (this.overlayEl) {
-      this.overlayEl.remove();
-      this.overlayEl = null;
-    }
-    this.onClose = null;
-  }
-
   private buildDom(): void {
-    const overlay = document.createElement('div');
-    overlay.className = 'shop-overlay';
-
-    // Clicking the dim backdrop (outside the window) closes the panel — the
-    // same "click outside to dismiss" idiom as the merchant shop and options.
-    overlay.addEventListener('mousedown', (e) => {
-      if (e.target === overlay) this.close();
-    });
-
-    const win = document.createElement('div');
-    win.className = 'shop-window credits-window';
+    const { overlay, win } = this.createBackdrop('shop-window credits-window');
 
     const title = document.createElement('h2');
     title.className = 'credits-title';
@@ -128,9 +82,7 @@ export class CreditsOverlay {
     win.appendChild(footer);
 
     overlay.appendChild(win);
-    this.parent.appendChild(overlay);
-
-    this.overlayEl = overlay;
+    this.mount(overlay);
   }
 
   // Renders one credit line: label (small, dimmed), credited name, and an
@@ -159,26 +111,14 @@ export class CreditsOverlay {
     return block;
   }
 
-  private attachKeyboard(): void {
-    const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        this.close();
-      }
-    };
-    // Capture phase + window-level so the key is caught regardless of focus, and
-    // stopPropagation keeps it from also reaching Phaser. LandingScene
-    // additionally disables its own keyboard while the panel is open, so this is
-    // the only active key handler.
-    window.addEventListener('keydown', handler, true);
-    this.keydownHandler = handler;
-  }
-
-  private detachKeyboard(): void {
-    if (this.keydownHandler) {
-      window.removeEventListener('keydown', this.keydownHandler, true);
-      this.keydownHandler = null;
+  // ESC closes; stopPropagation keeps it from also reaching Phaser.
+  // LandingScene additionally disables its own keyboard while the panel is
+  // open, so this is the only active key handler.
+  protected onKeydown(e: KeyboardEvent): void {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      this.close();
     }
   }
 }
