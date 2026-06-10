@@ -12,8 +12,6 @@ import {
   updateEntitySounds,
 } from '../audio';
 import {
-  BOSS_ROUND_FIRST_REINFORCED_ROUND,
-  BOSS_ESCAPE_GRACE_MS,
   CAMERA_MAX_VERTICAL_LAG_PX,
   CAMERA_VERTICAL_OFFSET_PX,
   BOSS_DEFEATED_EVENT,
@@ -37,11 +35,6 @@ import {
   KEY_DOOR_MESSAGE_FONT_SIZE_PX,
   KEY_DOOR_MESSAGE_HOLD_MS,
   KEY_DOOR_MESSAGE_TEXT,
-  REINFORCEMENT_SPAWN_LIFT_PX,
-  REINFORCEMENT_SPAWN_SPACING_PX,
-  REINFORCEMENT_SITE_STAGGER_MS,
-  BOSS_SELF_COPY_CHASE_STANDOFF_PX,
-  BOSS_SELF_COPY_SPAWN_OFFSET_PX,
   LANDING_CAMERA_Y_OFFSET_PX,
   LANDING_PLAYER_VIEWPORT_FRACTION_X,
   LANDING_BLACK_HOLD_MS,
@@ -65,13 +58,7 @@ import {
 } from '../constants';
 import { AmmoDrop } from '../entities/AmmoDrop';
 import type { AmmoDropSpawnerScene } from '../entities/AmmoDropSpawnerScene';
-import { reinforcementsFor } from '../entities/bossWaves';
-import {
-  selfCopiesFor,
-  type BossSelfCopySpec,
-} from '../entities/bossSelfCopies';
 import { Enemy } from '../entities/Enemy';
-import { TeleportCoordinator } from '../entities/teleportCoordinator';
 import {
   EnemyProjectile,
   type EnemyProjectileSpawnOptions,
@@ -106,6 +93,10 @@ import {
 } from '../entities/Trap';
 import { TrapSystem } from './trapSystem';
 import { GameHud } from './gameHud';
+import {
+  BossEncounterController,
+  isWithinBounds,
+} from '../level/BossEncounterController';
 import { ldtkRaw } from '../ldtk/ldtkData';
 import {
   getEntities,
@@ -237,6 +228,15 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   // after buildWorld so this.player exists; the rig survives HMR untouched
   // and is destroyed explicitly on Quit-to-title / scene shutdown.
   private readonly gameHud = new GameHud(this, this);
+  // Boss round-fight orchestration (convergence, reinforcement waves,
+  // self-copy splits, summoned minions, arena-escape countdown), owned by
+  // BossEncounterController (src/level/BossEncounterController.ts). Per-scene
+  // like the HUD rig; teardown() resets its per-world state.
+  private readonly bossController = new BossEncounterController(
+    this,
+    this,
+    this.gameHud,
+  );
   // The round-fight boss the player is currently engaged with (encountered and
   // alive), resolved each frame in updateEnemies. null when none — drives the
   // BossHud's visibility and which boss's HP/round it reflects.
@@ -258,36 +258,6 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   // Latched true when the victory flow fires so the all-bosses-defeated check
   // can't launch VictoryScene twice. Reset on restartRun / scene shutdown.
   private victoryShown = false;
-  // Wall-clock deadline (scene time) at which the current boss fight resets
-  // because the player left the arena, or null when the player is inside the
-  // arena or no boss is engaged. Armed the frame the player first crosses out
-  // (see updateBossLeash); cleared on return or on reset.
-  private escapeDeadline: number | null = null;
-  // World positions of the General_enemy_spawn markers, collected once at
-  // world-build time. Reinforcement waves spawn at the subset that falls
-  // inside the active boss's level. Empty when the level has no markers.
-  private enemySpawnSites: ReadonlyArray<{ x: number; y: number }> = [];
-  // Highest boss round for which a reinforcement wave has already spawned.
-  // Latched upward while a round-fight boss is engaged so each round's wave
-  // fires once; reset to 0 when the fight ends so a fresh encounter (or a
-  // respawn-from-save rebuild) re-arms the waves. Separate from bossRoundShown
-  // (which drives the banner) so gameplay and HUD never fight over one field.
-  private lastReinforcedRound = 0;
-  // Live reinforcement enemies spawned by the round system. Tracked here
-  // because they live in the `enemies` group but outside `spawned.enemies`,
-  // so tearDownWorld must destroy them explicitly. Spliced on each one's
-  // DESTROY so the list only ever holds live reinforcements.
-  private reinforcements: Enemy[] = [];
-  // Monotonic counter for synthesizing unique iids for spawned reinforcements
-  // (real LDtk entities carry their own iid; these don't).
-  private reinforcementCounter = 0;
-  // Live minions spawned by 'summon' attacks (e.g. the summoner). Like
-  // reinforcements they live in the `enemies` group but outside
-  // `spawned.enemies`, so tearDownWorld destroys them explicitly. Kept separate
-  // from `reinforcements` so the boss-arena escape system (breakOffArena /
-  // resetBossFight) doesn't drop or despawn a summoner's minions, which aren't
-  // tied to a boss fight. Spliced on each one's DESTROY.
-  private summonedMinions: Enemy[] = [];
   // Hold-E interaction system. Built in buildWorld after entities spawn so
   // the registry has live targets; destroyed in tearDownWorld so HMR rebuilds
   // the icon and re-registers fresh chest references rather than holding on
@@ -466,8 +436,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // without a dangling reference to the just-destroyed boss.
     this.activeBoss = null;
     this.gameHud.clearBossRound();
-    this.escapeDeadline = null;
-    this.gameHud.setEscapeWarningVisible(false);
+    this.bossController.clearEscape();
     // New Game / Quit / Return-to-Title all abandon the current run, so wipe the
     // persistent boss-key progress and re-arm the victory latch. This is the
     // ONLY place run progress is cleared — death/respawn and HMR deliberately
@@ -561,11 +530,11 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // convergence (pull every arena enemy onto the player) and spawn each
     // round's reinforcement wave. Placed here, not in updateBossHud (a render
     // callback), so enemy spawns happen on the update tick after the AI loop.
-    this.updateBossEncounter();
+    this.bossController.update();
     // After convergence/reinforcements: if the player has fled the arena, run
     // the escape countdown (warning + break-off pursuit) and reset the fight
     // when it lapses.
-    this.updateBossLeash();
+    this.bossController.updateLeash();
     this.trapSystem?.update();
     this.updateDoors();
     // Respawn scan runs after the per-entity ticks so any enemy that died
@@ -647,7 +616,19 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   }
 
   getEscapeDeadline(): number | null {
-    return this.escapeDeadline;
+    return this.bossController.getEscapeDeadline();
+  }
+
+  // BossEncounterHost hook: resetBossFight clears the engagement so
+  // updateEnemies won't re-select the boss until the player re-enters.
+  clearActiveBoss(): void {
+    this.activeBoss = null;
+  }
+
+  // EnemyHelperScene hook Enemy 'summon' attacks call — delegates to the
+  // boss-encounter controller, which owns minion spawning/tracking.
+  summonEnemyAt(identifier: string, x: number, y: number): Enemy | null {
+    return this.bossController.summonEnemyAt(identifier, x, y);
   }
 
   getMaxAlertLevel(): number {
@@ -733,352 +714,6 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.maxAlertLevel = maxAlert;
   }
 
-  // Round-fight convergence + reinforcement driver. Runs each frame after
-  // updateEnemies resolves this.activeBoss.
-  //
-  // Convergence: once the boss is in active conflict (isInConflict — blows
-  // traded or an attack committed, not merely the player entering the room),
-  // every other live enemy inside the boss's level is forced to converge each
-  // frame, abandoning their loiter paths and closing on the player regardless
-  // of distance OR line of sight (the per-frame refresh means pursuit never
-  // lapses mid-fight). Enemies in other levels are left alone — they can't
-  // reach the player and shouldn't trudge into walls.
-  //
-  // Reinforcements: each time the boss's latched round climbs to a wave round
-  // (>= BOSS_ROUND_FIRST_REINFORCED_ROUND), a fresh wave spawns at every
-  // General_enemy_spawn marker in the boss's level. The round tracker is
-  // latched so a wave fires once per round and re-arms when the fight ends.
-  private updateBossEncounter(): void {
-    const boss = this.activeBoss;
-    if (!boss || !boss.active || boss.isDead()) {
-      this.lastReinforcedRound = 0;
-      return;
-    }
-    const bounds = this.getLevelBoundsAt(boss.x, boss.y);
-
-    // Convergence is gated on actual conflict, NOT mere room entry. activeBoss
-    // resolves the moment the player crosses into the arena (hasEncountered —
-    // which also shows the HUD and plays the encounter sting), but the arena
-    // enemies must not swarm until the fight is truly joined: the boss has
-    // traded blows or committed an attack (isInConflict). Before that, every
-    // enemy keeps its normal LOS-gated behavior, so walking into the room
-    // doesn't instantly yank every spider and wasp onto the player. Also gated
-    // on the player being inside the arena: once they flee, updateBossLeash
-    // breaks off pursuit each frame, and re-converging here would fight it.
-    const playerInArena =
-      bounds !== null &&
-      this.isWithinBounds(this.player.x, this.player.y, bounds);
-    if (boss.isInConflict() && playerInArena) {
-      for (const obj of this.enemies.getChildren()) {
-        if (!(obj instanceof Enemy)) continue;
-        if (obj === boss) continue;
-        if (!obj.active || obj.isDead()) continue;
-        if (bounds && !this.isWithinBounds(obj.x, obj.y, bounds)) continue;
-        obj.forceConverge();
-      }
-    }
-
-    const round = boss.getRound();
-    if (round > this.lastReinforcedRound) {
-      // Spawn a wave for every newly-reached wave round (covers a multi-round
-      // jump from one big hit, so no wave is skipped).
-      for (let r = this.lastReinforcedRound + 1; r <= round; r += 1) {
-        if (r >= BOSS_ROUND_FIRST_REINFORCED_ROUND) {
-          this.spawnRoundReinforcements(bounds, boss.getIdentifier(), r);
-        }
-        // Some bosses also "split" into harmless copies of themselves on a
-        // given round (e.g. the Heart Hoarder's round 3). Independent of the
-        // reinforcement roster above and latched by the same lastReinforcedRound
-        // tracker, so a multi-round jump still fires each round's split once.
-        const split = selfCopiesFor(boss.getIdentifier(), r);
-        if (split) this.spawnBossSelfCopies(boss, split, bounds);
-      }
-      this.lastReinforcedRound = round;
-    }
-  }
-
-  // Boss-fight escape guard, run each frame after updateBossEncounter. While a
-  // round-fight boss is engaged, watches whether the player has left its arena —
-  // the boss's HOME level rect (getLevelBoundsAt at its spawn point), so the
-  // test is robust to a roaming boss and to the inter-level seams where
-  // getCurrentLevelId is null. Inside the arena: cancel any countdown. Outside:
-  // arm the BOSS_ESCAPE_GRACE_MS countdown, show the warning, and break off
-  // every arena enemy each frame so none trail the player out. Past the
-  // deadline: reset the fight.
-  private updateBossLeash(): void {
-    const boss = this.activeBoss;
-    if (!boss || !boss.active || boss.isDead()) {
-      this.clearEscape();
-      return;
-    }
-    const arena = this.getLevelBoundsAt(boss.getSpawnX(), boss.getSpawnY());
-    if (!arena || this.isWithinBounds(this.player.x, this.player.y, arena)) {
-      this.clearEscape();
-      return;
-    }
-    // Player is outside the arena while engaged. Arm the countdown on the first
-    // frame out and reveal the warning.
-    if (this.escapeDeadline === null) {
-      this.escapeDeadline = this.time.now + BOSS_ESCAPE_GRACE_MS;
-      this.gameHud.setEscapeWarningVisible(true);
-    }
-    this.breakOffArena(boss, arena);
-    if (this.time.now >= this.escapeDeadline) {
-      this.resetBossFight(boss);
-    }
-  }
-
-  // Drops pursuit on every enemy tied to the fight so none follow the player out
-  // of the arena: all reinforcements/self-copies (wherever they are — they must
-  // never trail the player) plus the boss and any native arena enemy currently
-  // inside `arena`. Reverts each to its loiter/home/idle behavior instead of a
-  // through-walls chase. Called each frame while the player is outside (hold
-  // them at the room) and once more at reset.
-  private breakOffArena(
-    boss: Enemy,
-    arena: { worldX: number; worldY: number; pxWid: number; pxHei: number },
-  ): void {
-    boss.dropPursuit();
-    for (const enemy of this.reinforcements) {
-      if (enemy.active) enemy.dropPursuit();
-    }
-    for (const obj of this.enemies.getChildren()) {
-      if (!(obj instanceof Enemy) || obj === boss) continue;
-      if (!obj.active || obj.isDead()) continue;
-      if (!this.isWithinBounds(obj.x, obj.y, arena)) continue;
-      obj.dropPursuit();
-    }
-  }
-
-  // Cancels any in-progress escape countdown and hides the warning. Idempotent:
-  // early-returns when no countdown is armed, so the per-frame calls (player
-  // inside the arena, or no boss engaged) are cheap.
-  private clearEscape(): void {
-    if (this.escapeDeadline === null) return;
-    this.escapeDeadline = null;
-    this.gameHud.setEscapeWarningVisible(false);
-  }
-
-  // Ends and resets an abandoned boss fight (player stayed out past the grace
-  // window). Breaks off lingering arena pursuit, despawns every reinforcement +
-  // self-copy, re-arms the wave/HUD trackers, resets the boss to its
-  // pre-encounter state (full HP, round 1, home position, encounter sting
-  // re-armed), and clears the boss HUD + escape warning. Because resetEncounter
-  // clears the boss's encounter latch, updateEnemies won't re-select it as the
-  // active boss until the player physically re-enters the arena.
-  private resetBossFight(boss: Enemy): void {
-    const arena = this.getLevelBoundsAt(boss.getSpawnX(), boss.getSpawnY());
-    if (arena) this.breakOffArena(boss, arena);
-    // Destroy reinforcements + self-copies (each DESTROY handler splices the
-    // live list, so iterate a copy).
-    for (const enemy of [...this.reinforcements]) {
-      if (enemy.active) enemy.destroy();
-    }
-    this.reinforcements = [];
-    this.lastReinforcedRound = 0;
-    boss.resetEncounter();
-    this.activeBoss = null;
-    this.gameHud.resetBossRound();
-    this.clearEscape();
-  }
-
-  // Spawns one reinforcement wave for `round` of boss `bossId`: the roster from
-  // reinforcementsFor(bossId, round) at each General_enemy_spawn marker inside
-  // `bounds` (the boss's level). No-op when the level has no markers — the
-  // feature stays dormant until sites are placed.
-  private spawnRoundReinforcements(
-    bounds: { worldX: number; worldY: number; pxWid: number; pxHei: number } | null,
-    bossId: string,
-    round: number,
-  ): void {
-    // Flatten the roster to one identifier per unit (e.g. 2 crows + 2 shockers
-    // -> [crow, crow, shocker, shocker]) so the whole per-site group spreads
-    // evenly regardless of how many enemy types it mixes.
-    const units: string[] = [];
-    for (const spawn of reinforcementsFor(bossId, round)) {
-      for (let i = 0; i < spawn.count; i += 1) units.push(spawn.enemy);
-    }
-    if (units.length === 0) return;
-    // Stagger the sites so a round doesn't dump the whole arena's
-    // reinforcements in one frame: each site's whole group still appears
-    // together, but successive sites fire one REINFORCEMENT_SITE_STAGGER_MS
-    // apart. The first eligible site spawns immediately (delay 0).
-    const sites = this.enemySpawnSites.filter(
-      (site) => !bounds || this.isWithinBounds(site.x, site.y, bounds),
-    );
-    sites.forEach((site, order) => {
-      const fire = () => this.spawnSiteWave(units, site.x, site.y);
-      if (order === 0) fire();
-      else this.time.delayedCall(order * REINFORCEMENT_SITE_STAGGER_MS, fire);
-    });
-  }
-
-  // Spawns one site's whole reinforcement group simultaneously, spreading the
-  // units symmetrically around the marker so they don't materialize stacked on
-  // the exact same pixel.
-  private spawnSiteWave(units: string[], siteX: number, siteY: number): void {
-    for (let i = 0; i < units.length; i += 1) {
-      const offsetX =
-        (i - (units.length - 1) / 2) * REINFORCEMENT_SPAWN_SPACING_PX;
-      this.spawnReinforcement(units[i], siteX + offsetX, siteY);
-    }
-  }
-
-  // Builds a single reinforcement enemy of `identifier` at (x, marker y), drops
-  // it onto the floor beneath the marker (so a high-placed marker doesn't
-  // free-fall it into fall damage), wires it into the world WITHOUT respawn
-  // tracking (waves are owned by the round system, not the 120s respawn loop),
-  // and forces it straight into pursuit.
-  private spawnReinforcement(identifier: string, x: number, markerY: number): void {
-    const groundY = this.groundYBelow(x, markerY);
-    const spawnY = groundY - REINFORCEMENT_SPAWN_LIFT_PX;
-    const iid = `reinforcement-${this.reinforcementCounter}`;
-    this.reinforcementCounter += 1;
-    const enemy = respawnEnemyAt(
-      this,
-      identifier,
-      x,
-      spawnY,
-      iid,
-      null,
-    );
-    if (!enemy) return;
-    registerEntitySound(this, identifier, iid, x, spawnY);
-    this.attachEnemyToWorld(enemy, false);
-    // Deliberately NOT anchored to a hive: round-fight reinforcement wasps are
-    // arena swarmers owned by the encounter system, not hive defenders. They
-    // forceConverge onto the player below (which overrides any leash), and with
-    // no home anchor they keep the legacy player-anchored loiter if the fight
-    // outlasts the converge window — the correct behavior for arena spawns.
-    this.reinforcements.push(enemy);
-    enemy.once(Phaser.GameObjects.Events.DESTROY, () => {
-      const idx = this.reinforcements.indexOf(enemy);
-      if (idx >= 0) this.reinforcements.splice(idx, 1);
-    });
-    enemy.forceConverge();
-  }
-
-  // Spawns a single summoned minion of `identifier` beside a 'summon' caster,
-  // drops it onto the floor beneath (x, y) so it doesn't free-fall into fall
-  // damage, wires it into the world WITHOUT respawn tracking, and forces it
-  // into pursuit. Tracked in `summonedMinions` (not `reinforcements`) so the
-  // boss-arena escape system never drops/despawns a summoner's minions, while
-  // tearDownWorld still cleans them up. Returns the new Enemy, or null when
-  // `identifier` isn't a behavior-bearing registry entry. Implements the
-  // EnemyHelperScene hook Enemy 'summon' attacks call.
-  summonEnemyAt(identifier: string, x: number, y: number): Enemy | null {
-    const groundY = this.groundYBelow(x, y);
-    const spawnY = groundY - REINFORCEMENT_SPAWN_LIFT_PX;
-    const iid = `summon-${this.reinforcementCounter}`;
-    this.reinforcementCounter += 1;
-    const enemy = respawnEnemyAt(this, identifier, x, spawnY, iid, null);
-    if (!enemy) return null;
-    registerEntitySound(this, identifier, iid, x, spawnY);
-    this.attachEnemyToWorld(enemy, false);
-    this.summonedMinions.push(enemy);
-    enemy.once(Phaser.GameObjects.Events.DESTROY, () => {
-      const idx = this.summonedMinions.indexOf(enemy);
-      if (idx >= 0) this.summonedMinions.splice(idx, 1);
-    });
-    enemy.forcePursue();
-    return enemy;
-  }
-
-  // Spawns the boss's round "split": spec.count harmless copies of the boss
-  // itself, flanking its current position. Each copy is built from the boss's
-  // own registry identifier — inheriting every animation, attack, and AI
-  // behavior — but spawned harmless (deals no damage, never counts as a boss or
-  // round-fight entity, drops nothing) with spec.maxHealth low HP. Copies are
-  // wired in WITHOUT respawn tracking (like reinforcements) and forced straight
-  // into pursuit. Spawn X is clamped to the arena so a copy can't land inside a
-  // wall when the boss splits near an edge; the boss floats (gravity off), so
-  // copies spawn at its Y rather than being dropped to the floor.
-  private spawnBossSelfCopies(
-    boss: Enemy,
-    spec: BossSelfCopySpec,
-    bounds:
-      | { worldX: number; worldY: number; pxWid: number; pxHei: number }
-      | null,
-  ): void {
-    const identifier = boss.getIdentifier();
-    // One coordinator for the whole split. The boss joins immediately (it was
-    // built long before this round); each copy joins via its spawn overrides.
-    // Gates teleports to one member at a time and feeds the lateral-separation
-    // pass so the family never stacks into a single sprite.
-    const coordinator = new TeleportCoordinator();
-    boss.setTeleportCoordinator(coordinator);
-    boss.once(Phaser.GameObjects.Events.DESTROY, () => {
-      coordinator.unregister(boss);
-    });
-    for (let i = 0; i < spec.count; i += 1) {
-      // Alternate sides so copies flank the boss and never overlap it:
-      // 1st left, 2nd right, 3rd further left, 4th further right, ...
-      const rank = Math.floor(i / 2) + 1;
-      const sign = i % 2 === 0 ? -1 : 1;
-      let x = boss.x + sign * rank * BOSS_SELF_COPY_SPAWN_OFFSET_PX;
-      if (bounds) {
-        const minX = bounds.worldX + BOSS_SELF_COPY_SPAWN_OFFSET_PX;
-        const maxX =
-          bounds.worldX + bounds.pxWid - BOSS_SELF_COPY_SPAWN_OFFSET_PX;
-        x = Math.max(minX, Math.min(maxX, x));
-      }
-      const iid = `boss-copy-${this.reinforcementCounter}`;
-      this.reinforcementCounter += 1;
-      // Same alternating sign/rank as the spawn position, so each copy holds a
-      // stand-off slot on the side it spawned: without it every copy (the boss
-      // is horizontalMovementOnly) homes to the exact same player.x during the
-      // round-fight convergence and the trio stacks into a single entity.
-      const chaseStandoffX = sign * rank * BOSS_SELF_COPY_CHASE_STANDOFF_PX;
-      const copy = respawnEnemyAt(this, identifier, x, boss.y, iid, null, {
-        harmless: true,
-        maxHealth: spec.maxHealth,
-        chaseStandoffX,
-        attackCoordinator: coordinator,
-      });
-      if (!copy) continue;
-      registerEntitySound(this, identifier, iid, x, boss.y);
-      this.attachEnemyToWorld(copy, false);
-      this.reinforcements.push(copy);
-      copy.once(Phaser.GameObjects.Events.DESTROY, () => {
-        const idx = this.reinforcements.indexOf(copy);
-        if (idx >= 0) this.reinforcements.splice(idx, 1);
-        // Leave the group so the teleport lock can't strand on a dead copy and
-        // the separation pass stops scanning it.
-        coordinator.unregister(copy);
-      });
-      copy.forceConverge();
-    }
-  }
-
-  // Walks down from (x, startY) tile-by-tile to the first solid collision tile
-  // and returns that tile's top edge (the surface a body rests on). Falls back
-  // to startY when nothing solid is found within the probe range. Mirrors
-  // Enemy.findGroundY so reinforcement spawns land on the floor.
-  private groundYBelow(x: number, startY: number): number {
-    const TILE_SIZE = 16;
-    const startTileY = Math.floor(startY / TILE_SIZE);
-    const maxTiles = 48;
-    for (let i = 0; i < maxTiles; i += 1) {
-      const probeY = (startTileY + i) * TILE_SIZE + TILE_SIZE / 2;
-      if (this.isTileSolidAt(x, probeY)) {
-        return (startTileY + i) * TILE_SIZE;
-      }
-    }
-    return startY;
-  }
-
-  private isWithinBounds(
-    x: number,
-    y: number,
-    b: { worldX: number; worldY: number; pxWid: number; pxHei: number },
-  ): boolean {
-    return (
-      x >= b.worldX &&
-      x < b.worldX + b.pxWid &&
-      y >= b.worldY &&
-      y < b.worldY + b.pxHei
-    );
-  }
 
   // Per-frame proximity tick for doors. Drives the closed↔opening↔open state
   // machine in Door.update(); the player↔doors collider's process callback
@@ -1542,9 +1177,11 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // Collect reinforcement spawn-site markers (General_enemy_spawn). They
     // carry no factory — the round-fight system reads their world positions
     // to place reinforcement waves, and LevelRenderer skips drawing them.
-    this.enemySpawnSites = allEntities
-      .filter((e) => e.__identifier === GENERAL_ENEMY_SPAWN_IDENTIFIER)
-      .map((e) => pivotCenter(e));
+    this.bossController.setSpawnSites(
+      allEntities
+        .filter((e) => e.__identifier === GENERAL_ENEMY_SPAWN_IDENTIFIER)
+        .map((e) => pivotCenter(e)),
+    );
     // Audio-anchor pass: decoration entities (House2/House6/etc.) bound to
     // a spatial sound in soundRegistry get a per-instance looping audio
     // source at their world position. This is independent of spawnEntities
@@ -1896,7 +1533,9 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   // teardown path also clears the manager, but the gate is the primary
   // guard so the order of operations between tearDownWorld and the DESTROY
   // event can't accidentally queue ghosts.
-  private attachEnemyToWorld(enemy: Enemy, trackForRespawn = true): void {
+  // Public: also part of the BossEncounterHost contract (reinforcement /
+  // copy / minion spawns wire in through the same hookups).
+  attachEnemyToWorld(enemy: Enemy, trackForRespawn = true): void {
     enemy.setDepth(ENTITY_DEPTH);
     this.enemies.add(enemy);
     // Moving creatures (wasps, evil crows, spark bugs) carry their own
@@ -2050,28 +1689,11 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       this.enemyProjectiles.destroy();
     }
 
-    // Round-fight reinforcements live in the enemies group but outside
-    // `spawned.enemies`, so destroyEntities(spawned) below won't catch them.
-    // Destroy any still alive here (iterating a copy because each destroy
-    // splices the live list), then reset the round-spawn state so a rebuilt
-    // world starts the encounter fresh.
-    for (const enemy of [...this.reinforcements]) {
-      if (enemy.active) enemy.destroy();
-    }
-    this.reinforcements = [];
-    // Summoned minions live in the enemies group but outside spawned.enemies
-    // too (same rationale as reinforcements) — destroy any still alive here.
-    for (const enemy of [...this.summonedMinions]) {
-      if (enemy.active) enemy.destroy();
-    }
-    this.summonedMinions = [];
-    this.lastReinforcedRound = 0;
-    this.enemySpawnSites = [];
-    // Clear any in-flight escape countdown so a rebuilt world (HMR / respawn)
-    // never carries a stale warning. The overlay itself survives the rebuild
-    // and re-binds via setupHud, so just hide it here.
-    this.escapeDeadline = null;
-    this.gameHud.setEscapeWarningVisible(false);
+    // Round-fight reinforcements + summoned minions live in the enemies group
+    // but outside `spawned.enemies`, so destroyEntities(spawned) below won't
+    // catch them — the controller's teardown destroys them, resets the
+    // round-spawn state, and clears any in-flight escape countdown.
+    this.bossController.teardown();
 
     if (this.enemies) {
       // Enemies are destroyed via destroyEntities below; clear(false, false)
@@ -2343,7 +1965,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     for (const obj of [...this.enemies.getChildren()]) {
       if (!(obj instanceof Enemy)) continue;
       if (!obj.active || obj.isDead()) continue;
-      if (bounds && !this.isWithinBounds(obj.x, obj.y, bounds)) continue;
+      if (bounds && !isWithinBounds(obj.x, obj.y, bounds)) continue;
       obj.takeDamage(Number.MAX_SAFE_INTEGER, obj.x, {
         skipKnockback: true,
         sourceIsPlayer: false,
@@ -2519,7 +2141,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // restart.
     this.gameHud.destroyForSceneShutdown();
     this.activeBoss = null;
-    this.escapeDeadline = null;
+    this.bossController.clearEscape();
     this.victoryShown = false;
     if (this.keyDoorMessageText) {
       this.tweens.killTweensOf(this.keyDoorMessageText);
