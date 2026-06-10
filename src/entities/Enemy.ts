@@ -3173,6 +3173,17 @@ export class Enemy extends AnimatedEntity {
   // with a walkAnimation enter loiter (drift around the player playing
   // walk) so they don't freeze in a grounded idle pose mid-air; everything
   // else falls back to the regular idle.
+  // ══ Idle-motion cluster: loiter / patrol / wander / greet ══════════════════
+  // Everything from here through beginGreet drives the OUT-OF-COMBAT motion:
+  // player- or home-anchored loiter drift, authored loiterPath patrol with
+  // ping-pong + dwells, spawn-anchored area wander with rest breaks and
+  // greetings. Deliberately NOT extracted to its own module: the cluster
+  // writes enemyState, shares leapDirX with the chase locomotion, calls
+  // clearCurrentAttack() on loiter entry, and drives velocity/facing/anim/
+  // walk-sound directly — pulling it out would need a ~25-member accessor
+  // surface with writers on both sides (a coupling increase, not a
+  // simplification). The one out-of-cluster touch is onAnimComplete snapping
+  // pathIndex to the nearest waypoint after a knockback interrupts a patrol.
   private enterIdleOrLoiter(player: Player): void {
     if (this.canLoiter()) {
       if (this.enemyState !== 'loiter') {
@@ -3696,6 +3707,8 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
+  // ── Wander greetings (behavior.wander.greet) ──────────────────────────────
+
   // Scans for a nearby same-group wanderer to greet (called throttled from
   // updateAreaWander). On finding an available partner within proximity on the
   // same floor, rolls `chance`; on success begins a synchronized greeting on
@@ -3773,6 +3786,8 @@ export class Enemy extends AnimatedEntity {
     this.facingDirection = this.greetFacing;
     this.setFacing(this.greetFacing === -1);
   }
+
+  // ══ End of the idle-motion cluster ═════════════════════════════════════════
 
   private enterDeadState(): void {
     this.enemyState = 'dead';
