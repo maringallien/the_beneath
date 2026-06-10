@@ -26,7 +26,6 @@ import {
   ENEMY_SPOT_STOP_MS,
   ENEMY_VISION_HALF_ANGLE_DEG,
   ENEMY_VISION_NEAR_RADIUS_PX,
-  GRAVITY_Y,
   HOARDER_SEPARATION_MIN_DX_PX,
   HOARDER_SEPARATION_PUSH_SPEED,
   HORIZONTAL_CHASE_STANDOFF_DEADZONE_PX,
@@ -37,7 +36,6 @@ import {
   NAV_STALL_MS,
   NAV_WAYPOINT_REACH_X_PX,
   NAV_WAYPOINT_REACH_Y_PX,
-  PLAYER_JUMP_VELOCITY,
   PLAYER_RUN_SPEED,
 } from '../constants';
 import type { LoiterPathPoint } from '../ldtk/types';
@@ -52,8 +50,22 @@ import {
   isInDetectionCone,
   type AlertState,
 } from './enemyDetection';
+import type { EnemyHelperScene } from './enemyHelperScene';
+import {
+  findLeapLanding,
+  findWallMountLaunch,
+  FOOTSTEP_TILE_PROBE_OFFSET_Y,
+  hasReachablePlatformAhead,
+  isBlockedByWall,
+  isLedgeAhead,
+  LEAP_PROBE_SAMPLE_PX,
+  overheadEscapeDir,
+  shouldJumpOverObstacle,
+  TILE_PX,
+  UP_LEAP_SCAN_REACH_PX,
+  type LeapProbeContext,
+} from './enemyLeapProbes';
 import { EnemyHealthBar } from './EnemyHealthBar';
-import type { EnemyProjectileSpawnOptions } from './EnemyProjectile';
 import {
   entityAnimFullKey,
   getEntityBehavior,
@@ -125,43 +137,6 @@ const ENEMY_JUMP_VELOCITY = -260;
 // Horizontal leap speed is floored at the player's run speed so a slow enemy
 // still gets the player's reach mid-leap.
 const ENEMY_LEAP_HORIZONTAL_SPEED = PLAYER_RUN_SPEED;
-// Ballistic-probe integration step and time budget. The step matches the 60 Hz
-// physics tick; the budget exceeds the player's flat airtime (~0.83 s) so the
-// longer arcs of downward leaps — and wall-sliding shaft climbs — are still
-// found. Cost is negligible — the search runs only at a ledge (a dozen-odd short
-// integration loops), far cheaper than the per-frame LOS raycast the chase does.
-const LEAP_PROBE_STEP_S = 1 / 60;
-const LEAP_PROBE_MAX_TIME_S = 1.3;
-// World grid size (px). LDtk authors this game on a 16 px tile, so terrain edges
-// and standable surfaces fall on 16 px boundaries.
-const TILE_PX = 16;
-// Sample stride (px) when testing a body edge against the tile grid in the
-// swept-AABB probe. Half a tile catches every 16 px collider along a body span
-// without a query per pixel.
-const LEAP_PROBE_SAMPLE_PX = 8;
-// A landing must clear at least this far (px) past the takeoff edge to count, so
-// the probe never "lands" the enemy back on the platform it's leaping from.
-const LEAP_MIN_ADVANCE_PX = 16;
-// Gentlest cross-gap leap. The smallest hop should rise exactly one tile (16 px)
-// — enough to pop a drop-off or a one-tile step cleanly without scraping the
-// near corner, but nothing taller. Solving v = √(2·g·h) with g = GRAVITY_Y (800)
-// and h = 16 → 160 px/s. findLeapLanding escalates from here toward the player
-// max only as far as a given gap actually demands.
-const LEAP_MIN_LAUNCH_VELOCITY = -160;
-// Search granularity for the minimum-sufficient launch velocity. 15 px/s spans
-// ~13 candidate arcs between the one-tile floor and the player max — fine enough
-// that the committed jump barely overshoots the gap, coarse enough to stay a
-// dozen-odd cheap probe sims at a ledge frame.
-const LEAP_LAUNCH_STEP = 15;
-// Horizontal safety margin (px) the descending foot must clear past the landing
-// platform's near edge for a leap to count. Landing right on the lip makes
-// Arcade resolve the touch on the X axis — shoving the body back off the edge
-// into the gap — instead of the Y axis (resting on top), which is why a bare-
-// minimum arc drops just short. Requiring the foot ~¾ tile onto the platform
-// guarantees enough overlap to separate upward and land. The solver escalates
-// launch velocity until the arc reaches this far in, so it adds only the height
-// a clean landing actually needs.
-const LEAP_LANDING_MARGIN_PX = 12;
 // --- Grounded chase "is it actually moving?" detection (run vs idle pose) ---
 // A grounded chaser can keep "chasing" while its body makes no headway — wedged
 // against a wall it can't mount, parked at a ledge it can't leap. Rather than
@@ -184,19 +159,11 @@ const CHASE_MOVE_EPSILON_PX = 6;
 // when the player sits at least this far above the chaser, so it never jumps at a
 // wall to reach a level or below player.
 const UP_LEAP_MIN_RISE_PX = 24;
-// Column-scan stride (px) used to locate a mountable wall's top edge. 4 px finds
-// the lip finely enough to size the launch without tile-alignment math.
-const WALL_MOUNT_SCAN_STEP_PX = 4;
 // Throttle for the climb-from-under-an-overhang search. That branch runs the full
 // leap ladder, so cap it per enemy; between probes the enemy keeps walking toward
 // the player. ~12 Hz reacts fast enough to catch the takeoff window while walking
 // past it without paying the search every frame.
 const UP_PROBE_INTERVAL_MS = 80;
-// How far ahead (px) the climb-from-under gate looks for a platform to jump onto.
-// The launch window is BEFORE the platform's near edge (you can't land on a
-// platform you're directly under), so the gate must see a platform up to a jump's
-// horizontal reach ahead — ~6 tiles covers a player-grade arc.
-const UP_LEAP_SCAN_REACH_PX = 96;
 // Loiter behavior for airborne enemies (gravity:false). Replaces idle so a
 // crow/wasp out of chase range doesn't freeze mid-air in a grounded idle
 // pose. Drifts toward a randomized point above the player at a fraction of
@@ -340,70 +307,11 @@ function isTeleportAnimationKey(key: string): boolean {
   return false;
 }
 
-// Structural interface so Enemy doesn't need to import GameScene (avoids a
-// circular dependency between Enemy ↔ GameScene). GameScene implements every
-// member directly.
-interface EnemyHelperScene {
-  spawnEnemyProjectile(options: EnemyProjectileSpawnOptions): void;
-  // Spawns a summoned minion of `identifier` at (x, y), drops it onto the
-  // floor beneath that point, wires it into the world as a normal enemy
-  // (no respawn tracking), and forces it into immediate pursuit. Returns the
-  // new Enemy, or null when the identifier doesn't resolve to a behavior-
-  // bearing registry entry. Used by 'summon' attacks (e.g. the summoner).
-  summonEnemyAt(identifier: string, x: number, y: number): Enemy | null;
-  // True when the world-pixel segment from (x1,y1) to (x2,y2) intersects a
-  // solid collision tile. Used to gate chase and ranged-attack initiation.
-  isLineBlocked(x1: number, y1: number, x2: number, y2: number): boolean;
-  // True iff a solid collision tile exists at the given world coords. Used
-  // for obstacle detection: enemy chase samples a point just ahead/up to
-  // decide whether to jump.
-  isTileSolidAt(x: number, y: number): boolean;
-  // Raw IntGrid value at the given world coords (1=ground, 2=bridge, 0=empty).
-  // Used to gate surface-specific footstep loops during chase — mirrors the
-  // probe Player.ts uses to switch between pebble and metal-stairs slots.
-  getIntGridValueAt(x: number, y: number): number;
-  // A* a grounded route over the nav graph from a start foot point to a goal foot
-  // point, returned as world-px waypoints (node foot centers), or null when
-  // there's no graph / no route / either endpoint can't snap to a node. The enemy
-  // follows the waypoints with its existing hop/leap/mount locomotion; the caller
-  // falls back to reactive steering on null.
-  findEnemyPath(
-    startX: number,
-    startY: number,
-    goalX: number,
-    goalY: number,
-  ): ReadonlyArray<{ x: number; y: number }> | null;
-  // World rect of the LDtk level containing (x, y), or null if the point sits
-  // outside any level. Used by arena-bound bosses to snapshot their spawn
-  // level on construction so movement/teleport can be clamped to the arena.
-  getLevelBoundsAt(
-    x: number,
-    y: number,
-  ): { worldX: number; worldY: number; pxWid: number; pxHei: number } | null;
-  // Invokes `cb` once for every live enemy in the world (the scene's enemies
-  // group), including the caller. Used by the wander greeting to find a nearby
-  // same-group partner; callers do their own group/proximity/self filtering and
-  // throttle the scan since this is O(enemy count).
-  forEachEnemy(cb: (enemy: Enemy) => void): void;
-  // True while a boss fight is active anywhere in the world. Stealth is
-  // disabled entirely during boss fights — every enemy is always detectable
-  // (the vision-cone / cover gate is bypassed and pursuit falls back to the
-  // legacy always-on aggro), so the player can't sneak inside an arena. Cheaply
-  // recomputed once per frame in GameScene.updateEnemies (one-frame latency,
-  // which is fine for a fight-wide flag).
-  isStealthDisabled(): boolean;
-}
-
 // IntGrid values from the LDtk source. Match the constants in Player.ts —
 // kept in sync by hand because the values are part of the LDtk schema, not
 // runtime data, so factoring them out would just add an import for two ints.
 const INTGRID_GROUND_VALUE = 1;
 const INTGRID_BRIDGE_VALUE = 2;
-// Sample offset below body.bottom when probing the tile under the enemy's
-// feet. Same value as Player.ts FOOTSTEP_TILE_PROBE_OFFSET_Y — body.bottom
-// sits at the top edge of the floor tile while grounded; +4 px lands safely
-// inside the tile beneath.
-const FOOTSTEP_TILE_PROBE_OFFSET_Y = 4;
 
 // Per-spawn overrides applied at construction time, bypassing the registry
 // defaults for a single Enemy instance. Used by the boss self-copy system
@@ -1697,15 +1605,15 @@ export class Enemy extends AnimatedEntity {
           const blockedAhead =
             dir === 1 ? this.body.blocked.right : this.body.blocked.left;
           const playerAbove = dy < -UP_LEAP_MIN_RISE_PX;
-          if (this.shouldJumpOverObstacle()) {
+          if (shouldJumpOverObstacle(this.probeCtx)) {
             this.setVelocityY(ENEMY_JUMP_VELOCITY);
             this.setVelocityX(moveX * dir);
-          } else if (this.isLedgeAhead(dir)) {
+          } else if (isLedgeAhead(this.probeCtx, dir)) {
             // Leap toward the player: up a shaft, down to a lower platform, or
             // across a gap — whichever lands closest to the player. The launch
             // is the gentlest that lands solidly (see findLeapLanding); its
             // horizontal speed is held through the arc by the leapDirX latch.
-            const landing = this.findLeapLanding(dir, leapX, player);
+            const landing = findLeapLanding(this.probeCtx, dir, leapX, player);
             if (landing) {
               this.leapDirX = dir;
               this.setVelocityY(landing.vy);
@@ -1719,7 +1627,7 @@ export class Enemy extends AnimatedEntity {
             // Player above and a wall blocks the walk forward: mount it (see
             // findWallMountLaunch). Null → keep pressing; the stuck-tracker
             // reroutes instead of hammering a wall it can't climb.
-            const mountVy = this.findWallMountLaunch(dir);
+            const mountVy = findWallMountLaunch(this.probeCtx, dir);
             if (mountVy !== null) {
               this.leapDirX = dir;
               this.setVelocityY(mountVy);
@@ -1737,10 +1645,10 @@ export class Enemy extends AnimatedEntity {
             let climbed = false;
             if (
               now - this.lastUpProbeAt >= UP_PROBE_INTERVAL_MS &&
-              this.hasReachablePlatformAhead(dir)
+              hasReachablePlatformAhead(this.probeCtx, dir)
             ) {
               this.lastUpProbeAt = now;
-              const landing = this.findLeapLanding(dir, leapX, player);
+              const landing = findLeapLanding(this.probeCtx, dir, leapX, player);
               if (landing && landing.y < this.body.bottom - UP_LEAP_MIN_RISE_PX) {
                 this.leapDirX = dir;
                 this.escapeDirX = 0;
@@ -1755,7 +1663,7 @@ export class Enemy extends AnimatedEntity {
               // move (so working out from under a platform never walks the body
               // off its own floor) and faces the travel direction (so it
               // doesn't moonwalk away from the player it's facing).
-              const underDir = this.overheadEscapeDir();
+              const underDir = overheadEscapeDir(this.probeCtx);
               if (underDir !== 0 && this.tryEscapeStep(underDir, moveX)) {
                 // Stranded under a platform: walking out toward its nearer edge.
                 // Latch the direction and where we started so the continuation
@@ -2876,7 +2784,7 @@ export class Enemy extends AnimatedEntity {
     // grinding the wall for the whole travel budget.
     const dirSeen: 1 | -1 = dxSeen >= 0 ? 1 : -1;
     const wallBlocked =
-      canMove && this.body.allowGravity && this.isBlockedByWall(dirSeen);
+      canMove && this.body.allowGravity && isBlockedByWall(this.probeCtx, dirSeen);
     // Route around blocking geometry to the last-seen / heard spot via A* when a
     // straight hop-only beeline won't reach it (e.g. a gunshot heard through a
     // wall). null when no route exists — then the wall-block gate below sends the
@@ -2921,7 +2829,7 @@ export class Enemy extends AnimatedEntity {
         // No route — straight grounded beeline (steers X only).
         this.facingDirection = dirSeen;
         this.setFacing(this.facingDirection === -1);
-        if (this.shouldJumpOverObstacle()) this.setVelocityY(ENEMY_JUMP_VELOCITY);
+        if (shouldJumpOverObstacle(this.probeCtx)) this.setVelocityY(ENEMY_JUMP_VELOCITY);
         this.setVelocityX(speed * this.facingDirection);
       } else {
         // Airborne hunt — steer in 2D toward the spot.
@@ -3064,7 +2972,7 @@ export class Enemy extends AnimatedEntity {
     this.facingDirection = dxHome >= 0 ? 1 : -1;
     this.setFacing(this.facingDirection === -1);
     if (grounded) {
-      if (this.shouldJumpOverObstacle()) this.setVelocityY(ENEMY_JUMP_VELOCITY);
+      if (shouldJumpOverObstacle(this.probeCtx)) this.setVelocityY(ENEMY_JUMP_VELOCITY);
       this.setVelocityX(speed * this.facingDirection);
     } else {
       const len = distHome || 1;
@@ -3507,7 +3415,7 @@ export class Enemy extends AnimatedEntity {
     if (this.body.allowGravity) {
       // Ground patrol: only steer X. Reuses the chase code's obstacle hop so
       // a step or low wall between waypoints isn't a hard stop.
-      if (this.shouldJumpOverObstacle()) {
+      if (shouldJumpOverObstacle(this.probeCtx)) {
         this.setVelocityY(ENEMY_JUMP_VELOCITY);
       }
       this.setVelocityX(moveSpeed * this.facingDirection);
@@ -3765,15 +3673,15 @@ export class Enemy extends AnimatedEntity {
     const leapX = Math.max(moveSpeed, ENEMY_LEAP_HORIZONTAL_SPEED);
     if (this.body.blocked.down) {
       this.leapDirX = 0;
-      if (this.shouldJumpOverObstacle()) {
+      if (shouldJumpOverObstacle(this.probeCtx)) {
         // Small wall between here and the target — hop it like a patrol step.
         this.setVelocityY(ENEMY_JUMP_VELOCITY);
         this.setVelocityX(moveSpeed * dir);
-      } else if (this.isLedgeAhead(dir)) {
+      } else if (isLedgeAhead(this.probeCtx, dir)) {
         // Open air ahead. Commit a leap only when the probe finds a roughly
         // level landing that stays inside the wander band; otherwise turn back
         // so the stroller never drops into a hole or wanders out of its area.
-        const landing = this.findLeapLanding(
+        const landing = findLeapLanding(this.probeCtx, 
           dir,
           leapX,
           { x: this.wanderTargetX, y: this.y },
@@ -3787,7 +3695,7 @@ export class Enemy extends AnimatedEntity {
           this.setVelocityX(0);
           this.turnBackFromEdge(dir);
         }
-      } else if (this.isBlockedByWall(dir)) {
+      } else if (isBlockedByWall(this.probeCtx, dir)) {
         // A wall too tall to hop stands directly ahead (the hop case above
         // already handled short walls). The stroller can't mount it, so turn
         // back and pace away instead of grinding into it — same response as a
@@ -4777,43 +4685,17 @@ export class Enemy extends AnimatedEntity {
     this.peakFallVelocity = 0;
   }
 
-  // True when a chasing ground enemy is standing in front of a wall ≤ 2
-  // tiles tall and should hop over it. Gravity-off enemies skip this
-  // entirely — they have no useful "jump" semantics. Sampling at
-  // body.bottom - 8 avoids hitting the floor tile the enemy is standing
-  // on; the +4 px offset ahead avoids self-collision with the body's own
-  // bounding box. probeY - 32 (two tiles up + one tile clearance) must
-  // be empty so a 3-tile wall is rejected.
-  private shouldJumpOverObstacle(): boolean {
-    if (!this.body.allowGravity) return false;
-    if (!this.body.blocked.down) return false;
-    const helper = this.scene as unknown as EnemyHelperScene;
-    const aheadX =
-      this.facingDirection === 1
-        ? this.body.right + 4
-        : this.body.left - 4;
-    const probeY = this.body.bottom - 8;
-    if (!helper.isTileSolidAt(aheadX, probeY)) return false;
-    if (helper.isTileSolidAt(aheadX, probeY - 32)) return false;
-    return true;
-  }
-
-  // True when an impassable wall stands directly ahead in `dir`: a solid tile at
-  // mid-foot height that is STILL solid a hop up (probeY - 32), so it's taller
-  // than shouldJumpOverObstacle can clear. The inverse of that probe — used by
-  // the wander and last-seen-search locomotion (neither mounts walls) to stop
-  // and turn back / scan instead of grinding a wall they can't pass. Grounded
-  // only; the chase loop uses its own wedged-headway tracker (CHASE_STILL_GRACE_MS)
-  // instead.
-  private isBlockedByWall(dir: 1 | -1): boolean {
-    if (!this.body.blocked.down) return false;
-    const helper = this.scene as unknown as EnemyHelperScene;
-    const aheadX = dir === 1 ? this.body.right + 4 : this.body.left - 4;
-    const probeY = this.body.bottom - 8;
-    return (
-      helper.isTileSolidAt(aheadX, probeY) &&
-      helper.isTileSolidAt(aheadX, probeY - 32)
-    );
+  // Read-only view of this enemy for the shared locomotion probes
+  // (enemyLeapProbes.ts). Rebuilt per call — the probes only borrow it for
+  // the duration of one query.
+  private get probeCtx(): LeapProbeContext {
+    return {
+      body: this.body,
+      helper: this.scene as unknown as EnemyHelperScene,
+      x: this.x,
+      y: this.y,
+      facingDirection: this.facingDirection,
+    };
   }
 
   // Returns the enemy's current nav path (world-px waypoints) for the debug
@@ -4925,11 +4807,11 @@ export class Enemy extends AnimatedEntity {
     if (this.body.blocked.down) {
       this.leapDirX = 0;
       const wpAbove = wp.y - this.body.bottom < -UP_LEAP_MIN_RISE_PX;
-      if (this.shouldJumpOverObstacle()) {
+      if (shouldJumpOverObstacle(this.probeCtx)) {
         this.setVelocityY(ENEMY_JUMP_VELOCITY);
         this.setVelocityX(moveSpeed * dir);
-      } else if (this.isLedgeAhead(dir) || wpAbove) {
-        const landing = this.findLeapLanding(dir, leapX, wp);
+      } else if (isLedgeAhead(this.probeCtx, dir) || wpAbove) {
+        const landing = findLeapLanding(this.probeCtx, dir, leapX, wp);
         // For an ABOVE waypoint, only commit the leap if it actually gains height.
         // When the body can't reach the upper node, findLeapLanding returns the
         // best in-reach landing — which is back on THIS level — and leaping it
@@ -4944,7 +4826,7 @@ export class Enemy extends AnimatedEntity {
           this.setVelocityY(landing.vy);
           this.setVelocityX(leapX * dir);
         } else {
-          const mountVy = wpAbove ? this.findWallMountLaunch(dir) : null;
+          const mountVy = wpAbove ? findWallMountLaunch(this.probeCtx, dir) : null;
           if (mountVy !== null) {
             this.leapDirX = dir;
             this.setVelocityY(mountVy);
@@ -4963,20 +4845,6 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // True when the floor stops just ahead of the leading foot — i.e. the enemy
-  // is standing at a ledge with open air in its travel direction. Mirrors
-  // shouldJumpOverObstacle's probe geometry: a point a hair past the leading
-  // body edge, one footstep-probe offset below the feet (inside the tile the
-  // enemy would step onto). No solid tile there → a gap the chaser must leap or
-  // stop short of. Grounded-only; airborne callers never ask.
-  private isLedgeAhead(dir: 1 | -1): boolean {
-    if (!this.body.blocked.down) return false;
-    const helper = this.scene as unknown as EnemyHelperScene;
-    const aheadX = dir === 1 ? this.body.right + 2 : this.body.left - 2;
-    const probeY = this.body.bottom + FOOTSTEP_TILE_PROBE_OFFSET_Y;
-    return !helper.isTileSolidAt(aheadX, probeY);
-  }
-
   // Drives one sideways reposition step at `moveX` in `escapeDir` while the
   // enemy works its way out from under an overhead platform to set up an
   // up-leap. Adds the two guards the raw setVelocityX escape moves lacked:
@@ -4987,253 +4855,11 @@ export class Enemy extends AnimatedEntity {
   // false when a ledge blocks the route, so the caller can try the other way
   // or close on the player instead of driving into the void.
   private tryEscapeStep(escapeDir: 1 | -1, moveX: number): boolean {
-    if (this.isLedgeAhead(escapeDir)) return false;
+    if (isLedgeAhead(this.probeCtx, escapeDir)) return false;
     this.facingDirection = escapeDir;
     this.setFacing(escapeDir === -1);
     this.setVelocityX(moveX * escapeDir);
     return true;
   }
 
-  // Vertical-reach probe for mounting a step/ledge whose vertical face is
-  // directly ahead (no gap to arc over) — the "climb onto the platform above"
-  // case the ballistic gap-probe can't handle, because to it the forward wall
-  // reads as a ceiling and aborts the arc. Confirms a wall is flush ahead, scans
-  // its column upward for the top edge, and — if that top is within a player-
-  // grade jump and offers body-height standing clearance — returns the launch
-  // velocity that lifts the foot just past it (the chaser then jumps, slides up
-  // the wall face, and its held forward speed carries it onto the platform).
-  // Returns null when there's no wall ahead, its top is out of reach, or the
-  // surface isn't standable. Grounded-only; the caller guarantees blocked.down.
-  private findWallMountLaunch(dir: 1 | -1): number | null {
-    const helper = this.scene as unknown as EnemyHelperScene;
-    const aheadX = dir === 1 ? this.body.right + 2 : this.body.left - 2;
-    // Sample a hair above the floor (like shouldJumpOverObstacle) so the tile
-    // underfoot isn't mistaken for the wall.
-    const footProbeY = this.body.bottom - 8;
-    if (!helper.isTileSolidAt(aheadX, footProbeY)) return null; // no wall ahead
-    // Highest the foot can be lifted by a player-grade jump (the arc apex).
-    const maxRise =
-      (PLAYER_JUMP_VELOCITY * PLAYER_JUMP_VELOCITY) / (2 * GRAVITY_Y);
-    // Walk up the column ahead to the wall's top — the first clear sample.
-    let topY: number | null = null;
-    for (
-      let probeY = footProbeY - WALL_MOUNT_SCAN_STEP_PX;
-      probeY >= footProbeY - maxRise;
-      probeY -= WALL_MOUNT_SCAN_STEP_PX
-    ) {
-      if (!helper.isTileSolidAt(aheadX, probeY)) {
-        topY = probeY;
-        break;
-      }
-    }
-    if (topY === null) return null; // wall taller than a max jump can clear
-    // Require a body's height of standing clearance above the surface, else the
-    // chaser would mount into a ceiling and couldn't actually perch there.
-    if (helper.isTileSolidAt(aheadX, topY - this.body.height)) return null;
-    // Lift the foot to the top plus the landing margin so it comes down onto the
-    // surface instead of clipping the lip; reject if that exceeds the max jump,
-    // and clamp the magnitude to the player max as a safety net.
-    const liftNeeded = this.body.bottom - topY + LEAP_LANDING_MARGIN_PX;
-    if (liftNeeded > maxRise) return null;
-    return Math.max(
-      -Math.sqrt(2 * GRAVITY_Y * liftNeeded),
-      PLAYER_JUMP_VELOCITY,
-    );
-  }
-
-  // Cheap gate for the climb-from-under search: is there a platform within jump
-  // reach AHEAD-AND-ABOVE (in the travel direction) to leap onto? Scans a
-  // forward-up box from the leading foot. This is the crux of the fix for an
-  // enemy stranding itself under a platform: the only place a jump can land on
-  // top is BEFORE the platform's near edge, where the platform is ahead — not
-  // overhead — so a "directly above" test never fires in time. fwd starts at 0
-  // so terrain straight up (e.g. mounting toward a higher next platform) counts
-  // too. Doesn't check standability; that's the full probe's job.
-  private hasReachablePlatformAhead(dir: 1 | -1): boolean {
-    const helper = this.scene as unknown as EnemyHelperScene;
-    const maxRise =
-      (PLAYER_JUMP_VELOCITY * PLAYER_JUMP_VELOCITY) / (2 * GRAVITY_Y);
-    const lead = dir === 1 ? this.body.right : this.body.left;
-    const foot = this.body.bottom;
-    for (let up = TILE_PX; up <= maxRise + TILE_PX; up += TILE_PX) {
-      for (let fwd = 0; fwd <= UP_LEAP_SCAN_REACH_PX; fwd += TILE_PX) {
-        if (helper.isTileSolidAt(lead + dir * fwd, foot - up)) return true;
-      }
-    }
-    return false;
-  }
-
-  // When the chaser is stranded directly under a platform (can't launch onto a
-  // surface it's beneath), returns the direction toward that platform's NEAREST
-  // edge so it walks out from under and can jump up onto it on the next approach.
-  // Returns 0 when not under a platform (the caller then just closes on the
-  // player) or when the overhead solid is too wide to escape within reach (a
-  // ceiling, not a moundable ledge).
-  private overheadEscapeDir(): 1 | -1 | 0 {
-    const helper = this.scene as unknown as EnemyHelperScene;
-    const maxRise =
-      (PLAYER_JUMP_VELOCITY * PLAYER_JUMP_VELOCITY) / (2 * GRAVITY_Y);
-    const cx = this.body.center.x;
-    // Find the underside of the platform directly overhead, if any.
-    let level = Number.NaN;
-    for (let up = TILE_PX; up <= maxRise; up += LEAP_PROBE_SAMPLE_PX) {
-      if (helper.isTileSolidAt(cx, this.body.top - up)) {
-        level = this.body.top - up;
-        break;
-      }
-    }
-    if (Number.isNaN(level)) return 0; // not under a platform
-    // Walk out along that level to find the nearer edge.
-    const maxScan = UP_LEAP_SCAN_REACH_PX + TILE_PX * 4;
-    let leftDist = 0;
-    let rightDist = 0;
-    for (let d = TILE_PX; d <= maxScan; d += TILE_PX) {
-      if (rightDist === 0 && !helper.isTileSolidAt(cx + d, level)) rightDist = d;
-      if (leftDist === 0 && !helper.isTileSolidAt(cx - d, level)) leftDist = d;
-      if (leftDist !== 0 && rightDist !== 0) break;
-    }
-    if (leftDist === 0 && rightDist === 0) return 0; // too wide — a ceiling
-    if (leftDist !== 0 && (rightDist === 0 || leftDist <= rightDist)) return -1;
-    return 1;
-  }
-
-  // True if any solid tile lies on the vertical segment at xEdge from yTop to
-  // yBottom — i.e. the body's leading side would hit a wall there. Sampled every
-  // LEAP_PROBE_SAMPLE_PX (plus the bottom endpoint) so no 16 px collider slips
-  // between samples.
-  private columnSolid(xEdge: number, yTop: number, yBottom: number): boolean {
-    const helper = this.scene as unknown as EnemyHelperScene;
-    for (let y = yTop; y < yBottom; y += LEAP_PROBE_SAMPLE_PX) {
-      if (helper.isTileSolidAt(xEdge, y)) return true;
-    }
-    return helper.isTileSolidAt(xEdge, yBottom);
-  }
-
-  // True if any solid tile lies on the horizontal segment at yEdge from xLeft to
-  // xRight — used to test the body's foot row (a floor to land on) and head row
-  // (a ceiling). Same sampling guarantee as columnSolid.
-  private rowSolid(yEdge: number, xLeft: number, xRight: number): boolean {
-    const helper = this.scene as unknown as EnemyHelperScene;
-    for (let x = xLeft; x < xRight; x += LEAP_PROBE_SAMPLE_PX) {
-      if (helper.isTileSolidAt(x, yEdge)) return true;
-    }
-    return helper.isTileSolidAt(xRight, yEdge);
-  }
-
-  // Swept-AABB reachability probe for a SINGLE launch velocity. Integrates the
-  // body's box as Arcade would (semi-implicit Euler, X and Y resolved
-  // separately) so it behaves exactly like the real jump: it SLIDES along a wall
-  // in its path instead of stopping (the key to vertical-shaft climbs — launch
-  // toward a wall-attached platform, ride up its face, land on top), bonks
-  // ceilings (vy zeroed, then falls), and rests its foot on the first floor it
-  // descends onto that it can actually stand on (clear headroom). Returns the
-  // leading-foot landing point, or null if nothing standable is reached within
-  // the level and time budget. A landing must have left the takeoff spot — moved
-  // a body-step horizontally OR changed level by a tile — so it never "lands"
-  // back where it launched. Handles up / down / across uniformly.
-  private simulateLeapArc(
-    dir: 1 | -1,
-    launchVx: number,
-    launchVy: number,
-  ): { x: number; y: number } | null {
-    const helper = this.scene as unknown as EnemyHelperScene;
-    const bounds = helper.getLevelBoundsAt(this.x, this.y);
-    const hw = this.body.width / 2;
-    const hh = this.body.height / 2;
-    let cx = this.body.center.x;
-    let cy = this.body.center.y;
-    let vy = launchVy;
-    const vx = launchVx * dir;
-    const startFootX = cx + dir * hw;
-    const startFootY = cy + hh;
-    for (let t = 0; t < LEAP_PROBE_MAX_TIME_S; t += LEAP_PROBE_STEP_S) {
-      vy += GRAVITY_Y * LEAP_PROBE_STEP_S;
-      // Horizontal: advance unless the leading vertical edge would enter solid —
-      // then hold x and let the body slide vertically along the wall.
-      const newCx = cx + vx * LEAP_PROBE_STEP_S;
-      if (!this.columnSolid(newCx + dir * hw, cy - hh, cy + hh)) {
-        cx = newCx;
-      }
-      const newCy = cy + vy * LEAP_PROBE_STEP_S;
-      if (bounds) {
-        if (cx < bounds.worldX || cx > bounds.worldX + bounds.pxWid) return null;
-        if (newCy + hh > bounds.worldY + bounds.pxHei) return null;
-      }
-      if (vy >= 0) {
-        // Descending: a solid row under the foot is a landing if the body can
-        // stand there (head + mid rows clear) and it has left the takeoff spot.
-        const footY = newCy + hh;
-        if (this.rowSolid(footY, cx - hw, cx + hw)) {
-          // Inset the headroom samples by 1 px so a wall flush against the
-          // body's side (e.g. a shaft platform reached by riding up its face)
-          // doesn't read as "no headroom" — only solids genuinely above count.
-          const headClear =
-            !this.rowSolid(footY - this.body.height + 2, cx - hw + 1, cx + hw - 1) &&
-            !this.rowSolid(footY - hh, cx - hw + 1, cx + hw - 1);
-          const lx = cx + dir * hw;
-          const advanced =
-            Math.abs(lx - startFootX) >= LEAP_MIN_ADVANCE_PX ||
-            Math.abs(footY - startFootY) >= TILE_PX;
-          if (headClear && advanced) return { x: lx, y: footY };
-          return null; // fell back onto takeoff, or can't stand here
-        }
-        cy = newCy;
-      } else {
-        // Ascending: a solid row at the head is a ceiling — the real body's rise
-        // is zeroed here (then gravity returns it), so stop rising and hold cy.
-        if (this.rowSolid(newCy - hh, cx - hw, cx + hw)) {
-          vy = 0;
-        } else {
-          cy = newCy;
-        }
-      }
-    }
-    return null;
-  }
-
-  // Chase-leap solver. Tries launch velocities from the gentlest
-  // (LEAP_MIN_LAUNCH_VELOCITY, a one-tile hop) up to the player max
-  // (PLAYER_JUMP_VELOCITY) and returns the launch whose landing best advances
-  // toward `target` (the player). Each candidate must clear
-  // LEAP_LANDING_MARGIN_PX past the landing platform's near edge so the body
-  // settles on top instead of clipping the lip. Selection ascends the ladder and
-  // only switches to a stronger arc when it lands a full tile closer to the
-  // target — so a flat gap or drop keeps its minimum-sufficient hop, while a
-  // climb onto a platform above (which gets dramatically closer to a player up
-  // there) is taken when one exists. Returns null when nothing lands with margin
-  // (caller parks or reroutes). launchVx must be the SAME horizontal speed the
-  // takeoff applies so the predicted arc matches the real one. maxLaunchVelocity
-  // caps how hard the search may jump (default = the player's jump, used by
-  // chase); the spawn-anchored wander passes a stronger ceiling so a stroller
-  // can clear up to ~4 tiles.
-  private findLeapLanding(
-    dir: 1 | -1,
-    launchVx: number,
-    target: { x: number; y: number },
-    maxLaunchVelocity: number = PLAYER_JUMP_VELOCITY,
-  ): { x: number; y: number; vy: number } | null {
-    const helper = this.scene as unknown as EnemyHelperScene;
-    const steps = Math.ceil(
-      (LEAP_MIN_LAUNCH_VELOCITY - maxLaunchVelocity) / LEAP_LAUNCH_STEP,
-    );
-    let best: { x: number; y: number; vy: number; dist: number } | null = null;
-    for (let i = 0; i <= steps; i++) {
-      const vy = Math.max(
-        LEAP_MIN_LAUNCH_VELOCITY - i * LEAP_LAUNCH_STEP,
-        maxLaunchVelocity,
-      );
-      const landing = this.simulateLeapArc(dir, launchVx, vy);
-      if (!landing) continue;
-      if (
-        !helper.isTileSolidAt(landing.x - LEAP_LANDING_MARGIN_PX * dir, landing.y)
-      ) {
-        continue; // lands on the lip, not solidly on top
-      }
-      const dist = Math.hypot(landing.x - target.x, landing.y - target.y);
-      if (best === null || dist < best.dist - TILE_PX) {
-        best = { x: landing.x, y: landing.y, vy, dist };
-      }
-    }
-    return best ? { x: best.x, y: best.y, vy: best.vy } : null;
-  }
 }
