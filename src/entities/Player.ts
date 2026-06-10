@@ -5,6 +5,14 @@ import {
   setPlayerStateSoundActive,
 } from '../audio';
 import {
+  PlayerMovementAudio,
+  type MovementAudioInput,
+} from './playerMovementAudio';
+import {
+  buildProjectileFireConfigs,
+  type ProjectileFireConfig,
+} from './playerProjectileConfig';
+import {
   PLAYER_RUN_SPEED,
   PLAYER_JUMP_VELOCITY,
   JUMP_CUT_VELOCITY_MULTIPLIER,
@@ -15,14 +23,9 @@ import {
   PLAYER_ROLL_SPEED,
   WALL_SLIDE_MAX_VY,
   WHEEL_COOLDOWN_MS,
-  PROJECTILE_GUN1_SPEED,
-  PROJECTILE_GUN2_SPEED,
-  PROJECTILE_GUN1_DAMAGE,
-  PROJECTILE_GUN2_DAMAGE,
   PROJECTILE_BARREL_LENGTH_PX,
   GUN_OVERLAY_PIVOT_OFFSET_X,
   GUN_OVERLAY_PIVOT_OFFSET_Y,
-  GUNSLINGER_GUN1_FIRE_RATE_MULTIPLIER,
   PLAYER_MAX_HEALTH,
   PLAYER_INVULN_MS,
   PLAYER_HURT_KNOCKBACK_X,
@@ -68,11 +71,9 @@ import { Trap } from './Trap';
 import {
   animKey,
   fullKeysForLogical,
-  getAnimationNaturalDurationMs,
   getAnimationSourceMode,
   getAnimationStage,
   getSpriteAnchor,
-  gunOverlayAnimKey,
   isActionAvailable,
   magicAttackAnimKey,
   magicAttackKeySet,
@@ -105,35 +106,11 @@ interface NearestEnemyScene {
   getNearestEnemy(x: number, y: number): { x: number; y: number } | null;
 }
 
-// IntGrid values from the LDtk source. Each maps to a distinct footstep
-// surface — pebble loop for ground, metal-stairs loop for bridge. Mutually
-// exclusive: only the slot matching the tile underfoot is active.
-const INTGRID_GROUND_VALUE = 1;
-const INTGRID_BRIDGE_VALUE = 2;
-
 // Sample offset below body.bottom when probing the tile underfoot. Body.bottom
 // sits at the top edge of the floor tile while standing; +4px lands safely
 // inside the tile beneath without risking overshoot into the next cell down.
 const FOOTSTEP_TILE_PROBE_OFFSET_Y = 4;
 
-// Minimum vertical descent (pixels, from airborne apex to landing Y) before
-// a ground contact fires the land sound. 3 tiles × 16 px = 48 px. Small
-// hops, terrain flicker, and the spawn settle never accumulate enough drop
-// from their peak to cross this — only meaningful falls do. Replaces an
-// earlier airtime threshold which fired on small low jumps that nonetheless
-// stayed airborne long enough.
-const MIN_LAND_FALL_DISTANCE_PX = 48;
-
-// Falling-whoosh tuning. The wind swell only starts once the player has been
-// in a continuous free fall for FALL_WHOOSH_DELAY_MS — long enough that small
-// hops and ledge steps (which land well under this) never trigger it. Once
-// armed it fades IN over FADE_IN_MS (a slow swell) and, on landing, OUT over
-// the much shorter FADE_OUT_MS so the wind doesn't linger over the land thud.
-const FALL_WHOOSH_DELAY_MS = 300;
-const FALL_WHOOSH_FADE_IN_MS = 650;
-const FALL_WHOOSH_FADE_OUT_MS = 180;
-
-const LAND_SOUND_ID = 'player_jump_land';
 const HURT_SOUND_ID = 'player_hurt_grunt';
 const PROJECTILE_HURT_SOUND_ID = 'player_hurt_projectile';
 const ROLL_SOUND_ID = 'player_roll';
@@ -158,21 +135,6 @@ const SWORD_SLASH_IMPACT_SOUND_IDS = [
   'sword_slash_impact_2',
   'sword_slash_impact_3',
 ] as const;
-
-interface ProjectileFireConfig {
-  // Overlay anim key (the gun sprite). The body has no attack1 anymore —
-  // firing is overlay-only, so the lifecycle (fire-frame trigger, complete
-  // event) is sourced from the overlay's animation events.
-  readonly overlayKey: string;
-  readonly fireFrame: number;
-  readonly speed: number;
-  readonly damage: number;
-  readonly mode: 'gunslinger_gun1' | 'gunslinger_gun2';
-  // Overlay play duration (ms). Undefined = use the registry's natural
-  // duration. Set for gun1 to apply the fire-rate multiplier, which also
-  // shortens the locked-attack window so the player can fire again sooner.
-  readonly overlayDurationMs?: number;
-}
 
 const PHYSICS_BODY_WIDTH = 16;
 const PHYSICS_BODY_HEIGHT = 24;
@@ -251,49 +213,6 @@ function requireAnimKey(
 
 // Teleport always uses sword_master attack6 (the only mode that has it).
 const TELEPORT_ANIM_KEY = requireAnimKey('sword_master', 'attack6');
-
-function buildProjectileFireConfigs(): ReadonlyMap<
-  'gunslinger_gun1' | 'gunslinger_gun2',
-  ProjectileFireConfig
-> {
-  const map = new Map<
-    'gunslinger_gun1' | 'gunslinger_gun2',
-    ProjectileFireConfig
-  >();
-  // Firing is overlay-only — the gun sprite's attack1 is the visible gunshot,
-  // so its "fire" stage frame index drives projectile spawn timing and its
-  // animation-complete event ends the locked-attack window.
-  const gun1OverlayKey = gunOverlayAnimKey('gunslinger_gun1', 'attack1');
-  const gun2OverlayKey = gunOverlayAnimKey('gunslinger_gun2', 'attack1');
-  const gun1Stage = getAnimationStage(gun1OverlayKey, 'fire');
-  const gun2Stage = getAnimationStage(gun2OverlayKey, 'fire');
-  if (!gun1Stage || !gun2Stage) {
-    throw new Error(
-      `Missing "fire" stage on gunslinger overlay attack1. gun1=${gun1Stage}, gun2=${gun2Stage}. ` +
-        'Did the animation registry get out of sync?',
-    );
-  }
-  const gun1OverlayNatural = getAnimationNaturalDurationMs(gun1OverlayKey);
-  if (gun1OverlayNatural == null) {
-    throw new Error('Missing natural duration for gun1 overlay attack1');
-  }
-  map.set('gunslinger_gun1', {
-    overlayKey: gun1OverlayKey,
-    fireFrame: gun1Stage.startFrame,
-    speed: PROJECTILE_GUN1_SPEED,
-    damage: PROJECTILE_GUN1_DAMAGE,
-    mode: 'gunslinger_gun1',
-    overlayDurationMs: gun1OverlayNatural / GUNSLINGER_GUN1_FIRE_RATE_MULTIPLIER,
-  });
-  map.set('gunslinger_gun2', {
-    overlayKey: gun2OverlayKey,
-    fireFrame: gun2Stage.startFrame,
-    speed: PROJECTILE_GUN2_SPEED,
-    damage: PROJECTILE_GUN2_DAMAGE,
-    mode: 'gunslinger_gun2',
-  });
-  return map;
-}
 
 type AttackKind = 'regular' | 'magic';
 
@@ -404,18 +323,10 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   // Reset to 0 on dash so the regen cadence restarts after a consumption.
   private staminaRegenAccumMs = 0;
   private invulnerableUntil = 0;
-  // Apex sprite.y during the current airborne phase (lowest y value =
-  // highest visual point, since the Y axis points down), or null when
-  // grounded. Each airborne frame updates this to min(currentY, previousApex)
-  // so a jump-and-fall correctly anchors the apex at the peak rather than
-  // the launch point. updateLandingSound diffs landingY against this apex
-  // to gate the one-shot land-sound on a minimum vertical drop.
-  private airborneApexY: number | null = null;
-  // Milliseconds of continuous free fall accumulated so far, used to gate the
-  // falling-whoosh behind FALL_WHOOSH_DELAY_MS. Reset to 0 the moment the
-  // player is no longer in a qualifying fall (grounded, rising, wall-sliding,
-  // dead, or fly mode). See updateFallingSound.
-  private fallWhooshElapsedMs = 0;
+  // State-driven sound loops (cloth movement, footsteps, land thud, falling
+  // whoosh). Owns the airborne-apex and continuous-fall bookkeeping; fed a
+  // per-frame input struct from update().
+  private readonly movementAudio: PlayerMovementAudio;
   // Per-attack set of enemies already damaged by the current sword swing.
   // Each sword attack scans the forward hitbox every frame it's active; this
   // set prevents one swing from ticking damage repeatedly against the same
@@ -485,6 +396,9 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.teleportAppearStartFrame = appearStage.startFrame;
 
     this.projectileFireConfigs = buildProjectileFireConfigs();
+    this.movementAudio = new PlayerMovementAudio(scene, () =>
+      this.probeFootSurface(),
+    );
 
     this.attackPointerHandler = (pointer) => {
       if (!this.controlsEnabled) return;
@@ -583,127 +497,39 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     // (run/fall/idle/...) and lockedAction, not last frame's. A single call
     // per slot covers every early-return path in updateInner — predicates
     // naturally map dead → silent and gunslinger-fire-while-standing → silent.
-    this.updateMovementSound();
-    this.updateFootstepsSound();
-    this.updateLandingSound();
-    this.updateFallingSound();
+    this.movementAudio.update(this.buildMovementAudioInput());
     // Gun sync is handled in the scene's POST_UPDATE handler so it runs after
     // Arcade physics has written body positions back to sprite x/y — see the
     // constructor's postUpdateHandler registration for the rationale.
   }
 
-  // Cloth-movement loop is active whenever the body anim is not idle and the
-  // player isn't dead. The hurt branch is special-cased because take_hit
-  // animates while currentVisualState is still 'idle' (hurt() sets the
-  // visual state to idle before kicking the take_hit anim) — without the
-  // carve-out the sound would cut on every hit.
-  //
-  // Fly mode is debug-only; cloth sound stays silent there even though
-  // updateFlyMode sets currentVisualState='run' while moving.
-  private updateMovementSound(): void {
-    if (this.flyMode) {
-      setPlayerStateSoundActive(this.scene, 'movement', false);
-      return;
-    }
-    const dead = this.lockedAction === 'dead';
-    const bodyMoving = this.currentVisualState !== 'idle';
-    const hurtPlaying = this.lockedAction === 'hurt';
-    const active = !dead && (bodyMoving || hurtPlaying);
-    setPlayerStateSoundActive(this.scene, 'movement', active);
+  // One frame of player state for PlayerMovementAudio. The expressions here
+  // are the sound predicates' inputs — keep them exactly matching what the
+  // original in-class sound methods computed (e.g. `hurtPlaying` is
+  // lockedAction === 'hurt', NOT the take_hit anim playing).
+  private buildMovementAudioInput(): MovementAudioInput {
+    return {
+      deltaMs: this.scene.game.loop.delta,
+      flyMode: this.flyMode,
+      dead: this.lockedAction === 'dead',
+      hurtPlaying: this.lockedAction === 'hurt',
+      bodyMoving: this.currentVisualState !== 'idle',
+      running: this.currentVisualState === 'run',
+      onGround: this.body.blocked.down || this.body.touching.down,
+      descending: this.body.velocity.y > 0,
+      wallSliding: this.wallSlideDirection !== 0,
+      y: this.y,
+    };
   }
 
-  // Footstep loops are active only while the player is actively running
-  // (visualState 'run') AND grounded. The surface underfoot decides which
-  // slot plays: ground tiles → pebbles, bridge tiles → metal stairs. The
-  // two slots are mutually exclusive because the tile value can only be one
-  // thing — when the player walks from ground onto bridge mid-stride, the
-  // ground slot fades down while the bridge slot fades up, and the short
-  // PLAYER_STATE_CROSSFADE_MS overlap masks the seam. Locked actions
-  // (dash, roll, attack, block, climb, hurt, dead) cannot reach 'run'
-  // visualState, so they're naturally excluded without explicit branches.
-  // Fly mode silences both for the same reason as movement.
-  private updateFootstepsSound(): void {
-    if (this.flyMode) {
-      setPlayerStateSoundActive(this.scene, 'footstepsGround', false);
-      setPlayerStateSoundActive(this.scene, 'footstepsBridge', false);
-      return;
-    }
-    const isRunning = this.currentVisualState === 'run';
-    const onGround = this.body.blocked.down || this.body.touching.down;
-    let tileValue = 0;
-    if (isRunning && onGround) {
-      const sceneWithIntGrid = this.scene as unknown as IntGridQueryScene;
-      tileValue = sceneWithIntGrid.getIntGridValueAt(
-        this.x,
-        this.body.bottom + FOOTSTEP_TILE_PROBE_OFFSET_Y,
-      );
-    }
-    setPlayerStateSoundActive(
-      this.scene,
-      'footstepsGround',
-      tileValue === INTGRID_GROUND_VALUE,
-    );
-    setPlayerStateSoundActive(
-      this.scene,
-      'footstepsBridge',
-      tileValue === INTGRID_BRIDGE_VALUE,
-    );
-  }
-
-  // One-shot land sound on every airborne → grounded transition where the
-  // descent from the airborne apex is at least MIN_LAND_FALL_DISTANCE_PX
-  // (~3 tiles). Small hops, terrain flicker, and the spawn settle don't
-  // accumulate enough vertical drop. Death blocks the sound: a dying body
-  // catching the floor mid-knockback shouldn't punctuate the death anim.
-  private updateLandingSound(): void {
-    if (this.lockedAction === 'dead') {
-      this.airborneApexY = null;
-      return;
-    }
-    const onGround = this.body.blocked.down || this.body.touching.down;
-    if (onGround) {
-      if (this.airborneApexY !== null) {
-        const fallDistance = this.y - this.airborneApexY;
-        this.airborneApexY = null;
-        if (fallDistance >= MIN_LAND_FALL_DISTANCE_PX) {
-          playOneShot(this.scene, LAND_SOUND_ID);
-        }
-      }
-    } else if (this.airborneApexY === null || this.y < this.airborneApexY) {
-      // First airborne frame OR the player kept ascending past last apex —
-      // record/raise the apex so the eventual fall is measured from the
-      // true peak, not the launch point.
-      this.airborneApexY = this.y;
-    }
-  }
-
-  // Soft wind whoosh that swells in while the player is in a sustained free
-  // fall. A continuous-fall timer (fallWhooshElapsedMs) gates the sound behind
-  // FALL_WHOOSH_DELAY_MS so brief hops and ledge steps never trigger it — only
-  // falls long enough to build speed do. Excludes wall-slides (the scrape loop
-  // already covers that descent), the rising half of a jump, death, and fly
-  // mode. The slot fades IN slowly on activation and OUT quickly on landing
-  // via the per-call fade durations passed to setPlayerStateSoundActive.
-  private updateFallingSound(): void {
-    const onGround = this.body.blocked.down || this.body.touching.down;
-    const descending = this.body.velocity.y > 0;
-    const dead = this.lockedAction === 'dead';
-    const wallSliding = this.wallSlideDirection !== 0;
-    const falling =
-      !this.flyMode && !onGround && descending && !dead && !wallSliding;
-
-    if (falling) {
-      this.fallWhooshElapsedMs += this.scene.game.loop.delta;
-    } else {
-      this.fallWhooshElapsedMs = 0;
-    }
-
-    const active = this.fallWhooshElapsedMs >= FALL_WHOOSH_DELAY_MS;
-    setPlayerStateSoundActive(
-      this.scene,
-      'falling',
-      active,
-      active ? FALL_WHOOSH_FADE_IN_MS : FALL_WHOOSH_FADE_OUT_MS,
+  // IntGrid value under the player's feet, for the footstep surface pick.
+  // Body.bottom sits at the top edge of the floor tile while standing; the
+  // probe offset lands safely inside the tile beneath.
+  private probeFootSurface(): number {
+    const sceneWithIntGrid = this.scene as unknown as IntGridQueryScene;
+    return sceneWithIntGrid.getIntGridValueAt(
+      this.x,
+      this.body.bottom + FOOTSTEP_TILE_PROBE_OFFSET_Y,
     );
   }
 
