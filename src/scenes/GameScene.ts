@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import {
   clearEntitySounds,
   debugAudioCounts,
+  playMusic,
   playOneShot,
   registerEnemyWalkSound,
   registerEntityPeriodicSound,
@@ -20,6 +21,7 @@ import {
   BOSS_KEYS,
   CAMERA_ZOOM,
   ENEMY_GUNSHOT_HEARING_RADIUS_PX,
+  NAV_MAX_EXPANSIONS,
   ENTITY_DEPTH,
   FINAL_BOSS_IDENTIFIER,
   VICTORY_DELAY_MS,
@@ -46,6 +48,7 @@ import {
   LANDING_BLACK_HOLD_MS,
   LANDING_FADE_IN_MS,
   LANDING_FADE_OUT_MS,
+  MUSIC_MAIN_THEME_SOUND_ID,
   PLAYER_DEPTH,
   RESPAWN_DELAY_MS,
   SAVE_REQUESTED_EVENT,
@@ -119,6 +122,9 @@ import type { LdtkProject } from '../ldtk/types';
 import { subscribeLdtkUpdate } from '../level/HotReloadBus';
 import { EnemyRespawnManager, type PendingRespawn } from '../level/EnemyRespawnManager';
 import { buildIntGridCollision } from '../level/LevelCollision';
+import { NavGraph, type NavLevel } from '../level/NavGraph';
+import { findPath } from '../level/NavPathfinder';
+import { NavDebugOverlay } from '../level/navDebugOverlay';
 import {
   destroyRenderedLevel,
   renderLevel,
@@ -209,6 +215,11 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   // frame; toggling whole levels' container visibility lets Phaser skip the
   // children entirely, dropping per-frame work to just the visible levels.
   private levelSlots: LevelSlot[] = [];
+  // Enemy navigation graph (A* pathfinding over the IntGrid collision) + its
+  // developer overlay (toggled with N). Built in buildWorld, rebuilt on hot
+  // reload. null until the world is built.
+  private navGraph: NavGraph | null = null;
+  private navOverlay: NavDebugOverlay | null = null;
   // Plain GameObjects.Group, not a physics group: Phaser.Physics.Arcade.Group's
   // createCallback re-applies its `defaults` to every added child's body —
   // including allowGravity:true and velocityX/Y:0 — clobbering the projectile's
@@ -408,6 +419,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
         },
       });
     }
+    // Start the looping soundtrack as the home screen comes up. It's owned by
+    // the game-global sound manager (so it rides through the landing→gameplay
+    // handoff, level changes, and respawns without restarting) and gated only
+    // by the music preference. Idempotent, so a respawn re-running create()
+    // never restarts it. Audio is still locked here on first boot, so the
+    // MusicPlayer defers actual playback to the first user gesture.
+    playMusic(this, MUSIC_MAIN_THEME_SOUND_ID);
+
     if (this.shouldShowLanding) {
       // Landing path: freeze the player, snap the camera to the landing
       // framing, and launch LandingScene on top. HUD + ambience are deferred
@@ -431,6 +450,8 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // listeners while the scene is paused, so ESC inside PauseScene goes to
     // PauseScene's own handler without double-firing here.
     this.input.keyboard?.on('keydown-ESC', this.openPauseMenu, this);
+    // N toggles the navigation-graph developer overlay (nodes/edges/paths).
+    this.input.keyboard?.on('keydown-N', this.toggleNavDebug, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.onSceneShutdown, this);
   }
 
@@ -801,6 +822,27 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.cullOffscreenLevels();
     this.updateAmbience();
     updateEntitySounds(this.player.x, this.player.y);
+    if (this.navOverlay?.isVisible()) {
+      this.navOverlay.render(this.collectNavDebugPaths());
+    }
+  }
+
+  // Toggles the navigation-graph developer overlay (bound to N).
+  private toggleNavDebug(): void {
+    this.navOverlay?.toggle();
+  }
+
+  // Gathers every live enemy's current nav path for the debug overlay. Only
+  // called while the overlay is visible.
+  private collectNavDebugPaths(): ReadonlyArray<
+    ReadonlyArray<{ x: number; y: number }>
+  > {
+    const paths: ReadonlyArray<{ x: number; y: number }>[] = [];
+    this.forEachEnemy((enemy) => {
+      const p = enemy.getNavPathForDebug();
+      if (p && p.length >= 2) paths.push(p);
+    });
+    return paths;
   }
 
   // Per-frame proximity tick for ejector traps. Trigger condition depends on
@@ -1432,6 +1474,32 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     return false;
   }
 
+  // Enemy navigation: A* a grounded route from a start foot point to a goal foot
+  // point over the nav graph, returned as world-px waypoints (node foot centers)
+  // the enemy follows with its existing hop/leap/mount locomotion. Returns null
+  // when there's no graph, either endpoint can't snap to a standable node, or no
+  // route exists within the expansion budget — the caller then falls back to
+  // reactive steering. Part of the EnemyHelperScene contract.
+  findEnemyPath(
+    startX: number,
+    startY: number,
+    goalX: number,
+    goalY: number,
+  ): ReadonlyArray<{ x: number; y: number }> | null {
+    const graph = this.navGraph;
+    if (!graph) return null;
+    const startId = graph.nodeAt(startX, startY);
+    if (startId < 0) return null;
+    const goalId = graph.nodeAt(goalX, goalY);
+    if (goalId < 0) return null;
+    const ids = findPath(graph, startId, goalId, NAV_MAX_EXPANSIONS);
+    if (!ids) return null;
+    return ids.map((id) => {
+      const n = graph.node(id);
+      return { x: n.x, y: n.y };
+    });
+  }
+
   // Returns the world-space rect of the LDtk level containing (x, y), or
   // null if the point lies in inter-level whitespace. Used by arena-bound
   // bosses (e.g. The_heart_hoarder) to capture their spawn level at
@@ -1657,6 +1725,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
 
     // Render every level at its world coords. LevelRenderer offsets its
     // containers by level.worldX/Y so the multi-level world lines up.
+    const navLevels: NavLevel[] = [];
     for (const lvl of project.levels) {
       const rendered = renderLevel(this, project, lvl);
       const intGrid = getIntGrid(lvl);
@@ -1678,8 +1747,24 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
           lvl.worldY,
         );
         this.collisionLayers.push(collisionLayer);
+        navLevels.push({
+          worldX: lvl.worldX,
+          worldY: lvl.worldY,
+          cWid: intGrid.cWid,
+          cHei: intGrid.cHei,
+          gridSize: intGrid.gridSize,
+          csv: intGrid.csv,
+        });
       }
     }
+
+    // Navigation graph for enemy pathfinding, built from the same IntGrid
+    // collision. The node pass is eager (cheap O(1)-per-cell); edges compute
+    // lazily as A* expands, so the costly ballistic edge probing is paid only for
+    // nodes actually searched.
+    this.navGraph = new NavGraph(navLevels);
+    this.navGraph.buildNodes();
+    this.navOverlay = new NavDebugOverlay(this, this.navGraph);
 
     this.projectiles = this.add.group();
     this.enemies = this.add.group();
@@ -2165,6 +2250,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       map.destroy();
     }
     this.collisionLayers = [];
+
+    // Navigation graph + overlay are rebuilt by the next buildWorld (HMR /
+    // restart), so dispose the current ones — the overlay owns a Graphics object
+    // that would otherwise leak and keep drawing the stale graph.
+    this.navOverlay?.destroy();
+    this.navOverlay = null;
+    this.navGraph = null;
 
     for (const slot of this.levelSlots) {
       destroyRenderedLevel(slot.rendered);
@@ -2689,6 +2781,10 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // scene.restart() respawn fallback, both of which do fire SHUTDOWN.
     clearEntitySounds();
     this.input.keyboard?.off('keydown-ESC', this.openPauseMenu, this);
+    this.input.keyboard?.off('keydown-N', this.toggleNavDebug, this);
+    this.navOverlay?.destroy();
+    this.navOverlay = null;
+    this.navGraph = null;
     // Tear down the boss HUD explicitly so its banner tween + graphics don't
     // outlive the scene; reset the engagement trackers for a clean restart.
     this.bossHud?.destroy();

@@ -36,10 +36,13 @@ export {
 } from './animationSoundTriggersLoader';
 export {
   isMusicEnabled,
-  setMusicEnabled,
-  toggleMusicEnabled,
-  onMusicEnabledChange,
+  getMusicVolume,
+  setMusicVolume,
+  toggleMusicMuted,
+  onMusicVolumeChange,
+  DEFAULT_MUSIC_VOLUME,
 } from './musicSettings';
+export { playMusic } from './MusicPlayer';
 export type {
   SoundCategory,
   SoundDefinition,

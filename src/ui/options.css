@@ -39,15 +39,22 @@
   margin: 0;
 }
 
-/* Sound toggle sits in the header's right slot (where the shop shows the coin
- * balance). A flat icon button — no chrome until hover/focus. */
-.options-sound-toggle {
+/* Music volume control in the header's right slot (where the shop shows the
+ * coin balance): a mute-toggle speaker icon followed by a range slider. */
+.options-volume {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Flat speaker button — no chrome until hover/focus. Click toggles mute. */
+.options-volume-mute {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 52px;
-  height: 52px;
-  padding: 8px;
+  width: 44px;
+  height: 44px;
+  padding: 6px;
   background: #1a1a1a;
   border: 1px solid #3a3a3a;
   cursor: pointer;
@@ -55,24 +62,76 @@
   transition: background 100ms linear;
 }
 
-.options-sound-toggle:hover,
-.options-sound-toggle:focus-visible {
+.options-volume-mute:hover,
+.options-volume-mute:focus-visible {
   background: #333333;
   outline: none;
 }
 
-/* The muted state dims the speaker so "off" reads at a glance even before the
- * icon swap registers. */
-.options-sound-toggle--muted {
-  opacity: 0.55;
-}
-
-.options-sound-icon {
-  width: 34px;
-  height: 34px;
+.options-volume-icon {
+  width: 30px;
+  height: 30px;
   /* Pixel-art source — keep edges crisp when scaled up in the DOM. */
   image-rendering: pixelated;
   image-rendering: crisp-edges;
+}
+
+/* Range slider styled to the panel's dark theme. The filled portion left of the
+ * thumb is drawn with a gradient driven by the --volume-fill custom property
+ * (set in ManualOverlay.syncVolumeUI); the remainder is the empty track. */
+.options-volume-slider {
+  --volume-fill: 45%;
+  -webkit-appearance: none;
+  appearance: none;
+  width: 150px;
+  height: 6px;
+  border: 1px solid #3a3a3a;
+  background: linear-gradient(
+    to right,
+    #e6e6e6 0%,
+    #e6e6e6 var(--volume-fill),
+    #1a1a1a var(--volume-fill),
+    #1a1a1a 100%
+  );
+  cursor: pointer;
+  outline: none;
+}
+
+/* The muted state dims the bar so "off" reads at a glance. */
+.options-volume-slider--muted {
+  opacity: 0.55;
+}
+
+/* Thumb — square white handle matching the panel's key chips. WebKit/Blink and
+ * Firefox need separate rules; neither inherits from a shared selector. */
+.options-volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: #ffffff;
+  border: 1px solid #3a3a3a;
+  cursor: pointer;
+}
+
+.options-volume-slider:hover::-webkit-slider-thumb,
+.options-volume-slider:focus-visible::-webkit-slider-thumb {
+  border-color: #6a6a6a;
+}
+
+.options-volume-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: #ffffff;
+  border: 1px solid #3a3a3a;
+  border-radius: 0;
+  cursor: pointer;
+}
+
+/* Let the input's gradient background show through as the track in Firefox. */
+.options-volume-slider::-moz-range-track {
+  height: 6px;
+  background: transparent;
 }
 
 /* === CONTROL CATEGORIES ============================================= */

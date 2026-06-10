@@ -1,5 +1,11 @@
 {
   "sounds": {
+    "main_theme": {
+      "path": "assets/audio/music/main_theme.ogg",
+      "category": "music",
+      "loop": true,
+      "defaultVolume": 0.45
+    },
     "cave_drips_flowing": {
       "path": "assets/audio/ambience/cave_drips_flowing.ogg",
       "category": "ambience",

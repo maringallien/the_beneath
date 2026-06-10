@@ -17,9 +17,12 @@ import {
   ENEMY_CONFLICT_WINDOW_MS,
   ENEMY_DETECTION_RANGE_PX,
   ENEMY_HEALTH_MULTIPLIER,
+  ENEMY_HUNT_SPEED_MUL,
+  ENEMY_RETURN_POST_TIMEOUT_MS,
   ENEMY_SEARCH_FLIP_MS,
   ENEMY_SEARCH_LOOK_MS,
   ENEMY_SEARCH_REACH_DIST_PX,
+  ENEMY_SEARCH_TRAVEL_TIMEOUT_MS,
   ENEMY_SPOT_STOP_MS,
   ENEMY_VISION_HALF_ANGLE_DEG,
   ENEMY_VISION_NEAR_RADIUS_PX,
@@ -27,6 +30,13 @@ import {
   HOARDER_SEPARATION_MIN_DX_PX,
   HOARDER_SEPARATION_PUSH_SPEED,
   HORIZONTAL_CHASE_STANDOFF_DEADZONE_PX,
+  NAV_GOAL_HYSTERESIS_TILES,
+  NAV_LOS_GRACE_MS,
+  NAV_REPLAN_INTERVAL_MS,
+  NAV_STALL_COOLDOWN_MS,
+  NAV_STALL_MS,
+  NAV_WAYPOINT_REACH_X_PX,
+  NAV_WAYPOINT_REACH_Y_PX,
   PLAYER_JUMP_VELOCITY,
   PLAYER_RUN_SPEED,
 } from '../constants';
@@ -352,6 +362,17 @@ interface EnemyHelperScene {
   // Used to gate surface-specific footstep loops during chase — mirrors the
   // probe Player.ts uses to switch between pebble and metal-stairs slots.
   getIntGridValueAt(x: number, y: number): number;
+  // A* a grounded route over the nav graph from a start foot point to a goal foot
+  // point, returned as world-px waypoints (node foot centers), or null when
+  // there's no graph / no route / either endpoint can't snap to a node. The enemy
+  // follows the waypoints with its existing hop/leap/mount locomotion; the caller
+  // falls back to reactive steering on null.
+  findEnemyPath(
+    startX: number,
+    startY: number,
+    goalX: number,
+    goalY: number,
+  ): ReadonlyArray<{ x: number; y: number }> | null;
   // World rect of the LDtk level containing (x, y), or null if the point sits
   // outside any level. Used by arena-bound bosses to snapshot their spawn
   // level on construction so movement/teleport can be clamped to the arena.
@@ -708,6 +729,27 @@ export class Enemy extends AnimatedEntity {
   private lastSeenX = 0;
   private lastSeenY = 0;
   private hasLastSeen = false;
+
+  // ── A* nav path-following (NavGraph / NavPathfinder) ──────────────────────
+  // When aggro but blind to the target, the enemy follows an A* route toward the
+  // target's standable cell instead of grinding straight at it. navPath holds the
+  // world-px waypoints; navPathIdx is the current one; the rest throttle replans
+  // and detect when the goal has moved to a new tile. Shared by the chase and
+  // last-seen-search code (only one runs per frame).
+  private navPath: ReadonlyArray<{ x: number; y: number }> | null = null;
+  private navPathIdx = 0;
+  private navReplanAt = 0;
+  private navGoalCellX = Number.NaN;
+  private navGoalCellY = Number.NaN;
+  // Stall watchdog: wall-clock time of the last waypoint ADVANCE. If no waypoint
+  // advances for NAV_STALL_MS the route is abandoned (see followNavPath).
+  private navProgressAt = 0;
+  // After a stall-abandon, path-following is suppressed until this time so the
+  // enemy doesn't immediately re-path an unmakeable route (anti-bounce).
+  private navSuppressUntil = 0;
+  // While actively routing, pushed to now + NAV_LOS_GRACE_MS each frame; lets a
+  // momentary line-of-sight (a jump apex) pass without dropping the route.
+  private navHoldUntil = 0;
   // Resolved sight range / vision-cone half-angle (radians) for this instance —
   // authored overrides fall back to the global detection constants (computed
   // once in the constructor).
@@ -737,13 +779,26 @@ export class Enemy extends AnimatedEntity {
   private iconGlyph: AlertGlyph = 'none';
   private iconHideAt = 0;
   // ── Search-after-losing-sight (last-seen hunt + return to post) ───────────
+  // Scene-time by which the travel leg of a hunt must reach the last-seen / heard
+  // spot before it bails to the look-around scan regardless (ENEMY_SEARCH_TRAVEL_
+  // TIMEOUT_MS). Sentinel 0 == not currently hunting. Travel and the scan below
+  // are budgeted separately so a far gunshot is walked to, not abandoned mid-step.
+  private searchTravelUntil = 0;
   // Scene-time at which the current "look around the last-seen spot" scan ends.
+  // Armed only once the enemy ARRIVES (or is walled off), so it times the scan,
+  // not the travel.
   private searchLookUntil = 0;
   // Scene-time of the next facing flip while scanning ("looks around").
   private searchNextFlipAt = 0;
   // True once the enemy has given up the hunt and is walking back toward its
   // spawn / patrol post; cleared on arrival or on re-detecting the player.
   private returningToPost = false;
+  // Progress-gated give-up for the walk home: the deadline (armed on the first
+  // return frame, pushed out on every meaningful step closer) and the best
+  // distance-to-post seen so far. If no headway is made before the deadline the
+  // enemy settles where it is rather than pacing in place. See updateReturnToPost.
+  private returnPostDeadline = 0;
+  private returnPostBestDist = Infinity;
   // Overhead "?"/"!" detection glyph. Built only for enemies that can fight
   // (attack-less NPCs never detect), disposed via the DESTROY listener.
   private alertIcon: EnemyAlertIcon | null = null;
@@ -1518,6 +1573,32 @@ export class Enemy extends AnimatedEntity {
         this.enterEngagedFallback(player);
         return;
       }
+      // Nav path-following: when grounded and blind to the player, route around
+      // the blocking geometry via A* instead of grinding straight at it (or
+      // giving up). Cleared the instant line-of-sight returns, so in-sight
+      // chasing is unchanged. Airborne / converging chasers navigate in 2D /
+      // through scripted geometry and never route; bosses keep their hand-tuned
+      // (and arena-clamped) movement. While a route is active the enemy refreshes
+      // its aggro window so a detour that briefly leaves chaseRange doesn't drop
+      // it out of the chase mid-path.
+      let navWp: { x: number; y: number } | null = null;
+      if (this.body.allowGravity && !this.isBoss()) {
+        if (losBlocked) {
+          navWp = this.followNavPath(player.x, player.y);
+          if (navWp) {
+            this.refreshAggro();
+            this.navHoldUntil = now + NAV_LOS_GRACE_MS;
+          }
+        } else if (now < this.navHoldUntil && this.navPath !== null) {
+          // LOS only just cleared (e.g. at a jump apex) while mid-route — keep
+          // following briefly so a momentary sightline doesn't drop the path and
+          // bounce. A genuinely clear sightline lapses the grace and direct homing
+          // resumes below.
+          navWp = this.followNavPath(player.x, player.y);
+        } else {
+          this.clearNavPath();
+        }
+      }
       // Decide whether the chaser is actually making headway, to drive its
       // animation (walk while moving, idle pose while wedged) without ever leaving
       // the chase — see CHASE_STILL_GRACE_MS. Self-movement, not distance-to-
@@ -1591,8 +1672,28 @@ export class Enemy extends AnimatedEntity {
         const dir = this.facingDirection;
         const moveX = chaseLead.moveSpeed! * speedMul;
         const leapX = Math.max(moveX, ENEMY_LEAP_HORIZONTAL_SPEED);
+        // Following an A* route around blocking geometry: steer toward the next
+        // waypoint with the shared locomotion primitives and skip the straight-
+        // at-player logic (and the wedged-bail below — there's a path to walk).
+        if (navWp) {
+          this.steerToNavWaypoint(navWp, moveX);
+          return;
+        }
         if (this.body.blocked.down) {
           this.leapDirX = 0;
+          // Wedged against geometry with no sightline to the player: stop pushing
+          // into the wall. Stay in chase (the idle pose + silenced footsteps are
+          // already set above, since chaseMoving is false, and facing still tracks
+          // the player), so the instant LOS returns or the player closes the chase
+          // resumes — but don't grind meanwhile. Gated on !chaseMoving (no headway
+          // for CHASE_STILL_GRACE_MS), so an in-progress mount/leap/step is never
+          // cut off: a productive climb is airborne (out of this blocked.down
+          // branch) or still reads as moving. Airborne chasers bailed on losBlocked
+          // far above; converging (boss-room) chasers have losBlocked === false.
+          if (losBlocked && !chaseMoving) {
+            this.setVelocityX(0);
+            return;
+          }
           const blockedAhead =
             dir === 1 ? this.body.blocked.right : this.body.blocked.left;
           const playerAbove = dy < -UP_LEAP_MIN_RISE_PX;
@@ -2629,6 +2730,7 @@ export class Enemy extends AnimatedEntity {
   private onSpotted(): void {
     this.refreshAggro();
     this.returningToPost = false;
+    this.searchTravelUntil = 0;
     this.searchLookUntil = 0;
     this.investigateStopUntil = this.scene.time.now + ENEMY_SPOT_STOP_MS;
     if (!this.harmless) {
@@ -2655,9 +2757,12 @@ export class Enemy extends AnimatedEntity {
       this.onSpotted();
     } else {
       // Already hunting — retarget to the newer, louder cue and keep the aggro
-      // window (and the search) alive without re-flashing the telegraph.
+      // window alive without re-flashing the telegraph. Re-arm both hunt budgets
+      // so it beelines to the NEW spot rather than continuing toward the stale one
+      // or sitting in a finished scan.
       this.refreshAggro();
       this.returningToPost = false;
+      this.searchTravelUntil = 0;
       this.searchLookUntil = 0;
     }
   }
@@ -2677,6 +2782,7 @@ export class Enemy extends AnimatedEntity {
 
     if (visible) {
       this.returningToPost = false;
+      this.searchTravelUntil = 0;
       this.searchLookUntil = 0;
       const wasAware = this.isAggro();
       this.recordLastSeen(player);
@@ -2745,21 +2851,18 @@ export class Enemy extends AnimatedEntity {
     );
   }
 
-  // Hunt the player's last-seen location: walk to it, scan the area ("looks
-  // around"), then give up. Bounded by ENEMY_SEARCH_LOOK_MS so a hunt that never
-  // reaches the spot (blocked path) still ends. Re-seeing the player drops out
-  // of search immediately (isSearching → false the moment lastVisible flips).
+  // Hunt the player's last-seen / heard location in two phases: TRAVEL — beeline
+  // to the spot at the hunt pace, keeping the aggro window alive so a far gunshot
+  // is actually reached — then LOOK — scan the area ("looks around") and give up.
+  // The travel backstop (ENEMY_SEARCH_TRAVEL_TIMEOUT_MS) ends a hunt that can't
+  // reach the spot (blocked path); re-seeing the player drops out of search
+  // immediately (isSearching → false the moment lastVisible flips).
   private updateSearch(player: Player): void {
     const now = this.scene.time.now;
-    if (this.searchLookUntil === 0) {
-      // First frame of this hunt — arm the overall budget + first scan flip.
-      this.searchLookUntil = now + ENEMY_SEARCH_LOOK_MS;
-      this.searchNextFlipAt = now + ENEMY_SEARCH_FLIP_MS;
-    }
-    if (now >= this.searchLookUntil) {
-      this.giveUpHunt();
-      this.enterIdleOrLoiter(player);
-      return;
+    if (this.searchTravelUntil === 0 && this.searchLookUntil === 0) {
+      // First frame of this hunt — arm the travel backstop. The look-around scan
+      // budget is armed later, the moment the enemy arrives (or is walled off).
+      this.searchTravelUntil = now + ENEMY_SEARCH_TRAVEL_TIMEOUT_MS;
     }
 
     const dxSeen = this.lastSeenX - this.x;
@@ -2768,13 +2871,42 @@ export class Enemy extends AnimatedEntity {
     const moveSpeed = this.effectiveMoveSpeed();
     const canMove = moveSpeed != null && !this.behavior.immovable;
     const arrived = distSeen <= ENEMY_SEARCH_REACH_DIST_PX;
+    // A tall wall between the searcher and the last-seen spot (e.g. a gunshot
+    // heard through a wall) can't be crossed by the hunt's hop-only locomotion.
+    // Treat it like "arrived": stop and run the look-around scan rather than
+    // grinding the wall for the whole travel budget.
+    const dirSeen: 1 | -1 = dxSeen >= 0 ? 1 : -1;
+    const wallBlocked =
+      canMove && this.body.allowGravity && this.isBlockedByWall(dirSeen);
+    // Route around blocking geometry to the last-seen / heard spot via A* when a
+    // straight hop-only beeline won't reach it (e.g. a gunshot heard through a
+    // wall). null when no route exists — then the wall-block gate below sends the
+    // enemy to the look-around scan instead of grinding the wall.
+    const navWp =
+      canMove && this.body.allowGravity && !arrived
+        ? this.followNavPath(this.lastSeenX, this.lastSeenY)
+        : null;
 
-    if (!arrived && canMove) {
-      // Travel toward the last-seen spot at the on-the-hunt pace, facing the way
-      // it moves. Grounded enemies steer X only; airborne steer in 2D.
-      const speed = moveSpeed * this.alertSpeedMul * this.chaseSpeedMul;
-      this.facingDirection = dxSeen >= 0 ? 1 : -1;
-      this.setFacing(this.facingDirection === -1);
+    // ── Travel phase ──────────────────────────────────────────────────────
+    // Still en route, able to move, and inside the travel backstop: head to the
+    // spot — following a nav route when one exists, else a straight beeline.
+    // Refresh the aggro window every step so a long trek to a distant gunshot
+    // doesn't lapse mid-walk — arrival (→ scan → give up) or the backstop ends the
+    // hunt, never the combat timeout catching the enemy in transit.
+    if (
+      !arrived &&
+      canMove &&
+      now < this.searchTravelUntil &&
+      (navWp !== null || !wallBlocked)
+    ) {
+      this.refreshAggro();
+      // Discard any look budget armed by a transient wall-block we've since
+      // cleared, so reaching the spot always earns a fresh scan rather than a
+      // half-elapsed one.
+      this.searchLookUntil = 0;
+      // Hunt pace — quicker than the in-sight chase so a faraway shot is closed
+      // on urgently.
+      const speed = moveSpeed * ENEMY_HUNT_SPEED_MUL * this.chaseSpeedMul;
       // Play the walk clip only on entry — replaying it every frame would freeze
       // it on frame 0 (play() restarts), matching the chase block's care.
       if (this.enemyState !== 'chase') {
@@ -2783,10 +2915,19 @@ export class Enemy extends AnimatedEntity {
         if (walkAnim) this.playLogical(walkAnim);
       }
       setEnemyWalkSoundEnabled(this, true, this.currentWalkSurface());
-      if (this.body.allowGravity) {
+      if (navWp) {
+        // Follow the A* route around the obstacle.
+        this.steerToNavWaypoint(navWp, speed);
+      } else if (this.body.allowGravity) {
+        // No route — straight grounded beeline (steers X only).
+        this.facingDirection = dirSeen;
+        this.setFacing(this.facingDirection === -1);
         if (this.shouldJumpOverObstacle()) this.setVelocityY(ENEMY_JUMP_VELOCITY);
         this.setVelocityX(speed * this.facingDirection);
       } else {
+        // Airborne hunt — steer in 2D toward the spot.
+        this.facingDirection = dirSeen;
+        this.setFacing(this.facingDirection === -1);
         const len = distSeen || 1;
         this.setVelocityX((dxSeen / len) * speed);
         this.setVelocityY(
@@ -2796,8 +2937,19 @@ export class Enemy extends AnimatedEntity {
       return;
     }
 
-    // Arrived (or can't move): stop and scan, flipping to look the other way on
-    // a steady cadence.
+    // ── Look-around phase ─────────────────────────────────────────────────
+    // Arrived, walled off, immovable, or the travel backstop fired. Arm the scan
+    // budget once, then stop and flip to look each way on a steady cadence until
+    // it lapses, at which point the hunt ends.
+    if (this.searchLookUntil === 0) {
+      this.searchLookUntil = now + ENEMY_SEARCH_LOOK_MS;
+      this.searchNextFlipAt = now + ENEMY_SEARCH_FLIP_MS;
+    }
+    if (now >= this.searchLookUntil) {
+      this.giveUpHunt();
+      this.enterIdleOrLoiter(player);
+      return;
+    }
     if (!this.behavior.immovable) {
       this.setVelocityX(0);
       if (!this.body.allowGravity) this.setVelocityY(0);
@@ -2812,15 +2964,20 @@ export class Enemy extends AnimatedEntity {
   }
 
   // Ends the hunt now: drop the aggro/converge windows, clear the last-seen
-  // memory, and (for enemies that can't passively drift home — stationary
-  // guards) arm an explicit walk back to the spawn post.
+  // memory, and arm an explicit walk back to the spawn post. Every enemy returns
+  // (not just stationary guards): an enemy that A*-routed across rooms to a
+  // gunshot can't retrace the way home on reactive loiter/wander alone, so
+  // updateReturnToPost path-finds it back, after which normal patrol resumes.
   private giveUpHunt(): void {
     this.aggroUntil = 0;
     this.convergeUntil = 0;
     this.investigateStopUntil = 0;
+    this.searchTravelUntil = 0;
     this.searchLookUntil = 0;
     this.hasLastSeen = false;
-    this.returningToPost = !this.canLoiter();
+    this.clearNavPath();
+    this.returningToPost = true;
+    this.returnPostDeadline = 0; // armed fresh on the first updateReturnToPost frame
   }
 
   // True while walking back to the spawn post after giving up (only for enemies
@@ -2835,32 +2992,79 @@ export class Enemy extends AnimatedEntity {
   // Walks the enemy back toward its spawn point at a calm pace, then resumes
   // idle. Grounded enemies steer X only (gravity carries the rest).
   private updateReturnToPost(): void {
+    const now = this.scene.time.now;
     const moveSpeed = this.effectiveMoveSpeed();
     if (moveSpeed == null || this.behavior.immovable) {
-      this.returningToPost = false;
-      this.enterIdle();
+      this.finishReturnToPost();
       return;
     }
     const dxHome = this.spawnX - this.x;
     const dyHome = this.spawnY - this.y;
+    const grounded = this.body.allowGravity;
+    // Arrived: a grounded enemy judges by HORIZONTAL distance (gravity owns Y, and
+    // a small foot-vs-spawn-point Y offset must not block arrival and leave it
+    // jittering at the post); airborne judges in 2D. The Y bound still rejects a
+    // false "home" on a different floor directly above/below the post.
+    const homeReached = grounded
+      ? Math.abs(dxHome) <= ENEMY_SEARCH_REACH_DIST_PX &&
+        Math.abs(dyHome) <= TILE_PX * 2
+      : Math.hypot(dxHome, dyHome) <= ENEMY_SEARCH_REACH_DIST_PX;
+    if (homeReached) {
+      this.finishReturnToPost();
+      return;
+    }
+    // Progress-gated give-up: arm the deadline on the first frame and push it out
+    // whenever the enemy gets meaningfully closer to the post. If it makes no
+    // headway for ENEMY_RETURN_POST_TIMEOUT_MS (route stalled, post unreachable —
+    // e.g. behind a now-closed door), settle here rather than pacing forever.
     const distHome = Math.hypot(dxHome, dyHome);
-    if (distHome <= ENEMY_SEARCH_REACH_DIST_PX) {
-      this.returningToPost = false;
-      this.enterIdle();
+    if (
+      this.returnPostDeadline === 0 ||
+      distHome < this.returnPostBestDist - TILE_PX
+    ) {
+      this.returnPostBestDist = distHome;
+      this.returnPostDeadline = now + ENEMY_RETURN_POST_TIMEOUT_MS;
+    } else if (now >= this.returnPostDeadline) {
+      this.finishReturnToPost();
       return;
     }
     const speed = moveSpeed * LOITER_SPEED_MULTIPLIER;
-    this.facingDirection = dxHome >= 0 ? 1 : -1;
-    this.setFacing(this.facingDirection === -1);
-    // Walk clip on entry only (play() restarts, so a per-frame call would freeze
-    // it on frame 0).
+    // Route home around walls/doors via A* — the enemy may have crossed terrain to
+    // reach the shot that a straight walk-back can't retrace.
+    const navWp = grounded ? this.followNavPath(this.spawnX, this.spawnY) : null;
+    // Hold still (rather than reactive-beeline) while a stalled route cools down —
+    // the reactive direction can oppose the route's and produce the left/right
+    // oscillation — or when already horizontally home (a different floor). Decided
+    // before the clip so a held enemy shows idle, not a walk-in-place.
+    const holding =
+      navWp === null &&
+      (now < this.navSuppressUntil ||
+        (grounded && Math.abs(dxHome) <= ENEMY_SEARCH_REACH_DIST_PX));
+    if (holding) {
+      if (this.enemyState !== 'idle') this.enterIdle();
+      if (!this.behavior.immovable) {
+        this.setVelocityX(0);
+        if (!grounded) this.setVelocityY(0);
+      }
+      setEnemyWalkSoundEnabled(this, false);
+      return;
+    }
+    // Moving home — walk clip on entry only (play() restarts, so a per-frame call
+    // would freeze it on frame 0).
     if (this.enemyState !== 'chase') {
       this.enemyState = 'chase';
       const walkAnim = this.effectiveWalkAnimation();
       if (walkAnim) this.playLogical(walkAnim);
     }
     setEnemyWalkSoundEnabled(this, true, this.currentWalkSurface());
-    if (this.body.allowGravity) {
+    if (navWp) {
+      this.steerToNavWaypoint(navWp, speed);
+      return;
+    }
+    // Genuinely no route — a gentle reactive beeline toward the post.
+    this.facingDirection = dxHome >= 0 ? 1 : -1;
+    this.setFacing(this.facingDirection === -1);
+    if (grounded) {
       if (this.shouldJumpOverObstacle()) this.setVelocityY(ENEMY_JUMP_VELOCITY);
       this.setVelocityX(speed * this.facingDirection);
     } else {
@@ -2870,6 +3074,16 @@ export class Enemy extends AnimatedEntity {
         this.behavior.horizontalMovementOnly ? 0 : (dyHome / len) * speed,
       );
     }
+  }
+
+  // Ends a return-to-post: clears the flag + deadline + nav path and drops to
+  // idle (normal idle → loiter/wander resumes next frame).
+  private finishReturnToPost(): void {
+    this.returningToPost = false;
+    this.returnPostDeadline = 0;
+    this.returnPostBestDist = Infinity;
+    this.clearNavPath();
+    this.enterIdle();
   }
 
   // External trigger to force this entity into pursuit without a blow having
@@ -3574,6 +3788,13 @@ export class Enemy extends AnimatedEntity {
           this.setVelocityX(0);
           this.turnBackFromEdge(dir);
         }
+      } else if (this.isBlockedByWall(dir)) {
+        // A wall too tall to hop stands directly ahead (the hop case above
+        // already handled short walls). The stroller can't mount it, so turn
+        // back and pace away instead of grinding into it — same response as a
+        // ledge it can't leap.
+        this.setVelocityX(0);
+        this.turnBackFromEdge(dir);
       } else {
         this.setVelocityX(moveSpeed * dir);
       }
@@ -4576,6 +4797,171 @@ export class Enemy extends AnimatedEntity {
     if (!helper.isTileSolidAt(aheadX, probeY)) return false;
     if (helper.isTileSolidAt(aheadX, probeY - 32)) return false;
     return true;
+  }
+
+  // True when an impassable wall stands directly ahead in `dir`: a solid tile at
+  // mid-foot height that is STILL solid a hop up (probeY - 32), so it's taller
+  // than shouldJumpOverObstacle can clear. The inverse of that probe — used by
+  // the wander and last-seen-search locomotion (neither mounts walls) to stop
+  // and turn back / scan instead of grinding a wall they can't pass. Grounded
+  // only; the chase loop uses its own wedged-headway tracker (CHASE_STILL_GRACE_MS)
+  // instead.
+  private isBlockedByWall(dir: 1 | -1): boolean {
+    if (!this.body.blocked.down) return false;
+    const helper = this.scene as unknown as EnemyHelperScene;
+    const aheadX = dir === 1 ? this.body.right + 4 : this.body.left - 4;
+    const probeY = this.body.bottom - 8;
+    return (
+      helper.isTileSolidAt(aheadX, probeY) &&
+      helper.isTileSolidAt(aheadX, probeY - 32)
+    );
+  }
+
+  // Returns the enemy's current nav path (world-px waypoints) for the debug
+  // overlay, or null when not path-following.
+  getNavPathForDebug(): ReadonlyArray<{ x: number; y: number }> | null {
+    return this.navPath;
+  }
+
+  // Drops the current nav path so the next pursuit replans from a clean state.
+  private clearNavPath(): void {
+    if (this.navPath === null) return;
+    this.navPath = null;
+    this.navPathIdx = 0;
+    this.navGoalCellX = Number.NaN;
+    this.navGoalCellY = Number.NaN;
+  }
+
+  // Maintains and advances an A* path toward (goalX, goalY) — the target's foot
+  // point — returning the world-px waypoint to steer toward this frame, or null
+  // when no route exists or the path is exhausted (caller falls back to reactive
+  // steering). Replans on a throttle, when the goal moves to a new tile, or when
+  // the path runs out. Grounded callers only.
+  private followNavPath(
+    goalX: number,
+    goalY: number,
+  ): { x: number; y: number } | null {
+    const now = this.scene.time.now;
+    // Post-stall cooldown: after abandoning a route it couldn't make progress on,
+    // don't immediately re-path the same way — use reactive locomotion for a beat
+    // so the enemy doesn't oscillate on an unmakeable jump.
+    if (now < this.navSuppressUntil) return null;
+    const goalCellX = Math.floor(goalX / TILE_PX);
+    const goalCellY = Math.floor(goalY / TILE_PX);
+    // Replan on the throttle, when the path is gone/exhausted, or when the goal
+    // has drifted at least NAV_GOAL_HYSTERESIS_TILES from the cell the current
+    // path targets. The hysteresis stops a walking player thrashing the path (and
+    // the follow direction) every tile crossed. The `!(... < ...)` form replans
+    // when the prior goal cell is NaN (first call), too.
+    const goalShift = Math.max(
+      Math.abs(goalCellX - this.navGoalCellX),
+      Math.abs(goalCellY - this.navGoalCellY),
+    );
+    if (
+      this.navPath === null ||
+      now >= this.navReplanAt ||
+      !(goalShift < NAV_GOAL_HYSTERESIS_TILES)
+    ) {
+      this.navReplanAt = now + NAV_REPLAN_INTERVAL_MS;
+      this.navGoalCellX = goalCellX;
+      this.navGoalCellY = goalCellY;
+      const helper = this.scene as unknown as EnemyHelperScene;
+      this.navPath = helper.findEnemyPath(
+        this.body.center.x,
+        this.body.bottom,
+        goalX,
+        goalY,
+      );
+      this.navPathIdx = 0;
+      this.navProgressAt = now;
+    }
+    const path = this.navPath;
+    if (path === null || path.length === 0) return null;
+    // Advance past waypoints already reached (the first is usually the enemy's
+    // own start cell, cleared immediately).
+    const prevIdx = this.navPathIdx;
+    while (this.navPathIdx < path.length) {
+      const wp = path[this.navPathIdx];
+      if (
+        Math.abs(wp.x - this.body.center.x) <= NAV_WAYPOINT_REACH_X_PX &&
+        Math.abs(wp.y - this.body.bottom) <= NAV_WAYPOINT_REACH_Y_PX
+      ) {
+        this.navPathIdx++;
+      } else {
+        break;
+      }
+    }
+    if (this.navPathIdx >= path.length) {
+      // Reached the goal cell — within a tile of the target. Clear so the caller
+      // steers directly from here.
+      this.navPath = null;
+      return null;
+    }
+    // Stall watchdog: progress is ADVANCING A WAYPOINT (not raw body movement — an
+    // up/down bounce on an unmakeable jump moves without getting anywhere). If no
+    // waypoint advances for NAV_STALL_MS, abandon the route and arm the cooldown
+    // so the enemy stops retrying it and falls back to reactive steering.
+    if (this.navPathIdx > prevIdx) {
+      this.navProgressAt = now;
+    } else if (now - this.navProgressAt > NAV_STALL_MS) {
+      this.clearNavPath();
+      this.navSuppressUntil = now + NAV_STALL_COOLDOWN_MS;
+      return null;
+    }
+    return path[this.navPathIdx];
+  }
+
+  // Steers one grounded step toward a nav waypoint, reusing the chase locomotion
+  // primitives (hop a short wall, leap a gap / up to the waypoint, mount a flush
+  // wall). The graph guarantees each waypoint is one such step from the last, so
+  // this never needs the player-chase's full climb-from-under search.
+  private steerToNavWaypoint(
+    wp: { x: number; y: number },
+    moveSpeed: number,
+  ): void {
+    const dir: 1 | -1 = wp.x >= this.body.center.x ? 1 : -1;
+    this.facingDirection = dir;
+    this.setFacing(dir === -1);
+    const leapX = Math.max(moveSpeed, ENEMY_LEAP_HORIZONTAL_SPEED);
+    if (this.body.blocked.down) {
+      this.leapDirX = 0;
+      const wpAbove = wp.y - this.body.bottom < -UP_LEAP_MIN_RISE_PX;
+      if (this.shouldJumpOverObstacle()) {
+        this.setVelocityY(ENEMY_JUMP_VELOCITY);
+        this.setVelocityX(moveSpeed * dir);
+      } else if (this.isLedgeAhead(dir) || wpAbove) {
+        const landing = this.findLeapLanding(dir, leapX, wp);
+        // For an ABOVE waypoint, only commit the leap if it actually gains height.
+        // When the body can't reach the upper node, findLeapLanding returns the
+        // best in-reach landing — which is back on THIS level — and leaping it
+        // just bounces in place. Skipping the leap lets the stall watchdog abandon
+        // the unmakeable route instead of oscillating on it. Gap/down leaps
+        // (wpAbove false) are unaffected.
+        const leapHelps =
+          landing !== null &&
+          (!wpAbove || landing.y < this.body.bottom - UP_LEAP_MIN_RISE_PX / 2);
+        if (leapHelps && landing) {
+          this.leapDirX = dir;
+          this.setVelocityY(landing.vy);
+          this.setVelocityX(leapX * dir);
+        } else {
+          const mountVy = wpAbove ? this.findWallMountLaunch(dir) : null;
+          if (mountVy !== null) {
+            this.leapDirX = dir;
+            this.setVelocityY(mountVy);
+            this.setVelocityX(leapX * dir);
+          } else {
+            this.setVelocityX(moveSpeed * dir);
+          }
+        }
+      } else {
+        this.setVelocityX(moveSpeed * dir);
+      }
+    } else if (this.leapDirX !== 0) {
+      this.setVelocityX(leapX * this.leapDirX);
+    } else {
+      this.setVelocityX(moveSpeed * dir);
+    }
   }
 
   // True when the floor stops just ahead of the leading foot — i.e. the enemy

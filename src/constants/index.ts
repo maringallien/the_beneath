@@ -507,10 +507,65 @@ export const ENEMY_CONFLICT_WINDOW_MS = 1500;
 // Bosses are exempt (movement is hand-tuned). Per-enemy override:
 // behavior.alertSpeedMul.
 export const ENEMY_ALERT_SPEED_MUL = 1.25;
-// Search-after-losing-sight: how long (ms) an enemy hunts the player's
-// last-seen spot — walking to it, then scanning — before giving up and
-// returning to its post. Capped by the aggro window (ENEMY_COMBAT_TIMEOUT_MS).
+// Travel pace while hunting a last-seen / heard spot the enemy can't currently
+// see (updateSearch), applied on top of moveSpeed. Higher than
+// ENEMY_ALERT_SPEED_MUL so a faraway gunshot is closed on urgently — the hunt is
+// a committed beeline to the spot, not the cautious in-sight chase. Kept separate
+// so the chase tuning (alertSpeedMul, per-enemy overridable) is untouched.
+export const ENEMY_HUNT_SPEED_MUL = 1.6;
+// Look-around budget (ms): once a hunting enemy ARRIVES at the last-seen / heard
+// spot (or is walled off from it), how long it scans the area — flipping to look
+// each way — before giving up and returning to its post. Times the scan ONLY;
+// travel to the spot is budgeted separately (ENEMY_SEARCH_TRAVEL_TIMEOUT_MS) so a
+// distant gunshot is actually reached instead of the timer lapsing mid-walk.
 export const ENEMY_SEARCH_LOOK_MS = 2500;
+// Travel backstop (ms): the longest a hunt spends walking toward the spot before
+// it stops and runs the look-around scan regardless. Normal termination is
+// arrival; this only bites when the spot can't be reached by the hop-only hunt
+// locomotion (no path). The aggro window is refreshed every travel step so a long
+// trek to a distant shot never times out mid-walk — this is the real upper bound.
+export const ENEMY_SEARCH_TRAVEL_TIMEOUT_MS = 20_000;
+// Backstop for returning to post after a hunt: if an enemy heading home makes no
+// headway toward its spawn for this long (route stalled, or the post is now
+// unreachable — e.g. behind a closed door), it stops and settles where it is
+// instead of pacing in place forever. The timer resets whenever it gets
+// meaningfully closer, so a long legitimate walk home is never cut short.
+export const ENEMY_RETURN_POST_TIMEOUT_MS = 5_000;
+// ── Enemy navigation (A* grid pathfinding over the IntGrid) ──────────────────
+// Max A* node expansions per path query. Caps the cost of a hopeless search (goal
+// walled off / unreachable) so it bails in bounded time and the enemy falls back
+// to reactive locomotion instead of scanning the whole world graph.
+export const NAV_MAX_EXPANSIONS = 2000;
+// How often (ms) an enemy re-runs A* while following a path. Between replans it
+// follows its cached waypoints, so the search cost is ~3 Hz per blind enemy, not
+// per frame.
+export const NAV_REPLAN_INTERVAL_MS = 350;
+// A waypoint counts as reached when the foot is within this horizontal / vertical
+// world-px box of it, advancing the path to the next node. Y is looser so a
+// landing a touch above/below the node still counts.
+export const NAV_WAYPOINT_REACH_X_PX = 12;
+export const NAV_WAYPOINT_REACH_Y_PX = 28;
+// If a path-following enemy doesn't ADVANCE A WAYPOINT for this long, the route is
+// abandoned. Progress is measured by waypoint advancement, NOT raw body movement —
+// an enemy bouncing up and down on an unmakeable graph jump moves the body without
+// getting anywhere, and a displacement-based check would never fire. Also catches a
+// path through a now-closed door (doors are separate colliders the static graph
+// can't see). Long enough that one slow walk/jump edge never false-trips it.
+export const NAV_STALL_MS = 900;
+// After abandoning a stalled route, suppress path-following for this long so the
+// enemy uses reactive locomotion for a beat instead of immediately re-pathing the
+// same unmakeable way — turning a continuous up/down bounce into, at worst, a brief
+// occasional one.
+export const NAV_STALL_COOLDOWN_MS = 1200;
+// A moving target only forces a replan once it has drifted at least this many tiles
+// from the cell the current path targets. Stops a walking player from thrashing the
+// path (and the follow direction) every single tile it crosses.
+export const NAV_GOAL_HYSTERESIS_TILES = 2;
+// Grace window: once line-of-sight to the target returns, keep following the nav
+// route for this long before dropping to direct homing. Bridges the momentary
+// sightline an enemy gets at a jump's apex, so a single clear frame mid-route
+// doesn't abandon the path and bounce.
+export const NAV_LOS_GRACE_MS = 200;
 // Cadence (ms) at which a searching enemy flips to face the other way while
 // scanning its last-seen area ("looks around").
 export const ENEMY_SEARCH_FLIP_MS = 600;
@@ -522,7 +577,7 @@ export const ENEMY_SEARCH_REACH_DIST_PX = 20;
 // carries through walls — and investigates the exact spot it was fired from.
 // Deliberately much larger than the vision range (ENEMY_DETECTION_RANGE_PX, 220)
 // so guns are conspicuous and the silent sword/magic stay the stealthy option.
-export const ENEMY_GUNSHOT_HEARING_RADIUS_PX = 900;
+export const ENEMY_GUNSHOT_HEARING_RADIUS_PX = 1400;
 // Sound id (soundRegistry) for the one-shot detection sting played the instant
 // an enemy spots the player. A no-op when the id isn't registered (playOneShot
 // returns null), so the system runs fine until an asset is wired in.
@@ -950,10 +1005,11 @@ export const PAUSE_UNSELECTED_TINT = 0x808080;
 // Options panel, opened from the pause menu's OPTIONS button. Rendered as a DOM
 // overlay that reuses the merchant shop's grey framed-panel idiom (see
 // src/ui/OptionsOverlay + shop.css) so it reads as the same piece of in-world
-// UI. Lists the game's controls and exposes a music on/off toggle. The toggle
-// swaps between a speaker icon (music on) and a muted-speaker icon (music off);
-// both ship in /public and are referenced as plain <img>, so unlike the pause
-// word banners they need no Phaser texture preloading.
+// UI. Lists the game's controls and exposes a music volume bar with a
+// mute-toggle speaker icon, which swaps between a speaker icon (audible) and a
+// muted-speaker icon (volume 0); both ship in /public and are referenced as
+// plain <img>, so unlike the pause word banners they need no Phaser texture
+// preloading.
 export const OPTIONS_SOUND_ON_ICON_PATH =
   '/DarkSpriteLib/general/ui/icons/ui_-_icons6.png';
 export const OPTIONS_SOUND_OFF_ICON_PATH =
@@ -969,6 +1025,15 @@ export const OPTIONS_SOUND_OFF_ICON_PATH =
 //     commits to Start on the landing page and when the player dies.
 export const UI_BUTTON_HOVER_SOUND_ID = 'button_hover';
 export const UI_BOOM_SOUND_ID = 'boom_low_hit';
+
+// The game's looping soundtrack ("ES_Distressed - Hanna Ekstrom"). Started once
+// from GameScene.create() via the MusicPlayer (src/audio/MusicPlayer.ts) so it
+// plays on the home screen as the game loads and persists across the whole
+// session — through the landing→gameplay handoff, level transitions, respawns,
+// and New Game. It is the ONLY sound gated by the music volume preference (the
+// OPTIONS volume bar); ambience and SFX play regardless. Registered in
+// soundRegistry.json under the "music" category.
+export const MUSIC_MAIN_THEME_SOUND_ID = 'main_theme';
 
 // Merchant shops. Tech_shop_spawn sells ammo; Mushroom_merchant_spawn sells
 // magic orbs. The merchant entity emits SHOP_REQUESTED_EVENT on hold-E commit

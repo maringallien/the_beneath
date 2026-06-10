@@ -1,24 +1,13 @@
 import Phaser from 'phaser';
-import { isMusicEnabled, onMusicEnabledChange } from './audio';
 import { gameConfig } from './config/gameConfig';
 
 const game = new Phaser.Game(gameConfig);
 
-// Apply the music/sound preference (toggled from the pause-menu options panel)
-// to the game's global sound manager, and keep it in sync whenever the player
-// flips it. There is no dedicated music track yet, so the preference currently
-// drives the MASTER mute — turning it off silences ambience + SFX too, and a
-// future music bus would be scoped here instead. `game.sound` is only created
-// during boot, so the initial apply waits for the READY event; later toggles
-// run well after boot when the manager is live. The guard keeps both paths
-// safe regardless of timing.
-const applyAudioPreference = (): void => {
-  if (game.sound) {
-    game.sound.mute = !isMusicEnabled();
-  }
-};
-game.events.once(Phaser.Core.Events.READY, applyAudioPreference);
-onMusicEnabledChange(applyAudioPreference);
+// The music on/off preference (the OPTIONS speaker icon) gates ONLY the
+// soundtrack now — it is applied by the MusicPlayer (src/audio/MusicPlayer.ts),
+// which subscribes to the preference and fades the looping track in/out. It is
+// deliberately NOT wired to game.sound.mute here: ambience and SFX must keep
+// playing when music is muted, so there is no master-mute apply in this file.
 
 // Pause all audio while the game tab is in the background.
 //

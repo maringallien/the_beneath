@@ -3,7 +3,7 @@ import {
   OPTIONS_SOUND_OFF_ICON_PATH,
   OPTIONS_SOUND_ON_ICON_PATH,
 } from '../constants';
-import { isMusicEnabled, toggleMusicEnabled } from '../audio';
+import { getMusicVolume, setMusicVolume, toggleMusicMuted } from '../audio';
 import './shop.css';
 import './options.css';
 import './manual.css';
@@ -59,8 +59,8 @@ export class ManualOverlay {
 
   private overlayEl: HTMLDivElement | null = null;
   private contentHostEl: HTMLDivElement | null = null;
-  private soundButtonEl: HTMLButtonElement | null = null;
-  private soundIconEl: HTMLImageElement | null = null;
+  private volumeIconEl: HTMLImageElement | null = null;
+  private volumeSliderEl: HTMLInputElement | null = null;
   private onClose: (() => void) | null = null;
   private keydownHandler: ((e: KeyboardEvent) => void) | null = null;
 
@@ -109,8 +109,8 @@ export class ManualOverlay {
       this.overlayEl = null;
     }
     this.contentHostEl = null;
-    this.soundButtonEl = null;
-    this.soundIconEl = null;
+    this.volumeIconEl = null;
+    this.volumeSliderEl = null;
     this.onClose = null;
     this.activeIndex = 0;
   }
@@ -134,7 +134,7 @@ export class ManualOverlay {
     this.parent.appendChild(overlay);
 
     this.overlayEl = overlay;
-    this.syncSoundToggle();
+    this.syncVolumeUI();
     this.setActiveTab(0);
   }
 
@@ -147,27 +147,48 @@ export class ManualOverlay {
     title.textContent = 'How to Play';
     header.appendChild(title);
 
-    header.appendChild(this.buildSoundToggle());
+    header.appendChild(this.buildVolumeControl());
     return header;
   }
 
-  private buildSoundToggle(): HTMLButtonElement {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'options-sound-toggle';
+  // Music volume bar in the header's right slot (where the shop shows the coin
+  // balance): a speaker icon that toggles mute on click, plus a range slider
+  // bound to the music volume preference. The MusicPlayer follows the slider
+  // live; ambience and SFX are unaffected.
+  private buildVolumeControl(): HTMLDivElement {
+    const wrap = document.createElement('div');
+    wrap.className = 'options-volume';
 
+    const muteButton = document.createElement('button');
+    muteButton.type = 'button';
+    muteButton.className = 'options-volume-mute';
     const icon = document.createElement('img');
-    icon.className = 'options-sound-icon';
-    button.appendChild(icon);
-
-    button.addEventListener('click', () => {
-      toggleMusicEnabled();
-      this.syncSoundToggle();
+    icon.className = 'options-volume-icon';
+    muteButton.appendChild(icon);
+    muteButton.addEventListener('click', () => {
+      toggleMusicMuted();
+      this.syncVolumeUI();
     });
 
-    this.soundButtonEl = button;
-    this.soundIconEl = icon;
-    return button;
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.min = '0';
+    slider.max = '100';
+    slider.step = '1';
+    slider.className = 'options-volume-slider';
+    // `input` fires continuously while dragging, so the music level tracks the
+    // bar in real time.
+    slider.addEventListener('input', () => {
+      setMusicVolume(slider.valueAsNumber / 100);
+      this.syncVolumeUI();
+    });
+
+    wrap.appendChild(muteButton);
+    wrap.appendChild(slider);
+
+    this.volumeIconEl = icon;
+    this.volumeSliderEl = slider;
+    return wrap;
   }
 
   private buildTabBar(): HTMLDivElement {
@@ -211,7 +232,7 @@ export class ManualOverlay {
     const hints: ReadonlyArray<{ keys: ReadonlyArray<string>; label: string }> =
       [
         { keys: ['←', '→'], label: 'Tabs' },
-        { keys: ['M'], label: 'Music' },
+        { keys: ['M'], label: 'Mute' },
         { keys: ['Esc'], label: 'Close' },
       ];
 
@@ -258,24 +279,38 @@ export class ManualOverlay {
     this.setActiveTab((this.activeIndex + delta + count) % count);
   }
 
-  private syncSoundToggle(): void {
-    if (!this.soundButtonEl || !this.soundIconEl) return;
-    const on = isMusicEnabled();
-    this.soundIconEl.src = on
-      ? OPTIONS_SOUND_ON_ICON_PATH
-      : OPTIONS_SOUND_OFF_ICON_PATH;
-    const stateLabel = on ? 'Music on' : 'Music off';
-    this.soundIconEl.alt = stateLabel;
-    this.soundButtonEl.setAttribute(
-      'aria-label',
-      `${stateLabel} (click to toggle)`,
-    );
-    this.soundButtonEl.setAttribute('aria-pressed', String(on));
-    this.soundButtonEl.classList.toggle('options-sound-toggle--muted', !on);
+  // Mirrors the current music volume into the slider, the speaker icon (on vs
+  // muted), the fill amount, and the accessibility labels. Called after every
+  // local change (drag, mute click, M key) so all three stay in lockstep.
+  private syncVolumeUI(): void {
+    if (!this.volumeIconEl || !this.volumeSliderEl) return;
+    const volume = getMusicVolume();
+    const muted = volume <= 0;
+    const pct = Math.round(volume * 100);
+    // Avoid clobbering the value the user is actively dragging (already equal).
+    if (this.volumeSliderEl.valueAsNumber !== pct) {
+      this.volumeSliderEl.value = String(pct);
+    }
+    this.volumeIconEl.src = muted
+      ? OPTIONS_SOUND_OFF_ICON_PATH
+      : OPTIONS_SOUND_ON_ICON_PATH;
+    const label = muted ? 'Music muted' : `Music volume ${pct}%`;
+    this.volumeIconEl.alt = label;
+    this.volumeSliderEl.setAttribute('aria-label', label);
+    this.volumeSliderEl.setAttribute('aria-valuetext', muted ? 'Muted' : `${pct}%`);
+    this.volumeSliderEl.classList.toggle('options-volume-slider--muted', muted);
+    // Drives the filled portion of the track left of the thumb (see options.css).
+    this.volumeSliderEl.style.setProperty('--volume-fill', `${pct}%`);
   }
 
   private attachKeyboard(): void {
     const handler = (e: KeyboardEvent): void => {
+      // When the volume slider has focus, let it own arrow / Home / End / digit
+      // keys for fine-tuning (otherwise the panel would hijack arrows for tab
+      // navigation). ESC still falls through so the panel always closes.
+      if (e.target === this.volumeSliderEl && e.key !== 'Escape') {
+        return;
+      }
       switch (e.key) {
         case 'Escape':
           e.preventDefault();
@@ -286,8 +321,8 @@ export class ManualOverlay {
         case 'M':
           e.preventDefault();
           e.stopPropagation();
-          toggleMusicEnabled();
-          this.syncSoundToggle();
+          toggleMusicMuted();
+          this.syncVolumeUI();
           break;
         case 'ArrowRight':
           e.preventDefault();
