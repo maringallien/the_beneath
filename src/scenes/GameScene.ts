@@ -117,7 +117,7 @@ import {
   getLevel,
   parseLdtkProject,
 } from '../ldtk/parseLdtk';
-import type { LdtkProject } from '../ldtk/types';
+import type { LdtkEntityInstance, LdtkProject } from '../ldtk/types';
 import { subscribeLdtkUpdate } from '../level/HotReloadBus';
 import { EnemyRespawnManager, type PendingRespawn } from '../level/EnemyRespawnManager';
 import { buildIntGridCollision } from '../level/LevelCollision';
@@ -134,8 +134,12 @@ import {
   loadTilesetsAtRuntime,
   tilesetTextureKey,
 } from '../level/TilesetRegistry';
-import type { CharacterModeId } from '../sprites/characterTypes';
 import { entityAnimFullKey } from '../entities/entityRegistryLoader';
+import {
+  restorePlayer,
+  snapshotPlayer,
+  type PlayerSnapshot,
+} from './playerSnapshot';
 
 interface LevelSlot {
   // LDtk identifier ("Level_0", "Level_3", ...). Used by SoundManager to
@@ -146,32 +150,6 @@ interface LevelSlot {
   pxWid: number;
   pxHei: number;
   rendered: RenderedLevel;
-}
-
-// Player state preserved across LDtk hot-reloads AND across save→death→
-// respawn. Transient action state (locked attacks, combo counter, dash
-// duration) is intentionally NOT preserved — restoring mid-attack into a
-// freshly-built world is more confusing than letting the player drop back
-// to idle for one frame.
-//
-// To extend: add the field here, capture it in snapshotPlayer(), apply it in
-// restorePlayer(). Resource fields (HP/ammo/magic) round-trip through
-// Player.applyRestoredState(); position/velocity/mode/facing have dedicated
-// setters in restorePlayer().
-interface PlayerSnapshot {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  flipX: boolean;
-  mode: CharacterModeId;
-  health: number;
-  gun1Ammo: number;
-  gun2Ammo: number;
-  magic: number;
-  stamina: number;
-  coins: number;
-  healItems: number;
 }
 
 // Pixels of camera-viewport padding when deciding whether a level is visible.
@@ -1662,10 +1640,31 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
 
   // Constructs every level, collision tilemap, entity, and collider from a
   // parsed LDtk project. Idempotent: tearDownWorld() must run before this is
-  // called a second time for the same scene instance.
+  // called a second time for the same scene instance. Each step below is a
+  // private method; they run in this exact order and the locals they share
+  // (world bounds, nav levels, spawned entities) are threaded through
+  // explicitly.
   private buildWorld(project: LdtkProject): void {
-    // Compute the union of all level rects so physics/camera bounds cover the
-    // full traversable world rather than a single level's box.
+    const bounds = this.setWorldBoundsFromLevels(project);
+    const navLevels = this.renderAllLevels(project);
+    this.buildNavGraph(navLevels);
+    this.createEntityGroups();
+    const allEntities = this.collectWorldEntities(project);
+    const spawned = this.spawnAndWireEntities(project, allEntities);
+    this.wireWorldEvents();
+    this.wireColliders(spawned);
+    this.setupCameraAndBounds(bounds);
+    this.armPlayerDeathHandler();
+  }
+
+  // Computes the union of all level rects so physics/camera bounds cover the
+  // full traversable world rather than a single level's box.
+  private setWorldBoundsFromLevels(project: LdtkProject): {
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+  } {
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
@@ -1677,7 +1676,10 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       if (lvl.worldY + lvl.pxHei > maxY) maxY = lvl.worldY + lvl.pxHei;
     }
     this.physics.world.setBounds(minX, minY, maxX - minX, maxY - minY);
+    return { minX, minY, maxX, maxY };
+  }
 
+  private renderAllLevels(project: LdtkProject): NavLevel[] {
     // Pick any tileset with a real image to back the invisible collision
     // tilemap (Phaser's Tilemap API requires a tileset image even when the
     // layer is never drawn). Reused across all per-level collision maps.
@@ -1723,22 +1725,29 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
         });
       }
     }
+    return navLevels;
+  }
 
-    // Navigation graph for enemy pathfinding, built from the same IntGrid
-    // collision. The node pass is eager (cheap O(1)-per-cell); edges compute
-    // lazily as A* expands, so the costly ballistic edge probing is paid only for
-    // nodes actually searched.
+  // Navigation graph for enemy pathfinding, built from the same IntGrid
+  // collision. The node pass is eager (cheap O(1)-per-cell); edges compute
+  // lazily as A* expands, so the costly ballistic edge probing is paid only for
+  // nodes actually searched.
+  private buildNavGraph(navLevels: NavLevel[]): void {
     this.navGraph = new NavGraph(navLevels);
     this.navGraph.buildNodes();
     this.navOverlay = new NavDebugOverlay(this, this.navGraph);
+  }
 
+  private createEntityGroups(): void {
     this.projectiles = this.add.group();
     this.enemies = this.add.group();
     this.enemyProjectiles = this.add.group();
     this.traps = this.add.group();
     this.staticEntities = this.add.group();
     this.ammoDrops = this.add.group();
+  }
 
+  private collectWorldEntities(project: LdtkProject): LdtkEntityInstance[] {
     // Spawn entities from every level so enemies/items in other levels exist
     // when the player walks into them. The player factory fires for the single
     // PLAYER_SPAWN_IDENTIFIER marker selected by STARTING_LEVEL_IDENTIFIER — the
@@ -1775,6 +1784,16 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       const { x, y } = pivotCenter(instance);
       registerEntitySound(this, instance.__identifier, instance.iid, x, y);
     }
+    return allEntities;
+  }
+
+  // Spawns every entity, wires per-entity hookups (audio, trap damage-frame
+  // listeners, terrain-settling groups), assigns the player, and registers
+  // the hold-E interactables.
+  private spawnAndWireEntities(
+    project: LdtkProject,
+    allEntities: LdtkEntityInstance[],
+  ): SpawnedEntities {
     this.respawnManager = new EnemyRespawnManager();
     const spawned = spawnEntities(this, allEntities);
     for (const enemy of spawned.enemies) {
@@ -1845,12 +1864,15 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.interactions.registerAll(
       spawned.doors.filter((door) => door.isKeyLocked()),
     );
+    return spawned;
+  }
 
+  // Scene-bus subscriptions, wired per buildWorld so HMR rebuilds attach to
+  // the fresh event bus; tearDownWorld removes them so duplicates can't
+  // accumulate across rebuilds.
+  private wireWorldEvents(): void {
     // Save crystals fire SAVE_REQUESTED_EVENT on commit; takeSave reads the
     // current player state into this.saveSlot and pops a "Game Saved" toast.
-    // Subscribed here (per buildWorld) so HMR rebuilds wire to the fresh
-    // event bus; tearDownWorld removes the listener so duplicates can't
-    // accumulate across rebuilds.
     this.events.on(SAVE_REQUESTED_EVENT, this.takeSave, this);
     // Merchants fire SHOP_REQUESTED_EVENT on commit; openShop launches the
     // ShopScene overlay paused on top of GameScene. Same per-buildWorld /
@@ -1863,7 +1885,9 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // above so HMR and respawn rebuilds don't accumulate duplicate listeners.
     this.events.on(KEY_DOOR_LOCKED_EVENT, this.showKeyDoorMessage, this);
     this.events.on(BOSS_DEFEATED_EVENT, this.onBossDefeated, this);
+  }
 
+  private wireColliders(spawned: SpawnedEntities): void {
     for (const layer of this.collisionLayers) {
       this.colliders.push(this.physics.add.collider(this.player, layer));
       this.colliders.push(
@@ -2039,7 +2063,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
         this,
       ),
     );
+  }
 
+  private setupCameraAndBounds(bounds: {
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+  }): void {
     this.cameras.main.setZoom(CAMERA_ZOOM);
     // Lerp values < 1 smooth the follow toward the target each frame. 0.08 on
     // both axes feels buttery and stops the camera snapping during jumps —
@@ -2062,18 +2093,20 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // tradeoff is that approaching any level boundary lets the player see
     // the next level coming, instead of a hard clamp at the seam.
     this.cameras.main.setBounds(
-      minX,
-      minY,
-      maxX - minX,
-      maxY - minY,
+      bounds.minX,
+      bounds.minY,
+      bounds.maxX - bounds.minX,
+      bounds.maxY - bounds.minY,
     );
+  }
 
-    // PLAYER_DIED_EVENT → either rewind to the last save (if one exists) or,
-    // when the player never saved, abandon the run and return to the title/home
-    // screen (restartRun(true) — the same path as Quit / Return to Title). The
-    // captured `diedPlayer` lets the delayed callback ignore the trigger when
-    // HMR or an earlier respawn has since rebuilt the world — comparing against
-    // the current this.player avoids re-entering the rebuild for a stale death.
+  // PLAYER_DIED_EVENT → either rewind to the last save (if one exists) or,
+  // when the player never saved, abandon the run and return to the title/home
+  // screen (restartRun(true) — the same path as Quit / Return to Title). The
+  // captured `diedPlayer` lets the delayed callback ignore the trigger when
+  // HMR or an earlier respawn has since rebuilt the world — comparing against
+  // the current this.player avoids re-entering the rebuild for a stale death.
+  private armPlayerDeathHandler(): void {
     const diedPlayer = this.player;
     this.player.once(PLAYER_DIED_EVENT, () => {
       this.time.delayedCall(RESPAWN_DELAY_MS, () => {
@@ -2346,57 +2379,18 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     }
   }
 
-  private snapshotPlayer(): PlayerSnapshot | null {
-    if (!this.player || !this.player.body) return null;
-    return {
-      x: this.player.x,
-      y: this.player.y,
-      vx: this.player.body.velocity.x,
-      vy: this.player.body.velocity.y,
-      flipX: this.player.flipX,
-      mode: this.player.getCurrentMode(),
-      health: this.player.getHealth(),
-      gun1Ammo: this.player.getGun1Ammo(),
-      gun2Ammo: this.player.getGun2Ammo(),
-      magic: this.player.getMagic(),
-      stamina: this.player.getStamina(),
-      coins: this.player.getCoins(),
-      healItems: this.player.getHealItems(),
-    };
-  }
-
-  private restorePlayer(
+  // Applies a snapshot through the shared restorePlayer, first checking the
+  // position still lands inside the (possibly rebuilt) world.
+  private restorePlayerSnapshot(
     snapshot: PlayerSnapshot,
     project: LdtkProject,
   ): void {
-    if (!this.isInsideAnyLevel(snapshot.x, snapshot.y, project)) {
-      if (import.meta.env.DEV) {
-        console.info(
-          '[HMR] Restored position outside the new world — keeping the LDtk spawn position.',
-        );
-      }
-      return;
-    }
-    this.player.setPosition(snapshot.x, snapshot.y);
-    this.player.setVelocity(snapshot.vx, snapshot.vy);
-    this.player.setCurrentMode(snapshot.mode);
-    // setFacing must come after setCurrentMode: switching mode plays a fresh
-    // idle animation that re-anchors with the *current* flipX. Setting flip
-    // last guarantees the final anchor matches the restored facing.
-    this.player.setFacing(snapshot.flipX);
-    // Resource fields go through applyRestoredState so Player owns the
-    // clamping. Done after the mode switch so any future mode-dependent
-    // resource cap can read the right max.
-    this.player.applyRestoredState({
-      health: snapshot.health,
-      gun1Ammo: snapshot.gun1Ammo,
-      gun2Ammo: snapshot.gun2Ammo,
-      magic: snapshot.magic,
-      stamina: snapshot.stamina,
-      coins: snapshot.coins,
-      healItems: snapshot.healItems,
-    });
-    this.cameras.main.centerOn(snapshot.x, snapshot.y);
+    restorePlayer(
+      this.player,
+      this.cameras.main,
+      snapshot,
+      this.isInsideAnyLevel(snapshot.x, snapshot.y, project),
+    );
   }
 
   // SAVE_REQUESTED_EVENT handler. Snapshots the player into saveSlot and
@@ -2404,7 +2398,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   // save. Multi-save semantics: every successful interaction overwrites the
   // single slot, so the most recent crystal wins.
   private takeSave(crystal: Save): void {
-    const snapshot = this.snapshotPlayer();
+    const snapshot = snapshotPlayer(this.player);
     if (!snapshot) return;
     this.saveSlot = snapshot;
     this.showSaveToastAt(crystal.x, crystal.body.top - SAVE_TOAST_OFFSET_Y_PX);
@@ -2415,7 +2409,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   // same "Game Saved" toast above the player. No-op when the player/body isn't
   // available (snapshotPlayer guards that).
   private autoSave(): void {
-    const snapshot = this.snapshotPlayer();
+    const snapshot = snapshotPlayer(this.player);
     if (!snapshot || !this.player) return;
     this.saveSlot = snapshot;
     this.showSaveToastAt(
@@ -2651,7 +2645,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       this.scene.restart();
       return;
     }
-    this.restorePlayer(snapshot, project);
+    this.restorePlayerSnapshot(snapshot, project);
   }
 
   private isInsideAnyLevel(
@@ -2696,7 +2690,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // Snapshot before any teardown; the player still belongs to the old world
     // here. Capturing position now reflects what the user was doing when they
     // hit Save, even if the async tileset load below takes a frame or two.
-    const playerSnapshot = this.snapshotPlayer();
+    const playerSnapshot = snapshotPlayer(this.player);
 
     // Load any new tilesets BEFORE teardown so the existing world stays
     // visible during the async wait. If loading fails (e.g. user added a
@@ -2729,7 +2723,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     }
 
     if (playerSnapshot) {
-      this.restorePlayer(playerSnapshot, project);
+      this.restorePlayerSnapshot(playerSnapshot, project);
     }
   };
 
