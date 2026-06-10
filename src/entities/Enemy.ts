@@ -29,13 +29,7 @@ import {
   HOARDER_SEPARATION_MIN_DX_PX,
   HOARDER_SEPARATION_PUSH_SPEED,
   HORIZONTAL_CHASE_STANDOFF_DEADZONE_PX,
-  NAV_GOAL_HYSTERESIS_TILES,
   NAV_LOS_GRACE_MS,
-  NAV_REPLAN_INTERVAL_MS,
-  NAV_STALL_COOLDOWN_MS,
-  NAV_STALL_MS,
-  NAV_WAYPOINT_REACH_X_PX,
-  NAV_WAYPOINT_REACH_Y_PX,
   PLAYER_RUN_SPEED,
 } from '../constants';
 import type { LoiterPathPoint } from '../ldtk/types';
@@ -51,6 +45,7 @@ import {
   type AlertState,
 } from './enemyDetection';
 import type { EnemyHelperScene } from './enemyHelperScene';
+import { EnemyNavFollower } from './EnemyNavFollower';
 import {
   findLeapLanding,
   findWallMountLaunch,
@@ -639,22 +634,10 @@ export class Enemy extends AnimatedEntity {
   private hasLastSeen = false;
 
   // ── A* nav path-following (NavGraph / NavPathfinder) ──────────────────────
-  // When aggro but blind to the target, the enemy follows an A* route toward the
-  // target's standable cell instead of grinding straight at it. navPath holds the
-  // world-px waypoints; navPathIdx is the current one; the rest throttle replans
-  // and detect when the goal has moved to a new tile. Shared by the chase and
-  // last-seen-search code (only one runs per frame).
-  private navPath: ReadonlyArray<{ x: number; y: number }> | null = null;
-  private navPathIdx = 0;
-  private navReplanAt = 0;
-  private navGoalCellX = Number.NaN;
-  private navGoalCellY = Number.NaN;
-  // Stall watchdog: wall-clock time of the last waypoint ADVANCE. If no waypoint
-  // advances for NAV_STALL_MS the route is abandoned (see followNavPath).
-  private navProgressAt = 0;
-  // After a stall-abandon, path-following is suppressed until this time so the
-  // enemy doesn't immediately re-path an unmakeable route (anti-bounce).
-  private navSuppressUntil = 0;
+  // Route state + replan/stall bookkeeping live in the follower; Enemy keeps
+  // the steering (steerToNavWaypoint) and the LOS-grace hold below. Shared by
+  // the chase and last-seen-search code (only one runs per frame).
+  private readonly nav = new EnemyNavFollower();
   // While actively routing, pushed to now + NAV_LOS_GRACE_MS each frame; lets a
   // momentary line-of-sight (a jump apex) pass without dropping the route.
   private navHoldUntil = 0;
@@ -1497,7 +1480,7 @@ export class Enemy extends AnimatedEntity {
             this.refreshAggro();
             this.navHoldUntil = now + NAV_LOS_GRACE_MS;
           }
-        } else if (now < this.navHoldUntil && this.navPath !== null) {
+        } else if (now < this.navHoldUntil && this.nav.hasPath()) {
           // LOS only just cleared (e.g. at a jump apex) while mid-route — keep
           // following briefly so a momentary sightline doesn't drop the path and
           // bounce. A genuinely clear sightline lapses the grace and direct homing
@@ -2945,7 +2928,7 @@ export class Enemy extends AnimatedEntity {
     // before the clip so a held enemy shows idle, not a walk-in-place.
     const holding =
       navWp === null &&
-      (now < this.navSuppressUntil ||
+      (this.nav.isSuppressed(now) ||
         (grounded && Math.abs(dxHome) <= ENEMY_SEARCH_REACH_DIST_PX));
     if (holding) {
       if (this.enemyState !== 'idle') this.enterIdle();
@@ -4701,95 +4684,30 @@ export class Enemy extends AnimatedEntity {
   // Returns the enemy's current nav path (world-px waypoints) for the debug
   // overlay, or null when not path-following.
   getNavPathForDebug(): ReadonlyArray<{ x: number; y: number }> | null {
-    return this.navPath;
+    return this.nav.getPathForDebug();
   }
 
   // Drops the current nav path so the next pursuit replans from a clean state.
   private clearNavPath(): void {
-    if (this.navPath === null) return;
-    this.navPath = null;
-    this.navPathIdx = 0;
-    this.navGoalCellX = Number.NaN;
-    this.navGoalCellY = Number.NaN;
+    this.nav.clear();
   }
 
-  // Maintains and advances an A* path toward (goalX, goalY) — the target's foot
-  // point — returning the world-px waypoint to steer toward this frame, or null
-  // when no route exists or the path is exhausted (caller falls back to reactive
-  // steering). Replans on a throttle, when the goal moves to a new tile, or when
-  // the path runs out. Grounded callers only.
+  // Delegates to the EnemyNavFollower with this enemy's foot point and the
+  // scene's pathfinder. Kept as a wrapper so the chase / search /
+  // return-to-post call sites read unchanged.
   private followNavPath(
     goalX: number,
     goalY: number,
   ): { x: number; y: number } | null {
-    const now = this.scene.time.now;
-    // Post-stall cooldown: after abandoning a route it couldn't make progress on,
-    // don't immediately re-path the same way — use reactive locomotion for a beat
-    // so the enemy doesn't oscillate on an unmakeable jump.
-    if (now < this.navSuppressUntil) return null;
-    const goalCellX = Math.floor(goalX / TILE_PX);
-    const goalCellY = Math.floor(goalY / TILE_PX);
-    // Replan on the throttle, when the path is gone/exhausted, or when the goal
-    // has drifted at least NAV_GOAL_HYSTERESIS_TILES from the cell the current
-    // path targets. The hysteresis stops a walking player thrashing the path (and
-    // the follow direction) every tile crossed. The `!(... < ...)` form replans
-    // when the prior goal cell is NaN (first call), too.
-    const goalShift = Math.max(
-      Math.abs(goalCellX - this.navGoalCellX),
-      Math.abs(goalCellY - this.navGoalCellY),
+    const helper = this.scene as unknown as EnemyHelperScene;
+    return this.nav.follow(
+      this.body.center.x,
+      this.body.bottom,
+      goalX,
+      goalY,
+      this.scene.time.now,
+      helper,
     );
-    if (
-      this.navPath === null ||
-      now >= this.navReplanAt ||
-      !(goalShift < NAV_GOAL_HYSTERESIS_TILES)
-    ) {
-      this.navReplanAt = now + NAV_REPLAN_INTERVAL_MS;
-      this.navGoalCellX = goalCellX;
-      this.navGoalCellY = goalCellY;
-      const helper = this.scene as unknown as EnemyHelperScene;
-      this.navPath = helper.findEnemyPath(
-        this.body.center.x,
-        this.body.bottom,
-        goalX,
-        goalY,
-      );
-      this.navPathIdx = 0;
-      this.navProgressAt = now;
-    }
-    const path = this.navPath;
-    if (path === null || path.length === 0) return null;
-    // Advance past waypoints already reached (the first is usually the enemy's
-    // own start cell, cleared immediately).
-    const prevIdx = this.navPathIdx;
-    while (this.navPathIdx < path.length) {
-      const wp = path[this.navPathIdx];
-      if (
-        Math.abs(wp.x - this.body.center.x) <= NAV_WAYPOINT_REACH_X_PX &&
-        Math.abs(wp.y - this.body.bottom) <= NAV_WAYPOINT_REACH_Y_PX
-      ) {
-        this.navPathIdx++;
-      } else {
-        break;
-      }
-    }
-    if (this.navPathIdx >= path.length) {
-      // Reached the goal cell — within a tile of the target. Clear so the caller
-      // steers directly from here.
-      this.navPath = null;
-      return null;
-    }
-    // Stall watchdog: progress is ADVANCING A WAYPOINT (not raw body movement — an
-    // up/down bounce on an unmakeable jump moves without getting anywhere). If no
-    // waypoint advances for NAV_STALL_MS, abandon the route and arm the cooldown
-    // so the enemy stops retrying it and falls back to reactive steering.
-    if (this.navPathIdx > prevIdx) {
-      this.navProgressAt = now;
-    } else if (now - this.navProgressAt > NAV_STALL_MS) {
-      this.clearNavPath();
-      this.navSuppressUntil = now + NAV_STALL_COOLDOWN_MS;
-      return null;
-    }
-    return path[this.navPathIdx];
   }
 
   // Steers one grounded step toward a nav waypoint, reusing the chase locomotion
