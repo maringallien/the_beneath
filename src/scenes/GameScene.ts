@@ -65,8 +65,6 @@ import {
 } from '../constants';
 import { AmmoDrop } from '../entities/AmmoDrop';
 import type { AmmoDropSpawnerScene } from '../entities/AmmoDropSpawnerScene';
-import { BossHud } from '../entities/BossHud';
-import { BOSS_ROUND_COUNT } from '../entities/bossRounds';
 import { reinforcementsFor } from '../entities/bossWaves';
 import {
   selfCopiesFor,
@@ -95,9 +93,6 @@ import {
   recordKeyCollected,
   resetRunProgress,
 } from '../state/runProgress';
-import { CombatZoneWarning } from '../ui/CombatZoneWarning';
-import { DetectionCorners } from '../ui/DetectionCorners';
-import { PlayerHudOverlay } from '../ui/PlayerHudOverlay';
 import { Save } from '../entities/Save';
 import type { ShopKind } from '../entities/shop/shopTypes';
 import { ShopOverlay } from '../ui/ShopOverlay';
@@ -110,6 +105,7 @@ import {
   TRAP_DAMAGE_FRAME_EVENT,
 } from '../entities/Trap';
 import { TrapSystem } from './trapSystem';
+import { GameHud } from './gameHud';
 import { ldtkRaw } from '../ldtk/ldtkData';
 import {
   getEntities,
@@ -235,24 +231,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   // them explicitly.
   private colliders: Phaser.Physics.Arcade.Collider[] = [];
   private hotReloadUnsub: (() => void) | null = null;
-  // DOM player HUD (HTML overlay over the canvas, in the #game parent). Created
-  // in create()/beginGameplay() after buildWorld so this.player exists; survives
-  // HMR untouched (tearDownWorld never touches it) and is removed explicitly on
-  // Quit-to-title. The overlay owns its repaint dedup, so no lastRendered* field
-  // is needed here. Hidden while the scene is paused (see setupHud) so it's
-  // covered by the pause/shop dim instead of floating above it.
-  private hud: PlayerHudOverlay | null = null;
-  // Screen-wide boss round-fight overlay (top bar + "Round N" banner). Created
-  // alongside the player HUD; visible only while a round-fight boss is engaged.
-  private bossHud: BossHud | null = null;
-  // Screen-pinned "leaving combat zone" warning + countdown. Created alongside
-  // the boss HUD; visible only while the player is outside an engaged boss's
-  // arena and the escape grace timer is running (see updateBossLeash).
-  private combatWarning: CombatZoneWarning | null = null;
-  // Detection-state corner brackets (DOM overlay, sibling of the player HUD).
-  // Recoloured each render frame from maxAlertLevel: faint-white / yellow / red.
-  // Created, hidden-on-pause, and destroyed on the same lifecycle as the HUD.
-  private detectionCorners: DetectionCorners | null = null;
+  // The gameplay overlays (player HUD, boss HUD, escape warning, detection
+  // corners) and their per-frame drivers, owned by GameHud
+  // (src/scenes/gameHud.ts). attach() is called in create()/beginGameplay()
+  // after buildWorld so this.player exists; the rig survives HMR untouched
+  // and is destroyed explicitly on Quit-to-title / scene shutdown.
+  private readonly gameHud = new GameHud(this, this);
   // The round-fight boss the player is currently engaged with (encountered and
   // alive), resolved each frame in updateEnemies. null when none — drives the
   // BossHud's visibility and which boss's HP/round it reflects.
@@ -274,10 +258,6 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   // Latched true when the victory flow fires so the all-bosses-defeated check
   // can't launch VictoryScene twice. Reset on restartRun / scene shutdown.
   private victoryShown = false;
-  // Last round for which the banner has been shown for the active boss. 0 ==
-  // bar hidden / no active boss. Lets updateBossHud fire the Round 1 banner on
-  // first engage and a new banner each time the boss's latched round climbs.
-  private bossRoundShown = 0;
   // Wall-clock deadline (scene time) at which the current boss fight resets
   // because the player left the arena, or null when the player is inside the
   // arena or no boss is engaged. Armed the frame the player first crosses out
@@ -381,7 +361,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       this.player.setControlsEnabled(false);
       this.scene.launch(SCENE_KEYS.LANDING);
     } else {
-      this.setupHud();
+      this.gameHud.attach();
       // Drive ambience from whichever level the player spawned in. State lives
       // in the SoundManager module so this survives scene.restart() (respawn)
       // without resetting tracks. Non-override levels resolve to the global
@@ -438,12 +418,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   beginGameplay(): void {
     if (!this.landingActive) return;
     this.landingActive = false;
-    if (!this.hud) {
-      this.setupHud();
+    if (!this.gameHud.isAttached()) {
+      this.gameHud.attach();
     }
     // Hidden synchronously before the browser paints, so it never flashes during
-    // the hold; the hud.fadeIn() below reveals it with the world.
-    this.hud?.setVisible(false);
+    // the hold; the gameHud.fadeIn() below reveals it with the world.
+    this.gameHud.hideForLanding();
     setLevelAmbience(this, this.getCurrentLevelId());
 
     this.time.delayedCall(LANDING_BLACK_HOLD_MS, () => {
@@ -453,7 +433,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
       this.cameras.main.setFollowOffset(0, CAMERA_VERTICAL_OFFSET_PX);
       this.cameras.main.fadeIn(LANDING_FADE_IN_MS, 0, 0, 0);
-      this.hud?.fadeIn(LANDING_FADE_IN_MS);
+      this.gameHud.fadeIn(LANDING_FADE_IN_MS);
       this.player.setControlsEnabled(true);
     });
   }
@@ -485,9 +465,9 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // Reset it here (mirrors onSceneShutdown) so the fresh run starts boss-free
     // without a dangling reference to the just-destroyed boss.
     this.activeBoss = null;
-    this.bossRoundShown = 0;
+    this.gameHud.clearBossRound();
     this.escapeDeadline = null;
-    this.combatWarning?.setVisible(false);
+    this.gameHud.setEscapeWarningVisible(false);
     // New Game / Quit / Return-to-Title all abandon the current run, so wipe the
     // persistent boss-key progress and re-arm the victory latch. This is the
     // ONLY place run progress is cleared — death/respawn and HMR deliberately
@@ -500,14 +480,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // HUD though, so drop it when returning there — beginGameplay recreates it
     // when the player presses START.
     if (showLanding) {
-      this.hud?.destroy();
-      this.hud = null;
-      this.bossHud?.destroy();
-      this.bossHud = null;
-      this.combatWarning?.destroy();
-      this.combatWarning = null;
-      this.detectionCorners?.destroy();
-      this.detectionCorners = null;
+      this.gameHud.destroy();
     }
 
     this.shouldShowLanding = showLanding;
@@ -530,8 +503,8 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       // Straight into gameplay. buildWorld already started the follow camera,
       // so just (re)attach the HUD + ambience and hand the player control.
       this.landingActive = false;
-      if (!this.hud) {
-        this.setupHud();
+      if (!this.gameHud.isAttached()) {
+        this.gameHud.attach();
       }
       setLevelAmbience(this, this.getCurrentLevelId());
       this.player.setControlsEnabled(true);
@@ -579,148 +552,6 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       },
     });
     this.scene.pause();
-  }
-
-  // Player HUD (DOM overlay) + boss HUD (canvas). The player HUD is HTML in the
-  // #game parent (same as the shop/options overlays), so it's pinned by CSS
-  // rather than per-frame world-space math; the boss HUD stays canvas-rendered.
-  private setupHud(): void {
-    const parent = this.game.canvas.parentElement ?? document.body;
-    this.hud = new PlayerHudOverlay(parent);
-    this.bossHud = new BossHud(this);
-    this.combatWarning = new CombatZoneWarning(this);
-    this.detectionCorners = new DetectionCorners(parent);
-    // Drive HUD position+ratio updates from the main camera's PRE_RENDER
-    // event. That fires after Camera.preRender() rebuilds the camera matrix
-    // and refreshes midPoint, so the HUD positions are in sync with the
-    // *current* frame's camera scroll — eliminating the one-frame drift
-    // that subscribing to scene PRE_UPDATE introduces (PRE_UPDATE fires
-    // before the camera follow lerp this frame, so positions trail the
-    // visible camera by one tick). PRE_RENDER fires during the render
-    // phase, which runs regardless of any throws in the UPDATE phase. The
-    // boss HUD rides the same event for the same reason; activeBoss is
-    // resolved in updateEnemies (UPDATE phase) so it's current by render.
-    //
-    // Detach before re-attaching so the subscription stays single even when
-    // setupHud runs more than once per scene lifetime: Quit to the title screen
-    // destroys the HUD, then START rebuilds it, and the main camera survives the
-    // in-place world rebuild — so without this the drivers would accumulate.
-    const cam = this.cameras.main;
-    cam.off(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateHud, this);
-    cam.off(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateBossHud, this);
-    cam.off(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateCombatWarning, this);
-    cam.off(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateDetectionCorners, this);
-    cam.on(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateHud, this);
-    cam.on(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateBossHud, this);
-    cam.on(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateCombatWarning, this);
-    cam.on(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateDetectionCorners, this);
-
-    // The DOM HUD renders above the canvas, so it would otherwise float over the
-    // pause/shop/options dim instead of being covered by it. Hide it whenever
-    // this scene pauses (PauseScene and the shop both pause GameScene) and
-    // restore it on resume. off() before on() keeps the subscription single
-    // across repeated setupHud calls — Quit→START rebuilds the HUD while this
-    // scene's event emitter persists.
-    this.events.off(Phaser.Scenes.Events.PAUSE, this.hideHud, this);
-    this.events.off(Phaser.Scenes.Events.RESUME, this.showHud, this);
-    this.events.on(Phaser.Scenes.Events.PAUSE, this.hideHud, this);
-    this.events.on(Phaser.Scenes.Events.RESUME, this.showHud, this);
-  }
-
-  private hideHud(): void {
-    this.hud?.setVisible(false);
-    this.detectionCorners?.setVisible(false);
-  }
-
-  private showHud(): void {
-    this.hud?.setVisible(true);
-    this.detectionCorners?.setVisible(true);
-  }
-
-  private updateHud(): void {
-    if (!this.hud) return;
-    this.hud.update({
-      health: this.player.getHealth(),
-      maxHealth: this.player.getMaxHealth(),
-      stamina: this.player.getStamina(),
-      maxStamina: this.player.getMaxStamina(),
-      magic: this.player.getMagic(),
-      maxMagic: this.player.getMaxMagic(),
-      gun1Ammo: this.player.getGun1Ammo(),
-      maxGun1Ammo: this.player.getMaxGun1Ammo(),
-      gun2Ammo: this.player.getGun2Ammo(),
-      maxGun2Ammo: this.player.getMaxGun2Ammo(),
-      coins: this.player.getCoins(),
-      maxCoins: this.player.getMaxCoins(),
-      healItems: this.player.getHealItems(),
-      maxHealItems: this.player.getMaxHealItems(),
-      mode: this.player.getCurrentMode(),
-      magicSelected: this.player.isMagicMode(),
-    });
-  }
-
-  // Boss round-fight HUD driver, resolved each render frame off this.activeBoss
-  // (set in updateEnemies). Shows the bar + "Round 1" banner when a round-fight
-  // boss is first engaged, fires a fresh banner each time its latched round
-  // climbs, refreshes the bar's fill + per-round color, and hides everything
-  // once the boss dies or there's no engaged boss.
-  private updateBossHud(): void {
-    if (!this.bossHud) return;
-    const boss = this.activeBoss;
-    if (!boss || !boss.active || boss.isDead()) {
-      if (this.bossRoundShown !== 0) {
-        this.bossHud.setVisible(false);
-        this.bossRoundShown = 0;
-      }
-      return;
-    }
-    const round = boss.getRound();
-    if (this.bossRoundShown === 0) {
-      this.bossHud.setVisible(true);
-    }
-    if (round > this.bossRoundShown) {
-      this.bossHud.showRound(round);
-      this.bossRoundShown = round;
-    }
-    const maxHealth = boss.getMaxHealth();
-    this.bossHud.update(
-      {
-        name: boss.getDisplayName(),
-        ratio: maxHealth > 0 ? boss.getHealth() / maxHealth : 0,
-        round,
-        sections: BOSS_ROUND_COUNT,
-      },
-      this.cameras.main,
-    );
-  }
-
-  // Escape-warning driver, on the same camera PRE_RENDER event as the HUDs so
-  // its screen-pinned text stays in sync with this frame's scroll. The overlay
-  // is shown/hidden by updateBossLeash (UPDATE phase); here we just feed it the
-  // live seconds-remaining while a countdown is armed. ceil so the counter reads
-  // the grace seconds (e.g. 3 → 2 → 1) and only hits 0 at the deadline.
-  private updateCombatWarning(): void {
-    if (!this.combatWarning || this.escapeDeadline === null) return;
-    const secondsLeft = Math.max(
-      0,
-      Math.ceil((this.escapeDeadline - this.time.now) / 1000),
-    );
-    this.combatWarning.update(secondsLeft, this.cameras.main);
-  }
-
-  // Recolours the detection corner brackets from the highest enemy alert level
-  // resolved this frame in updateEnemies (0 normal → faint white, 1 investigating
-  // → yellow, 2 conflict → red). On the camera PRE_RENDER event with the other
-  // HUDs; setLevel dedups so a steady state touches no DOM.
-  private updateDetectionCorners(): void {
-    if (!this.detectionCorners) return;
-    const level =
-      this.maxAlertLevel >= 2
-        ? 'conflict'
-        : this.maxAlertLevel >= 1
-          ? 'investigating'
-          : 'clear';
-    this.detectionCorners.setLevel(level);
   }
 
   update(): void {
@@ -801,6 +632,26 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     if (levelId === this.lastAmbienceLevelId) return;
     this.lastAmbienceLevelId = levelId;
     setLevelAmbience(this, levelId);
+  }
+
+  // ── GameHudHost contract ──────────────────────────────────────────────────
+  // Live state the HUD rig reads each render frame. The player getter hands
+  // out the CURRENT instance — world rebuilds replace it while the HUD
+  // survives.
+  getPlayer(): Player {
+    return this.player;
+  }
+
+  getActiveBoss(): Enemy | null {
+    return this.activeBoss;
+  }
+
+  getEscapeDeadline(): number | null {
+    return this.escapeDeadline;
+  }
+
+  getMaxAlertLevel(): number {
+    return this.maxAlertLevel;
   }
 
   // Returns the LDtk identifier of the level whose rect contains the player's
@@ -969,7 +820,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // frame out and reveal the warning.
     if (this.escapeDeadline === null) {
       this.escapeDeadline = this.time.now + BOSS_ESCAPE_GRACE_MS;
-      this.combatWarning?.setVisible(true);
+      this.gameHud.setEscapeWarningVisible(true);
     }
     this.breakOffArena(boss, arena);
     if (this.time.now >= this.escapeDeadline) {
@@ -1005,7 +856,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   private clearEscape(): void {
     if (this.escapeDeadline === null) return;
     this.escapeDeadline = null;
-    this.combatWarning?.setVisible(false);
+    this.gameHud.setEscapeWarningVisible(false);
   }
 
   // Ends and resets an abandoned boss fight (player stayed out past the grace
@@ -1025,10 +876,9 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     }
     this.reinforcements = [];
     this.lastReinforcedRound = 0;
-    this.bossRoundShown = 0;
     boss.resetEncounter();
     this.activeBoss = null;
-    this.bossHud?.setVisible(false);
+    this.gameHud.resetBossRound();
     this.clearEscape();
   }
 
@@ -2221,7 +2071,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     // never carries a stale warning. The overlay itself survives the rebuild
     // and re-binds via setupHud, so just hide it here.
     this.escapeDeadline = null;
-    this.combatWarning?.setVisible(false);
+    this.gameHud.setEscapeWarningVisible(false);
 
     if (this.enemies) {
       // Enemies are destroyed via destroyEntities below; clear(false, false)
@@ -2663,16 +2513,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.navOverlay?.destroy();
     this.navOverlay = null;
     this.navGraph = null;
-    // Tear down the boss HUD explicitly so its banner tween + graphics don't
-    // outlive the scene; reset the engagement trackers for a clean restart.
-    this.bossHud?.destroy();
-    this.bossHud = null;
-    this.combatWarning?.destroy();
-    this.combatWarning = null;
-    this.detectionCorners?.destroy();
-    this.detectionCorners = null;
+    // Tear down the boss-fight overlays explicitly so the banner tween +
+    // graphics don't outlive the scene (the DOM player HUD deliberately
+    // survives scene.restart); reset the engagement trackers for a clean
+    // restart.
+    this.gameHud.destroyForSceneShutdown();
     this.activeBoss = null;
-    this.bossRoundShown = 0;
     this.escapeDeadline = null;
     this.victoryShown = false;
     if (this.keyDoorMessageText) {
