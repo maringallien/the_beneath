@@ -144,10 +144,10 @@ export const STAMINA_REGEN_INTERVAL_MS = 2000;
 export const INITIAL_COINS = 0;
 export const MAX_COINS = 9999;
 export const COIN_PICKUP_AMOUNT = 1;
-// Per-source drop counts. Each coin is one COIN_PICKUP_AMOUNT (1), so these
-// double as the gold value of each kill. Tuned per-entity in
-// entityRegistry.json as N independent `chancePct: 100` drop entries — these
-// constants document the tiers, the JSON is the source of truth.
+// Per-source drop counts. Each coin is one COIN_PICKUP_AMOUNT (1), so the
+// drop count doubles as the gold value of each kill. Tuned per-entity in
+// entityRegistry.json as N independent `chancePct: 100` drop entries — the
+// JSON is the source of truth; this table documents the tiers.
 //   Weakest mook (Ghoul) ............... 1
 //   Regular enemy / bandit ............. 2
 //   Small chest (Chest1) ............... 4
@@ -157,11 +157,6 @@ export const COIN_PICKUP_AMOUNT = 1;
 // way past every fight. Against shop prices (gun1 pack 10, gun2 pack 15, magic
 // orb 25): ~3 regular kills fund a gun1 pack, a small chest is most of one, a
 // large chest ≈ a gun1 pack, and a boss ≈ one magic orb (was two).
-export const COIN_DROP_WEAK_ENEMY_COUNT = 1;
-export const COIN_DROP_REGULAR_ENEMY_COUNT = 2;
-export const COIN_DROP_CHEST_SMALL_COUNT = 4;
-export const COIN_DROP_CHEST_LARGE_COUNT = 8;
-export const COIN_DROP_BOSS_COUNT = 20;
 
 // Gold coin placeholder: generated procedurally in PreloadScene as a small
 // gold disc with an inset highlight ring. Mirrors the magic orb pattern —

@@ -343,9 +343,6 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   private readonly keyD: Phaser.Input.Keyboard.Key;
   private readonly keyF: Phaser.Input.Keyboard.Key;
   private readonly keyG: Phaser.Input.Keyboard.Key;
-  // TODO(Phase 4): remove after enemy attacks are wired up. Debug-only hurt
-  // trigger so Phase 1 can be exercised before enemies exist.
-  private readonly keyH: Phaser.Input.Keyboard.Key;
   private readonly keyShift: Phaser.Input.Keyboard.Key;
   private readonly keySpace: Phaser.Input.Keyboard.Key;
   // Q consumes one healing item (see tryUseHealingItem). JustDown-gated so a
@@ -474,7 +471,6 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.keyD = kb.addKey(Phaser.Input.Keyboard.KeyCodes.D);
     this.keyF = kb.addKey(Phaser.Input.Keyboard.KeyCodes.F);
     this.keyG = kb.addKey(Phaser.Input.Keyboard.KeyCodes.G);
-    this.keyH = kb.addKey(Phaser.Input.Keyboard.KeyCodes.H);
     this.keyShift = kb.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
     this.keySpace = kb.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
     this.keyQ = kb.addKey(Phaser.Input.Keyboard.KeyCodes.Q);
@@ -734,12 +730,6 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     if (this.flyMode) {
       this.updateFlyMode();
       return;
-    }
-
-    // Debug-only hurt trigger. Remove with this keyH binding in Phase 4
-    // once real enemy attacks are wired up.
-    if (Phaser.Input.Keyboard.JustDown(this.keyH)) {
-      this.hurt(10, this.x - 50, this.y);
     }
 
     // Q consumes a healing item. tryUseHealingItem owns every guard (cooldown,
@@ -1767,7 +1757,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       if (!(obj instanceof Enemy)) continue;
       if (obj.isDead()) continue;
       if (this.swordHitTargets.has(obj)) continue;
-      obj.takeDamage(swingDamage, this.x, this.y);
+      obj.takeDamage(swingDamage, this.x);
       this.swordHitTargets.add(obj);
       // One impact SFX per swing — overlapping impacts (e.g. AoE attack5
       // catching two enemies) clip and muddy the whoosh. Damage application

@@ -1849,17 +1849,16 @@ export class Enemy extends AnimatedEntity {
   }
 
   // Public damage entry point. Called by GameScene's projectile-overlap
-  // handler and by Player.applySwordHits during melee. Source coords are
-  // used to compute knockback direction. `skipKnockback` is set by the
-  // fall-damage path so a hard landing doesn't fling the enemy sideways
-  // off the spot they just landed on. `sourceIsPlayer` (default true)
-  // distinguishes player-dealt damage from environmental damage (traps,
-  // fall) — only player-dealt damage flips the enemy into combat and shows
-  // the floating HP bar.
+  // handler and by Player.applySwordHits during melee. `sourceX` is used to
+  // compute knockback direction. `skipKnockback` is set by the fall-damage
+  // path so a hard landing doesn't fling the enemy sideways off the spot
+  // they just landed on. `sourceIsPlayer` (default true) distinguishes
+  // player-dealt damage from environmental damage (traps, fall) — only
+  // player-dealt damage flips the enemy into combat and shows the floating
+  // HP bar.
   takeDamage(
     damage: number,
     sourceX: number,
-    _sourceY: number,
     options: { skipKnockback?: boolean; sourceIsPlayer?: boolean } = {},
   ): void {
     if (this.enemyState === 'dead') return;
@@ -3980,7 +3979,7 @@ export class Enemy extends AnimatedEntity {
       }
       if (obj instanceof Enemy) {
         if (obj.isDead()) continue;
-        obj.takeDamage(explosion.damage, cx, cy, { sourceIsPlayer: false });
+        obj.takeDamage(explosion.damage, cx, { sourceIsPlayer: false });
       }
     }
   }
@@ -4768,7 +4767,7 @@ export class Enemy extends AnimatedEntity {
           FALL_DAMAGE_PER_VELOCITY,
       );
       if (damage > 0) {
-        this.takeDamage(damage, this.x, this.y, {
+        this.takeDamage(damage, this.x, {
           skipKnockback: true,
           sourceIsPlayer: false,
         });

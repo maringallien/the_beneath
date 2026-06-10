@@ -1,7 +1,6 @@
 import Phaser from 'phaser';
 import {
   clearEntitySounds,
-  debugAudioCounts,
   playMusic,
   playOneShot,
   registerEnemyWalkSound,
@@ -386,39 +385,6 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
 
   create(): void {
     this.buildWorld(parseLdtkProject(ldtkRaw));
-    // TEMP DIAGNOSTIC (audio regression): 1 Hz snapshot of audio/runtime
-    // counters to find the dominant cost — `sounds` climbing = a node leak;
-    // `fps` falling = main-thread cost (LOS raycasts); flat counts while audio
-    // still dies = audio-thread saturation. Flip DEBUG_AUDIO to false or delete
-    // this block once diagnosed (see /home/marin/.claude/plans/floating-roaming-acorn.md).
-    const DEBUG_AUDIO = true;
-    if (DEBUG_AUDIO) {
-      this.time.addEvent({
-        delay: 1000,
-        loop: true,
-        callback: () => {
-          const c = debugAudioCounts();
-          // The live-sound array is a protected member of BaseSoundManager
-          // (present at runtime, not in the public typings), so reach it through
-          // a minimal shape cast and guard at runtime.
-          const soundMgr = this.game.sound as unknown as {
-            sounds?: Phaser.Sound.BaseSound[];
-          };
-          const allSounds = soundMgr.sounds ?? [];
-          const playing = allSounds.filter((s) => s.isPlaying).length;
-          // eslint-disable-next-line no-console
-          console.log('[audio]', {
-            sounds: allSounds.length, // total instances (incl. paused loops)
-            playing, // actually rendering on the audio thread — the load metric
-            fps: Math.round(this.game.loop.actualFps),
-            enemies: this.enemies?.getChildren().length ?? 0,
-            anchors: c.anchors,
-            sequences: c.sequences,
-            periodic: c.periodic,
-          });
-        },
-      });
-    }
     // Start the looping soundtrack as the home screen comes up. It's owned by
     // the game-global sound manager (so it rides through the landing→gameplay
     // handoff, level changes, and respawns without restarting) and gated only
@@ -2616,7 +2582,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       if (!(obj instanceof Enemy)) continue;
       if (!obj.active || obj.isDead()) continue;
       if (bounds && !this.isWithinBounds(obj.x, obj.y, bounds)) continue;
-      obj.takeDamage(Number.MAX_SAFE_INTEGER, obj.x, obj.y, {
+      obj.takeDamage(Number.MAX_SAFE_INTEGER, obj.x, {
         skipKnockback: true,
         sourceIsPlayer: false,
       });
@@ -2849,11 +2815,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       // would ignore the damage anyway — this just suppresses the VFX/sound).
       if (enemyObj.isInRoundBreak()) return;
       playOneShot(this, 'bullet_impact_flesh');
-      enemyObj.takeDamage(
-        projectileObj.getDamage(),
-        projectileObj.x,
-        projectileObj.y,
-      );
+      enemyObj.takeDamage(projectileObj.getDamage(), projectileObj.x);
       // Shooting the hive turns its whole swarm on the player: every wasp
       // anchored to this hive drops its leash and gives chase immediately.
       if (enemyObj.getIdentifier() === HIVE_BEACON_IDENTIFIER) {
@@ -2996,7 +2958,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       // doesn't reveal the floating HP bar — combat is meant to track the
       // player's engagement, not collateral environmental hits.
       if (trapObj.isFallingSword()) {
-        enemyObj.takeDamage(trapObj.getDamage(), trapObj.x, trapObj.y, {
+        enemyObj.takeDamage(trapObj.getDamage(), trapObj.x, {
           sourceIsPlayer: false,
         });
         return;
@@ -3016,7 +2978,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
 
       if (trapObj.hasDeferredDamage()) return;
 
-      enemyObj.takeDamage(trapObj.getDamage(), trapObj.x, trapObj.y, {
+      enemyObj.takeDamage(trapObj.getDamage(), trapObj.x, {
         sourceIsPlayer: false,
       });
     };
@@ -3045,7 +3007,7 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       // sourceIsPlayer:false — trap damage is environmental and should not
       // flip the enemy into combat (i.e., shouldn't reveal the HP bar). The
       // player engaging combat with traps as the only hit doesn't track.
-      child.takeDamage(damage, trap.x, trap.y, { sourceIsPlayer: false });
+      child.takeDamage(damage, trap.x, { sourceIsPlayer: false });
     }
   };
 
