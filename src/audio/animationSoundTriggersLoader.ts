@@ -1,5 +1,6 @@
 import triggersRaw from './animationSoundTriggers.json';
 import { getSoundDefinition } from './soundRegistryLoader';
+import * as v from '../shared/validate';
 import type {
   AnimationSoundTriggers,
   AnimationTrigger,
@@ -23,10 +24,7 @@ function validateTrigger(
   raw: unknown,
   seenNames: Set<string>,
 ): AnimationTrigger {
-  if (raw == null || typeof raw !== 'object') {
-    throw new Error(`${ctx} must be an object`);
-  }
-  const entry = raw as Record<string, unknown>;
+  const entry = v.requireObject(raw, ctx);
   for (const key of Object.keys(entry)) {
     if (
       key !== 'name' &&
@@ -58,50 +56,26 @@ function validateTrigger(
       `${ctx}.soundId references unknown sound "${soundId}" — declare it in soundRegistry.json first`,
     );
   }
-  const frameIndex = entry.frameIndex;
-  if (
-    typeof frameIndex !== 'number' ||
-    !Number.isInteger(frameIndex) ||
-    frameIndex < 1
-  ) {
-    throw new Error(
-      `${ctx}.frameIndex must be a positive integer (got ${JSON.stringify(frameIndex)})`,
-    );
-  }
-  const audioStartOffsetMsRaw = entry.audioStartOffsetMs;
-  let audioStartOffsetMs: number | undefined;
-  if (audioStartOffsetMsRaw !== undefined) {
-    if (
-      typeof audioStartOffsetMsRaw !== 'number' ||
-      !Number.isFinite(audioStartOffsetMsRaw) ||
-      audioStartOffsetMsRaw < 0
-    ) {
-      throw new Error(
-        `${ctx}.audioStartOffsetMs must be a non-negative number (got ${JSON.stringify(audioStartOffsetMsRaw)})`,
-      );
-    }
-    if (audioStartOffsetMsRaw > 0) audioStartOffsetMs = audioStartOffsetMsRaw;
-  }
-  const stopOnAnimCompleteRaw = entry.stopOnAnimComplete;
-  let stopOnAnimComplete: boolean | undefined;
-  if (stopOnAnimCompleteRaw !== undefined) {
-    if (typeof stopOnAnimCompleteRaw !== 'boolean') {
-      throw new Error(
-        `${ctx}.stopOnAnimComplete must be a boolean (got ${JSON.stringify(stopOnAnimCompleteRaw)})`,
-      );
-    }
-    if (stopOnAnimCompleteRaw) stopOnAnimComplete = true;
-  }
-  const repeatPerLoopRaw = entry.repeatPerLoop;
-  let repeatPerLoop: boolean | undefined;
-  if (repeatPerLoopRaw !== undefined) {
-    if (typeof repeatPerLoopRaw !== 'boolean') {
-      throw new Error(
-        `${ctx}.repeatPerLoop must be a boolean (got ${JSON.stringify(repeatPerLoopRaw)})`,
-      );
-    }
-    if (repeatPerLoopRaw) repeatPerLoop = true;
-  }
+  const frameIndex = v.requirePositiveInt(entry, 'frameIndex', ctx);
+  // Zero/false normalize to undefined so the parsed trigger only carries the
+  // optional fields that actually do something.
+  const audioStartOffsetMsRaw = v.optionalNonNegative(
+    entry,
+    'audioStartOffsetMs',
+    ctx,
+  );
+  const audioStartOffsetMs =
+    audioStartOffsetMsRaw !== undefined && audioStartOffsetMsRaw > 0
+      ? audioStartOffsetMsRaw
+      : undefined;
+  const stopOnAnimComplete =
+    v.optionalBoolean(entry, 'stopOnAnimComplete', ctx) === true
+      ? true
+      : undefined;
+  const repeatPerLoop =
+    v.optionalBoolean(entry, 'repeatPerLoop', ctx) === true
+      ? true
+      : undefined;
   const base = { name, soundId, frameIndex };
   const withOffset =
     audioStartOffsetMs === undefined
@@ -125,24 +99,21 @@ const REGISTRY: AnimationSoundTriggers = (() => {
       );
     }
   }
-  const triggersField = raw.triggers;
-  if (triggersField == null || typeof triggersField !== 'object') {
-    throw new Error('animationSoundTriggers.json.triggers must be an object');
-  }
+  const triggersField = v.requireObject(
+    raw.triggers,
+    'animationSoundTriggers.json.triggers',
+  );
   const out: Record<string, ReadonlyArray<AnimationTrigger>> = {};
-  for (const [animKey, list] of Object.entries(
-    triggersField as Record<string, unknown>,
-  )) {
+  for (const [animKey, listRaw] of Object.entries(triggersField)) {
     if (!ANIM_KEY_REGEX.test(animKey)) {
       throw new Error(
         `animationSoundTriggers.json animation key "${animKey}" must match /^[A-Za-z0-9_]+$/`,
       );
     }
-    if (!Array.isArray(list)) {
-      throw new Error(
-        `animationSoundTriggers.json.triggers["${animKey}"] must be an array`,
-      );
-    }
+    const list = v.requireArray(
+      listRaw,
+      `animationSoundTriggers.json.triggers["${animKey}"]`,
+    );
     const seenNames = new Set<string>();
     const validated: AnimationTrigger[] = list.map((entry, i) =>
       validateTrigger(

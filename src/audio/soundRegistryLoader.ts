@@ -1,4 +1,5 @@
 import soundRegistryRaw from './soundRegistry.json';
+import * as v from '../shared/validate';
 import type {
   EntityWalkSoundBinding,
   LevelAmbienceOverride,
@@ -23,17 +24,8 @@ function validateSpatial(ctx: string, raw: unknown): SpatialConfig {
     throw new Error(`${ctx} must be an object with minRadius/maxRadius`);
   }
   const s = raw as Record<string, unknown>;
-  const requirePositive = (field: string): number => {
-    const value = s[field];
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-      throw new Error(
-        `${ctx}.${field} must be a positive number (got ${JSON.stringify(value)})`,
-      );
-    }
-    return value;
-  };
-  const minRadius = requirePositive('minRadius');
-  const maxRadius = requirePositive('maxRadius');
+  const minRadius = v.requirePositive(s, 'minRadius', ctx);
+  const maxRadius = v.requirePositive(s, 'maxRadius', ctx);
   if (maxRadius <= minRadius) {
     throw new Error(
       `${ctx}.maxRadius (${maxRadius}) must be greater than minRadius (${minRadius})`,
@@ -43,27 +35,11 @@ function validateSpatial(ctx: string, raw: unknown): SpatialConfig {
 }
 
 function validateSound(id: string, raw: unknown): SoundDefinition {
-  if (raw == null || typeof raw !== 'object') {
-    throw new Error(`soundRegistry.sounds["${id}"] is not an object`);
-  }
-  const entry = raw as Record<string, unknown>;
-  const path = entry.path;
-  if (typeof path !== 'string' || path.length === 0) {
-    throw new Error(
-      `soundRegistry.sounds["${id}"].path must be a non-empty string`,
-    );
-  }
-  const category = entry.category;
-  if (typeof category !== 'string' || !VALID_CATEGORIES.has(category as SoundCategory)) {
-    throw new Error(
-      `soundRegistry.sounds["${id}"].category must be one of [${[...VALID_CATEGORIES].join(', ')}] (got ${JSON.stringify(category)})`,
-    );
-  }
-  if (typeof entry.loop !== 'boolean') {
-    throw new Error(
-      `soundRegistry.sounds["${id}"].loop must be a boolean`,
-    );
-  }
+  const ctx = `soundRegistry.sounds["${id}"]`;
+  const entry = v.requireObject(raw, ctx);
+  const path = v.requireString(entry, 'path', ctx);
+  const category = v.requireOneOf(entry, 'category', ctx, VALID_CATEGORIES);
+  const loop = v.requireBoolean(entry, 'loop', ctx);
   const defaultVolume = entry.defaultVolume;
   if (
     typeof defaultVolume !== 'number' ||
@@ -72,30 +48,18 @@ function validateSound(id: string, raw: unknown): SoundDefinition {
     defaultVolume > 1
   ) {
     throw new Error(
-      `soundRegistry.sounds["${id}"].defaultVolume must be a number in [0, 1] (got ${JSON.stringify(defaultVolume)})`,
+      `${ctx}.defaultVolume must be a number in [0, 1] (got ${JSON.stringify(defaultVolume)})`,
     );
   }
-  let rate: number | undefined;
-  if (entry.rate !== undefined) {
-    if (
-      typeof entry.rate !== 'number' ||
-      !Number.isFinite(entry.rate) ||
-      entry.rate <= 0
-    ) {
-      throw new Error(
-        `soundRegistry.sounds["${id}"].rate must be a positive number (got ${JSON.stringify(entry.rate)})`,
-      );
-    }
-    rate = entry.rate;
-  }
+  const rate = v.optionalPositive(entry, 'rate', ctx);
   const spatial =
     entry.spatial === undefined
       ? undefined
-      : validateSpatial(`soundRegistry.sounds["${id}"].spatial`, entry.spatial);
+      : validateSpatial(`${ctx}.spatial`, entry.spatial);
   return {
     path,
-    category: category as SoundCategory,
-    loop: entry.loop,
+    category,
+    loop,
     defaultVolume,
     rate,
     spatial,
@@ -128,12 +92,10 @@ function validateLevelOverride(
   raw: unknown,
   knownIds: ReadonlySet<string>,
 ): LevelAmbienceOverride {
-  if (raw == null || typeof raw !== 'object') {
-    throw new Error(
-      `soundRegistry.levelOverrides["${levelId}"] must be an object`,
-    );
-  }
-  const entry = raw as Record<string, unknown>;
+  const entry = v.requireObject(
+    raw,
+    `soundRegistry.levelOverrides["${levelId}"]`,
+  );
   const ambience = validateIdList(
     `soundRegistry.levelOverrides["${levelId}"].ambience`,
     entry.ambience,
@@ -158,10 +120,7 @@ function validatePlayerStateSounds(
   knownIds: ReadonlySet<string>,
 ): PlayerStateSounds {
   if (raw === undefined) return {};
-  if (raw == null || typeof raw !== 'object') {
-    throw new Error('soundRegistry.playerStateSounds must be an object');
-  }
-  const entry = raw as Record<string, unknown>;
+  const entry = v.requireObject(raw, 'soundRegistry.playerStateSounds');
   const out: { -readonly [K in keyof PlayerStateSounds]: PlayerStateSounds[K] } = {};
   for (const slot of PLAYER_SOUND_SLOTS) {
     const value = entry[slot];
@@ -186,11 +145,9 @@ function validateEntitySoundsMap(
   raw: unknown,
   sounds: Readonly<Record<string, SoundDefinition>>,
 ): Readonly<Record<string, ReadonlyArray<string>>> {
-  if (raw == null || typeof raw !== 'object') {
-    throw new Error(`${ctx} must be an object`);
-  }
+  const entries = v.requireObject(raw, ctx);
   const out: Record<string, ReadonlyArray<string>> = {};
-  for (const [entityId, soundIdsRaw] of Object.entries(raw)) {
+  for (const [entityId, soundIdsRaw] of Object.entries(entries)) {
     if (!Array.isArray(soundIdsRaw)) {
       throw new Error(
         `${ctx}["${entityId}"] must be an array of sound ids`,
@@ -241,9 +198,7 @@ function validateEntityWalkSounds(
   sounds: Readonly<Record<string, SoundDefinition>>,
 ): Readonly<Record<string, ReadonlyArray<EntityWalkSoundBinding>>> {
   if (raw === undefined) return {};
-  if (raw == null || typeof raw !== 'object') {
-    throw new Error('soundRegistry.entityWalkSounds must be an object');
-  }
+  const entries = v.requireObject(raw, 'soundRegistry.entityWalkSounds');
   const validateRef = (
     entityId: string,
     soundId: string,
@@ -272,7 +227,7 @@ function validateEntityWalkSounds(
     }
   };
   const out: Record<string, ReadonlyArray<EntityWalkSoundBinding>> = {};
-  for (const [entityId, raw1] of Object.entries(raw)) {
+  for (const [entityId, raw1] of Object.entries(entries)) {
     const bindings: EntityWalkSoundBinding[] = [];
     if (typeof raw1 === 'string') {
       validateRef(entityId, raw1, '');
@@ -343,11 +298,9 @@ function validateEntitySoundSequences(
   sounds: Readonly<Record<string, SoundDefinition>>,
 ): Readonly<Record<string, ReadonlyArray<string>>> {
   if (raw === undefined) return {};
-  if (raw == null || typeof raw !== 'object') {
-    throw new Error('soundRegistry.entitySoundSequences must be an object');
-  }
+  const entries = v.requireObject(raw, 'soundRegistry.entitySoundSequences');
   const out: Record<string, ReadonlyArray<string>> = {};
-  for (const [entityId, soundIdsRaw] of Object.entries(raw)) {
+  for (const [entityId, soundIdsRaw] of Object.entries(entries)) {
     if (!Array.isArray(soundIdsRaw)) {
       throw new Error(
         `soundRegistry.entitySoundSequences["${entityId}"] must be an array of sound ids`,
@@ -391,11 +344,9 @@ function validateEntityPeriodicSounds(
   sounds: Readonly<Record<string, SoundDefinition>>,
 ): Readonly<Record<string, ReadonlyArray<PeriodicEntitySoundBinding>>> {
   if (raw === undefined) return {};
-  if (raw == null || typeof raw !== 'object') {
-    throw new Error('soundRegistry.entityPeriodicSounds must be an object');
-  }
+  const entries = v.requireObject(raw, 'soundRegistry.entityPeriodicSounds');
   const out: Record<string, ReadonlyArray<PeriodicEntitySoundBinding>> = {};
-  for (const [entityId, bindingsRaw] of Object.entries(raw)) {
+  for (const [entityId, bindingsRaw] of Object.entries(entries)) {
     if (!Array.isArray(bindingsRaw)) {
       throw new Error(
         `soundRegistry.entityPeriodicSounds["${entityId}"] must be an array`,
@@ -408,13 +359,10 @@ function validateEntityPeriodicSounds(
     }
     const bindings: PeriodicEntitySoundBinding[] = [];
     for (let i = 0; i < bindingsRaw.length; i++) {
-      const entry = bindingsRaw[i];
-      if (entry == null || typeof entry !== 'object') {
-        throw new Error(
-          `soundRegistry.entityPeriodicSounds["${entityId}"][${i}] must be an object`,
-        );
-      }
-      const e = entry as Record<string, unknown>;
+      const e = v.requireObject(
+        bindingsRaw[i],
+        `soundRegistry.entityPeriodicSounds["${entityId}"][${i}]`,
+      );
       const soundId = e.soundId;
       if (typeof soundId !== 'string') {
         throw new Error(
@@ -432,13 +380,12 @@ function validateEntityPeriodicSounds(
           `soundRegistry.entityPeriodicSounds["${entityId}"][${i}].soundId references "${soundId}", which has no spatial config — periodic entity sounds require minRadius/maxRadius for distance gating`,
         );
       }
-      const minIntervalMs = e.minIntervalMs;
+      const minIntervalMs = v.requirePositive(
+        e,
+        'minIntervalMs',
+        `soundRegistry.entityPeriodicSounds["${entityId}"][${i}]`,
+      );
       const maxIntervalMs = e.maxIntervalMs;
-      if (typeof minIntervalMs !== 'number' || minIntervalMs <= 0) {
-        throw new Error(
-          `soundRegistry.entityPeriodicSounds["${entityId}"][${i}].minIntervalMs must be a positive number`,
-        );
-      }
       if (typeof maxIntervalMs !== 'number' || maxIntervalMs < minIntervalMs) {
         throw new Error(
           `soundRegistry.entityPeriodicSounds["${entityId}"][${i}].maxIntervalMs must be a number >= minIntervalMs (${minIntervalMs})`,
@@ -454,10 +401,7 @@ function validateEntityPeriodicSounds(
 const REGISTRY: SoundRegistry = (() => {
   const raw = soundRegistryRaw as Record<string, unknown>;
 
-  const soundsRaw = raw.sounds;
-  if (soundsRaw == null || typeof soundsRaw !== 'object') {
-    throw new Error('soundRegistry.sounds must be an object');
-  }
+  const soundsRaw = v.requireObject(raw.sounds, 'soundRegistry.sounds');
   const sounds: Record<string, SoundDefinition> = {};
   for (const [id, value] of Object.entries(soundsRaw)) {
     sounds[id] = validateSound(id, value);
@@ -470,10 +414,10 @@ const REGISTRY: SoundRegistry = (() => {
     knownIds,
   );
 
-  const overridesRaw = raw.levelOverrides;
-  if (overridesRaw == null || typeof overridesRaw !== 'object') {
-    throw new Error('soundRegistry.levelOverrides must be an object');
-  }
+  const overridesRaw = v.requireObject(
+    raw.levelOverrides,
+    'soundRegistry.levelOverrides',
+  );
   const levelOverrides: Record<string, LevelAmbienceOverride> = {};
   for (const [levelId, value] of Object.entries(overridesRaw)) {
     levelOverrides[levelId] = validateLevelOverride(levelId, value, knownIds);

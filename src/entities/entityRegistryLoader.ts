@@ -1,4 +1,5 @@
 import entityRegistryRaw from './entityRegistry.json';
+import * as v from '../shared/validate';
 import type {
   AnimatedEntityAnimConfig,
   AnimatedEntityAttackConfig,
@@ -28,46 +29,28 @@ function validateEntry(
   identifier: string,
   raw: unknown,
 ): AnimatedEntityConfig {
-  if (raw == null || typeof raw !== 'object') {
-    throw new Error(
-      `entityRegistry["${identifier}"] is not an object`,
-    );
-  }
-  const entry = raw as Record<string, unknown>;
-  const defaultAnimation = entry.defaultAnimation;
-  if (typeof defaultAnimation !== 'string' || defaultAnimation.length === 0) {
-    throw new Error(
-      `entityRegistry["${identifier}"].defaultAnimation must be a non-empty string`,
-    );
-  }
+  const ctx = `entityRegistry["${identifier}"]`;
+  const entry = v.requireObject(raw, ctx);
+  const defaultAnimation = v.requireString(entry, 'defaultAnimation', ctx);
   const physicsBodyRaw = entry.physicsBody;
   if (physicsBodyRaw == null || typeof physicsBodyRaw !== 'object') {
-    throw new Error(
-      `entityRegistry["${identifier}"].physicsBody must be an object with width/height`,
-    );
+    throw new Error(`${ctx}.physicsBody must be an object with width/height`);
   }
   const physicsBody = physicsBodyRaw as Record<string, unknown>;
-  if (
-    typeof physicsBody.width !== 'number' ||
-    typeof physicsBody.height !== 'number'
-  ) {
-    throw new Error(
-      `entityRegistry["${identifier}"].physicsBody.width/height must be numbers`,
-    );
-  }
-  const animationsRaw = entry.animations;
-  if (animationsRaw == null || typeof animationsRaw !== 'object') {
-    throw new Error(
-      `entityRegistry["${identifier}"].animations must be an object`,
-    );
-  }
+  const bodyWidth = v.requireFinite(physicsBody, 'width', `${ctx}.physicsBody`);
+  const bodyHeight = v.requireFinite(
+    physicsBody,
+    'height',
+    `${ctx}.physicsBody`,
+  );
+  const animationsRaw = v.requireObject(entry.animations, `${ctx}.animations`);
   const animations: Record<string, AnimatedEntityAnimConfig> = {};
   for (const [animKey, animRaw] of Object.entries(animationsRaw)) {
     animations[animKey] = validateAnim(identifier, animKey, animRaw);
   }
   if (!(defaultAnimation in animations)) {
     throw new Error(
-      `entityRegistry["${identifier}"].defaultAnimation "${defaultAnimation}" not present in animations`,
+      `${ctx}.defaultAnimation "${defaultAnimation}" not present in animations`,
     );
   }
   const behavior =
@@ -78,7 +61,7 @@ function validateEntry(
     entry.trap === undefined ? undefined : validateTrap(identifier, entry.trap);
   if (behavior && trap) {
     throw new Error(
-      `entityRegistry["${identifier}"] has both behavior and trap blocks — pick one. ` +
+      `${ctx} has both behavior and trap blocks — pick one. ` +
         'Enemies (with health/AI) use behavior; passive damage sources use trap.',
     );
   }
@@ -87,8 +70,8 @@ function validateEntry(
   return {
     defaultAnimation,
     physicsBody: {
-      width: physicsBody.width,
-      height: physicsBody.height,
+      width: bodyWidth,
+      height: bodyHeight,
     },
     gravity: entry.gravity === true,
     animations,
@@ -102,30 +85,34 @@ function validateDrops(
   identifier: string,
   raw: unknown,
 ): ReadonlyArray<AnimatedEntityDropConfig> {
-  if (!Array.isArray(raw) || raw.length === 0) {
-    throw new Error(
-      `entityRegistry["${identifier}"].drops must be a non-empty array`,
-    );
-  }
+  const list = v.requireNonEmptyArray(
+    raw,
+    `entityRegistry["${identifier}"].drops`,
+  );
   const drops: AnimatedEntityDropConfig[] = [];
-  for (let i = 0; i < raw.length; i += 1) {
-    drops.push(validateDropEvent(identifier, i, raw[i]));
+  for (let i = 0; i < list.length; i += 1) {
+    drops.push(validateDropEvent(identifier, i, list[i]));
   }
   return drops;
 }
+
+const DROP_KINDS = [
+  'gun1',
+  'gun2',
+  'magic',
+  'coin',
+  'heal',
+  'key_storms',
+  'key_widow',
+] as const;
 
 function validateDropEvent(
   identifier: string,
   index: number,
   raw: unknown,
 ): AnimatedEntityDropConfig {
-  if (raw == null || typeof raw !== 'object') {
-    throw new Error(
-      `entityRegistry["${identifier}"].drops[${index}] must be an object`,
-    );
-  }
-  const d = raw as Record<string, unknown>;
   const ctx = `entityRegistry["${identifier}"].drops[${index}]`;
+  const d = v.requireObject(raw, ctx);
   const chancePct = d.chancePct;
   if (
     typeof chancePct !== 'number' ||
@@ -137,35 +124,13 @@ function validateDropEvent(
       `${ctx}.chancePct must be a number in [0, 100] (got ${JSON.stringify(chancePct)})`,
     );
   }
-  if (!Array.isArray(d.kinds) || d.kinds.length === 0) {
-    throw new Error(`${ctx}.kinds must be a non-empty array`);
-  }
+  const kindsRaw = v.requireNonEmptyArray(d.kinds, `${ctx}.kinds`);
   const kinds: AnimatedEntityDropKindConfig[] = [];
-  for (let i = 0; i < d.kinds.length; i += 1) {
-    const entryRaw = d.kinds[i];
-    if (entryRaw == null || typeof entryRaw !== 'object') {
-      throw new Error(`${ctx}.kinds[${i}] must be an object`);
-    }
-    const e = entryRaw as Record<string, unknown>;
-    if (
-      e.kind !== 'gun1' &&
-      e.kind !== 'gun2' &&
-      e.kind !== 'magic' &&
-      e.kind !== 'coin' &&
-      e.kind !== 'heal' &&
-      e.kind !== 'key_storms' &&
-      e.kind !== 'key_widow'
-    ) {
-      throw new Error(
-        `${ctx}.kinds[${i}].kind must be "gun1", "gun2", "magic", "coin", "heal", "key_storms", or "key_widow" (got ${JSON.stringify(e.kind)})`,
-      );
-    }
-    if (typeof e.weight !== 'number' || !Number.isFinite(e.weight) || e.weight < 0) {
-      throw new Error(
-        `${ctx}.kinds[${i}].weight must be a non-negative number (got ${JSON.stringify(e.weight)})`,
-      );
-    }
-    kinds.push({ kind: e.kind, weight: e.weight });
+  for (let i = 0; i < kindsRaw.length; i += 1) {
+    const e = v.requireObject(kindsRaw[i], `${ctx}.kinds[${i}]`);
+    const kind = v.requireOneOf(e, 'kind', `${ctx}.kinds[${i}]`, DROP_KINDS);
+    const weight = v.requireNonNegative(e, 'weight', `${ctx}.kinds[${i}]`);
+    kinds.push({ kind, weight });
   }
   return { chancePct, kinds };
 }
@@ -174,23 +139,17 @@ function validateTrap(
   identifier: string,
   raw: unknown,
 ): AnimatedEntityTrapConfig {
+  const ctx = `entityRegistry["${identifier}"].trap`;
   if (raw == null || typeof raw !== 'object') {
-    throw new Error(
-      `entityRegistry["${identifier}"].trap must be an object when set`,
-    );
+    throw new Error(`${ctx} must be an object when set`);
   }
   const t = raw as Record<string, unknown>;
-  const damage = t.damage;
-  if (typeof damage !== 'number' || !Number.isFinite(damage) || damage <= 0) {
-    throw new Error(
-      `entityRegistry["${identifier}"].trap.damage must be a positive number (got ${JSON.stringify(damage)})`,
-    );
-  }
+  const damage = v.requirePositive(t, 'damage', ctx);
   let directContactAnimation: string | undefined;
   if (t.directContactAnimation !== undefined) {
     if (typeof t.directContactAnimation !== 'string' || t.directContactAnimation.length === 0) {
       throw new Error(
-        `entityRegistry["${identifier}"].trap.directContactAnimation must be a non-empty animation key when set`,
+        `${ctx}.directContactAnimation must be a non-empty animation key when set`,
       );
     }
     directContactAnimation = t.directContactAnimation;
@@ -198,30 +157,15 @@ function validateTrap(
   let damageZone: AnimatedEntityTrapConfig['damageZone'];
   if (t.damageZone !== undefined) {
     if (t.damageZone === null || typeof t.damageZone !== 'object') {
-      throw new Error(
-        `entityRegistry["${identifier}"].trap.damageZone must be an object when set`,
-      );
+      throw new Error(`${ctx}.damageZone must be an object when set`);
     }
     const z = t.damageZone as Record<string, unknown>;
-    const requireZoneNum = (field: string, allowNonPositive = false): number => {
-      const value = z[field];
-      if (typeof value !== 'number' || !Number.isFinite(value)) {
-        throw new Error(
-          `entityRegistry["${identifier}"].trap.damageZone.${field} must be a finite number`,
-        );
-      }
-      if (!allowNonPositive && value <= 0) {
-        throw new Error(
-          `entityRegistry["${identifier}"].trap.damageZone.${field} must be positive`,
-        );
-      }
-      return value;
-    };
+    const zctx = `${ctx}.damageZone`;
     damageZone = {
-      width: requireZoneNum('width'),
-      height: requireZoneNum('height'),
-      offsetX: requireZoneNum('offsetX', true),
-      offsetY: requireZoneNum('offsetY', true),
+      width: v.requirePositive(z, 'width', zctx),
+      height: v.requirePositive(z, 'height', zctx),
+      offsetX: v.requireFinite(z, 'offsetX', zctx),
+      offsetY: v.requireFinite(z, 'offsetY', zctx),
     };
   }
   return { damage, directContactAnimation, damageZone };
@@ -245,17 +189,7 @@ function validateBehavior(
   const b = raw as Record<string, unknown>;
   const ctx = `entityRegistry["${identifier}"].behavior`;
 
-  const healthRaw = b.health;
-  if (
-    typeof healthRaw !== 'number' ||
-    !Number.isFinite(healthRaw) ||
-    healthRaw <= 0
-  ) {
-    throw new Error(
-      `${ctx}.health must be a positive number (got ${JSON.stringify(healthRaw)})`,
-    );
-  }
-  const health = healthRaw;
+  const health = v.requirePositive(b, 'health', ctx);
 
   const hurtAnimation = optionalAnimKey(
     ctx,
@@ -263,53 +197,10 @@ function validateBehavior(
     b.hurtAnimation,
     animations,
   );
-  let hurtSoundId: string | undefined;
-  if (b.hurtSoundId !== undefined) {
-    if (typeof b.hurtSoundId !== 'string' || b.hurtSoundId.length === 0) {
-      throw new Error(
-        `${ctx}.hurtSoundId must be a non-empty string when set (got ${JSON.stringify(b.hurtSoundId)})`,
-      );
-    }
-    hurtSoundId = b.hurtSoundId;
-  }
-  let encounterSoundId: string | undefined;
-  if (b.encounterSoundId !== undefined) {
-    if (
-      typeof b.encounterSoundId !== 'string' ||
-      b.encounterSoundId.length === 0
-    ) {
-      throw new Error(
-        `${ctx}.encounterSoundId must be a non-empty string when set (got ${JSON.stringify(b.encounterSoundId)})`,
-      );
-    }
-    encounterSoundId = b.encounterSoundId;
-  }
-  let encounterRadius: number | undefined;
-  if (b.encounterRadius !== undefined) {
-    if (
-      typeof b.encounterRadius !== 'number' ||
-      !Number.isFinite(b.encounterRadius) ||
-      b.encounterRadius <= 0
-    ) {
-      throw new Error(
-        `${ctx}.encounterRadius must be a positive number when set (got ${JSON.stringify(b.encounterRadius)})`,
-      );
-    }
-    encounterRadius = b.encounterRadius;
-  }
-  let engageDelayMs: number | undefined;
-  if (b.engageDelayMs !== undefined) {
-    if (
-      typeof b.engageDelayMs !== 'number' ||
-      !Number.isFinite(b.engageDelayMs) ||
-      b.engageDelayMs < 0
-    ) {
-      throw new Error(
-        `${ctx}.engageDelayMs must be a non-negative number when set (got ${JSON.stringify(b.engageDelayMs)})`,
-      );
-    }
-    engageDelayMs = b.engageDelayMs;
-  }
+  const hurtSoundId = v.optionalString(b, 'hurtSoundId', ctx);
+  const encounterSoundId = v.optionalString(b, 'encounterSoundId', ctx);
+  const encounterRadius = v.optionalPositive(b, 'encounterRadius', ctx);
+  const engageDelayMs = v.optionalNonNegative(b, 'engageDelayMs', ctx);
   if (
     encounterRadius !== undefined &&
     encounterSoundId === undefined &&
@@ -348,19 +239,7 @@ function validateBehavior(
         `${ctx}.dormant.trigger must be "lineOfSight" (got ${JSON.stringify(d.trigger)})`,
       );
     }
-    let dormantRange: number | undefined;
-    if (d.range !== undefined) {
-      if (
-        typeof d.range !== 'number' ||
-        !Number.isFinite(d.range) ||
-        d.range <= 0
-      ) {
-        throw new Error(
-          `${ctx}.dormant.range must be a positive number when set (got ${JSON.stringify(d.range)})`,
-        );
-      }
-      dormantRange = d.range;
-    }
+    const dormantRange = v.optionalPositive(d, 'range', `${ctx}.dormant`);
     // Optional looping clip held while dormant. Unlike wakeAnimation it may
     // loop (it's the resting pose, not the one-shot wake), so no loops check.
     const sleepAnimation = optionalAnimKey(
@@ -382,58 +261,18 @@ function validateBehavior(
     b.deathAnimation,
     animations,
   );
-  let immovable: boolean | undefined;
-  if (b.immovable !== undefined) {
-    if (typeof b.immovable !== 'boolean') {
-      throw new Error(`${ctx}.immovable must be a boolean when set`);
-    }
-    immovable = b.immovable;
-  }
-  let horizontalMovementOnly: boolean | undefined;
-  if (b.horizontalMovementOnly !== undefined) {
-    if (typeof b.horizontalMovementOnly !== 'boolean') {
-      throw new Error(
-        `${ctx}.horizontalMovementOnly must be a boolean when set`,
-      );
-    }
-    horizontalMovementOnly = b.horizontalMovementOnly;
-  }
-  let stayInSpawnLevel: boolean | undefined;
-  if (b.stayInSpawnLevel !== undefined) {
-    if (typeof b.stayInSpawnLevel !== 'boolean') {
-      throw new Error(`${ctx}.stayInSpawnLevel must be a boolean when set`);
-    }
-    stayInSpawnLevel = b.stayInSpawnLevel;
-  }
-  let homeLeashRange: number | undefined;
-  if (b.homeLeashRange !== undefined) {
-    if (
-      typeof b.homeLeashRange !== 'number' ||
-      !Number.isFinite(b.homeLeashRange) ||
-      b.homeLeashRange <= 0
-    ) {
-      throw new Error(
-        `${ctx}.homeLeashRange must be a positive number when set (got ${JSON.stringify(b.homeLeashRange)})`,
-      );
-    }
-    homeLeashRange = b.homeLeashRange;
-  }
+  const immovable = v.optionalBoolean(b, 'immovable', ctx);
+  const horizontalMovementOnly = v.optionalBoolean(
+    b,
+    'horizontalMovementOnly',
+    ctx,
+  );
+  const stayInSpawnLevel = v.optionalBoolean(b, 'stayInSpawnLevel', ctx);
+  const homeLeashRange = v.optionalPositive(b, 'homeLeashRange', ctx);
   // Stealth/detection tuning — all optional, validated like the other
   // positive-number knobs. Defaults are applied at runtime (see Enemy /
   // constants), so absence just means "use the global default".
-  let detectionRange: number | undefined;
-  if (b.detectionRange !== undefined) {
-    if (
-      typeof b.detectionRange !== 'number' ||
-      !Number.isFinite(b.detectionRange) ||
-      b.detectionRange <= 0
-    ) {
-      throw new Error(
-        `${ctx}.detectionRange must be a positive number when set (got ${JSON.stringify(b.detectionRange)})`,
-      );
-    }
-    detectionRange = b.detectionRange;
-  }
+  const detectionRange = v.optionalPositive(b, 'detectionRange', ctx);
   let visionHalfAngleDeg: number | undefined;
   if (b.visionHalfAngleDeg !== undefined) {
     if (
@@ -448,75 +287,14 @@ function validateBehavior(
     }
     visionHalfAngleDeg = b.visionHalfAngleDeg;
   }
-  let alertSpeedMul: number | undefined;
-  if (b.alertSpeedMul !== undefined) {
-    if (
-      typeof b.alertSpeedMul !== 'number' ||
-      !Number.isFinite(b.alertSpeedMul) ||
-      b.alertSpeedMul <= 0
-    ) {
-      throw new Error(
-        `${ctx}.alertSpeedMul must be a positive number when set (got ${JSON.stringify(b.alertSpeedMul)})`,
-      );
-    }
-    alertSpeedMul = b.alertSpeedMul;
-  }
-  let ignoresStealth: boolean | undefined;
-  if (b.ignoresStealth !== undefined) {
-    if (typeof b.ignoresStealth !== 'boolean') {
-      throw new Error(`${ctx}.ignoresStealth must be a boolean when set`);
-    }
-    ignoresStealth = b.ignoresStealth;
-  }
-  let isBoss: boolean | undefined;
-  if (b.isBoss !== undefined) {
-    if (typeof b.isBoss !== 'boolean') {
-      throw new Error(`${ctx}.isBoss must be a boolean when set`);
-    }
-    isBoss = b.isBoss;
-  }
-  let stationary: boolean | undefined;
-  if (b.stationary !== undefined) {
-    if (typeof b.stationary !== 'boolean') {
-      throw new Error(`${ctx}.stationary must be a boolean when set`);
-    }
-    stationary = b.stationary;
-  }
-  let roundFight: boolean | undefined;
-  if (b.roundFight !== undefined) {
-    if (typeof b.roundFight !== 'boolean') {
-      throw new Error(`${ctx}.roundFight must be a boolean when set`);
-    }
-    roundFight = b.roundFight;
-  }
-  let displayName: string | undefined;
-  if (b.displayName !== undefined) {
-    if (typeof b.displayName !== 'string' || b.displayName.length === 0) {
-      throw new Error(
-        `${ctx}.displayName must be a non-empty string when set (got ${JSON.stringify(b.displayName)})`,
-      );
-    }
-    displayName = b.displayName;
-  }
-  let hideHealthBar: boolean | undefined;
-  if (b.hideHealthBar !== undefined) {
-    if (typeof b.hideHealthBar !== 'boolean') {
-      throw new Error(`${ctx}.hideHealthBar must be a boolean when set`);
-    }
-    hideHealthBar = b.hideHealthBar;
-  }
-  let healthBarOffsetY: number | undefined;
-  if (b.healthBarOffsetY !== undefined) {
-    if (
-      typeof b.healthBarOffsetY !== 'number' ||
-      !Number.isFinite(b.healthBarOffsetY)
-    ) {
-      throw new Error(
-        `${ctx}.healthBarOffsetY must be a finite number when set (got ${JSON.stringify(b.healthBarOffsetY)})`,
-      );
-    }
-    healthBarOffsetY = b.healthBarOffsetY;
-  }
+  const alertSpeedMul = v.optionalPositive(b, 'alertSpeedMul', ctx);
+  const ignoresStealth = v.optionalBoolean(b, 'ignoresStealth', ctx);
+  const isBoss = v.optionalBoolean(b, 'isBoss', ctx);
+  const stationary = v.optionalBoolean(b, 'stationary', ctx);
+  const roundFight = v.optionalBoolean(b, 'roundFight', ctx);
+  const displayName = v.optionalString(b, 'displayName', ctx);
+  const hideHealthBar = v.optionalBoolean(b, 'hideHealthBar', ctx);
+  const healthBarOffsetY = v.optionalFinite(b, 'healthBarOffsetY', ctx);
   // Patrol movement decoupled from attacks: lets an attack-less character
   // (spirit walkers) walk its loiterPath via the shared loiter code, which
   // falls back to these when attacks[0] supplies no walkAnimation/moveSpeed.
@@ -526,19 +304,7 @@ function validateBehavior(
     b.walkAnimation,
     animations,
   );
-  let moveSpeed: number | undefined;
-  if (b.moveSpeed !== undefined) {
-    if (
-      typeof b.moveSpeed !== 'number' ||
-      !Number.isFinite(b.moveSpeed) ||
-      b.moveSpeed <= 0
-    ) {
-      throw new Error(
-        `${ctx}.moveSpeed must be a positive number when set (got ${JSON.stringify(b.moveSpeed)})`,
-      );
-    }
-    moveSpeed = b.moveSpeed;
-  }
+  const moveSpeed = v.optionalPositive(b, 'moveSpeed', ctx);
 
   const attack =
     b.attack === undefined
@@ -575,16 +341,9 @@ function validateBehavior(
     }
     const d = b.dodgeOnProjectile as Record<string, unknown>;
     const dctx = `${ctx}.dodgeOnProjectile`;
-    const requirePositive = (field: string): number => {
-      const value = d[field];
-      if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-        throw new Error(`${dctx}.${field} must be a positive number`);
-      }
-      return value;
-    };
     dodgeOnProjectile = {
-      triggerRangePx: requirePositive('triggerRangePx'),
-      cooldownMs: requirePositive('cooldownMs'),
+      triggerRangePx: v.requirePositive(d, 'triggerRangePx', dctx),
+      cooldownMs: v.requirePositive(d, 'cooldownMs', dctx),
     };
   }
 
@@ -601,23 +360,7 @@ function validateBehavior(
     }
     const e = b.deathExplosion as Record<string, unknown>;
     const ectx = `${ctx}.deathExplosion`;
-    const requirePositive = (field: string): number => {
-      const value = e[field];
-      if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-        throw new Error(`${ectx}.${field} must be a positive number`);
-      }
-      return value;
-    };
-    const frameRaw = e.frame;
-    if (
-      typeof frameRaw !== 'number' ||
-      !Number.isInteger(frameRaw) ||
-      frameRaw < 0
-    ) {
-      throw new Error(
-        `${ectx}.frame must be a non-negative integer (got ${JSON.stringify(frameRaw)})`,
-      );
-    }
+    const frameRaw = v.requireNonNegativeInt(e, 'frame', ectx);
     // Frame must address a valid index of the death animation when one is
     // registered. When the entity has no death anim the runtime falls back
     // to firing on enterDeadState, so the frame is unused and we don't
@@ -632,8 +375,8 @@ function validateBehavior(
       }
     }
     deathExplosion = {
-      damage: requirePositive('damage'),
-      radius: requirePositive('radius'),
+      damage: v.requirePositive(e, 'damage', ectx),
+      radius: v.requirePositive(e, 'radius', ectx),
       frame: frameRaw,
     };
   }
@@ -656,16 +399,7 @@ function validateBehavior(
     }
     const w = b.wander as Record<string, unknown>;
     const wctx = `${ctx}.wander`;
-    const radiusRaw = w.radius;
-    if (
-      typeof radiusRaw !== 'number' ||
-      !Number.isFinite(radiusRaw) ||
-      radiusRaw <= 0
-    ) {
-      throw new Error(
-        `${wctx}.radius must be a positive number (got ${JSON.stringify(radiusRaw)})`,
-      );
-    }
+    const radiusRaw = v.requirePositive(w, 'radius', wctx);
     let greet:
       | {
           readonly group: string;
@@ -681,18 +415,7 @@ function validateBehavior(
       }
       const g = w.greet as Record<string, unknown>;
       const gctx = `${wctx}.greet`;
-      if (typeof g.group !== 'string' || g.group.length === 0) {
-        throw new Error(
-          `${gctx}.group must be a non-empty string (got ${JSON.stringify(g.group)})`,
-        );
-      }
-      const requirePositive = (field: string): number => {
-        const value = g[field];
-        if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-          throw new Error(`${gctx}.${field} must be a positive number`);
-        }
-        return value;
-      };
+      const group = v.requireString(g, 'group', gctx);
       const chanceRaw = g.chance;
       if (
         typeof chanceRaw !== 'number' ||
@@ -704,22 +427,12 @@ function validateBehavior(
           `${gctx}.chance must be a number in (0, 1] (got ${JSON.stringify(chanceRaw)})`,
         );
       }
-      const hopsRaw = g.hops;
-      if (
-        typeof hopsRaw !== 'number' ||
-        !Number.isInteger(hopsRaw) ||
-        hopsRaw <= 0
-      ) {
-        throw new Error(
-          `${gctx}.hops must be a positive integer (got ${JSON.stringify(hopsRaw)})`,
-        );
-      }
       greet = {
-        group: g.group,
-        proximityPx: requirePositive('proximityPx'),
+        group,
+        proximityPx: v.requirePositive(g, 'proximityPx', gctx),
         chance: chanceRaw,
-        hops: hopsRaw,
-        cooldownMs: requirePositive('cooldownMs'),
+        hops: v.requirePositiveInt(g, 'hops', gctx),
+        cooldownMs: v.requirePositive(g, 'cooldownMs', gctx),
       };
     }
     wander = { radius: radiusRaw, greet };
@@ -758,6 +471,18 @@ function validateBehavior(
   };
 }
 
+const ATTACK_TYPES = [
+  'melee',
+  'ranged',
+  'magic',
+  'contact',
+  'heal',
+  'dive',
+  'aoe',
+  'teleport',
+  'summon',
+] as const;
+
 function validateAttack(
   identifier: string,
   raw: unknown,
@@ -771,78 +496,23 @@ function validateAttack(
   const a = raw as Record<string, unknown>;
   const ctx = `entityRegistry["${identifier}"].behavior.attack`;
 
-  const type = a.type;
-  if (
-    type !== 'melee' &&
-    type !== 'ranged' &&
-    type !== 'magic' &&
-    type !== 'contact' &&
-    type !== 'heal' &&
-    type !== 'dive' &&
-    type !== 'aoe' &&
-    type !== 'teleport' &&
-    type !== 'summon'
-  ) {
-    throw new Error(
-      `${ctx}.type must be "melee" | "ranged" | "magic" | "contact" | "heal" | "dive" | "aoe" | "teleport" | "summon" (got ${JSON.stringify(type)})`,
-    );
-  }
+  const type = v.requireOneOf(a, 'type', ctx, ATTACK_TYPES);
 
-  const requirePositive = (field: string): number => {
-    const value = a[field];
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-      throw new Error(
-        `${ctx}.${field} must be a positive number (got ${JSON.stringify(value)})`,
-      );
-    }
-    return value;
-  };
-  const requireNonNegativeInt = (field: string): number => {
-    const value = a[field];
-    if (
-      typeof value !== 'number' ||
-      !Number.isInteger(value) ||
-      value < 0
-    ) {
-      throw new Error(
-        `${ctx}.${field} must be a non-negative integer (got ${JSON.stringify(value)})`,
-      );
-    }
-    return value;
-  };
-  const optionalPositive = (field: string): number | undefined => {
-    const value = a[field];
-    if (value === undefined) return undefined;
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-      throw new Error(
-        `${ctx}.${field} must be a positive number when set (got ${JSON.stringify(value)})`,
-      );
-    }
-    return value;
-  };
-  const optionalFraction = (field: string): number | undefined => {
-    const value = a[field];
-    if (value === undefined) return undefined;
-    if (
-      typeof value !== 'number' ||
-      !Number.isFinite(value) ||
-      value <= 0 ||
-      value >= 1
-    ) {
-      throw new Error(
-        `${ctx}.${field} must be a number in (0, 1) exclusive when set (got ${JSON.stringify(value)})`,
-      );
-    }
-    return value;
-  };
+  // Thin per-validator bindings over the shared primitives so the dozens of
+  // call sites below stay one-argument.
+  const requirePositive = (field: string): number =>
+    v.requirePositive(a, field, ctx);
+  const requireNonNegativeInt = (field: string): number =>
+    v.requireNonNegativeInt(a, field, ctx);
+  const optionalPositive = (field: string): number | undefined =>
+    v.optionalPositive(a, field, ctx);
+  const optionalFraction = (field: string): number | undefined =>
+    v.optionalFraction(a, field, ctx);
 
   const cooldownMs = requirePositive('cooldownMs');
   const recastCooldownMs = optionalPositive('recastCooldownMs');
   const weight = optionalPositive('weight');
-  if (typeof a.aggressive !== 'boolean') {
-    throw new Error(`${ctx}.aggressive must be a boolean`);
-  }
-  const aggressive = a.aggressive;
+  const aggressive = v.requireBoolean(a, 'aggressive', ctx);
 
   const chaseRange = optionalPositive('chaseRange');
   const moveSpeed = optionalPositive('moveSpeed');
@@ -898,14 +568,7 @@ function validateAttack(
   // independently, so it needs no selection range). The type restriction (combo
   // semantics only apply to melee/ranged/magic) is enforced below alongside
   // comboNextAnimation.
-  if (a.comboOnly !== undefined) {
-    if (typeof a.comboOnly !== 'boolean') {
-      throw new Error(
-        `${ctx}.comboOnly must be a boolean when set (got ${JSON.stringify(a.comboOnly)})`,
-      );
-    }
-    comboOnly = a.comboOnly;
-  }
+  comboOnly = v.optionalBoolean(a, 'comboOnly', ctx);
 
   // Hitbox parser shared by melee and teleport (both deliver damage via a
   // transient rect on a frame). Accepts either `hitbox` (single object) or
@@ -923,48 +586,23 @@ function validateAttack(
       );
     }
     const hb = raw as Record<string, unknown>;
-    const requireHitboxNum = (field: string): number => {
-      const value = hb[field];
-      if (typeof value !== 'number' || !Number.isFinite(value)) {
-        throw new Error(
-          `${ctx}.${label}.${field} must be a number (got ${JSON.stringify(value)})`,
-        );
-      }
-      return value;
-    };
-    let matchBody: boolean | undefined;
-    if (hb.matchBody !== undefined) {
-      if (typeof hb.matchBody !== 'boolean') {
-        throw new Error(
-          `${ctx}.${label}.matchBody must be a boolean when set (got ${JSON.stringify(hb.matchBody)})`,
-        );
-      }
-      matchBody = hb.matchBody;
-    }
-    const hbWidth = requireHitboxNum('width');
-    const hbHeight = requireHitboxNum('height');
+    const hbctx = `${ctx}.${label}`;
+    const matchBody = v.optionalBoolean(hb, 'matchBody', hbctx);
+    const hbWidth = v.requireFinite(hb, 'width', hbctx);
+    const hbHeight = v.requireFinite(hb, 'height', hbctx);
     // matchBody hitboxes stamp at the live body rect, so authored
     // width/height are unused — allow 0 to make "ignored" intent clear.
     // Other hitboxes still require positive dimensions (otherwise
     // overlapRect would be a no-op).
     if (!matchBody && (hbWidth <= 0 || hbHeight <= 0)) {
       throw new Error(
-        `${ctx}.${label}.width and height must be > 0 (got ${hbWidth}x${hbHeight})`,
+        `${hbctx}.width and height must be > 0 (got ${hbWidth}x${hbHeight})`,
       );
     }
-    let hbFrame: number | undefined;
-    if (hb.frame !== undefined) {
-      const f = hb.frame;
-      if (typeof f !== 'number' || !Number.isInteger(f) || f < 0) {
-        throw new Error(
-          `${ctx}.${label}.frame must be a non-negative integer when set (got ${JSON.stringify(f)})`,
-        );
-      }
-      hbFrame = f;
-    }
+    const hbFrame = v.optionalNonNegativeInt(hb, 'frame', hbctx);
     return {
-      offsetX: requireHitboxNum('offsetX'),
-      offsetY: requireHitboxNum('offsetY'),
+      offsetX: v.requireFinite(hb, 'offsetX', hbctx),
+      offsetY: v.requireFinite(hb, 'offsetY', hbctx),
       width: hbWidth,
       height: hbHeight,
       frame: hbFrame,
@@ -1188,26 +826,12 @@ function validateAttack(
       );
     }
     hitboxes = parseHitbox();
-    if (a.targetOffsetY !== undefined) {
-      if (typeof a.targetOffsetY !== 'number' || !Number.isFinite(a.targetOffsetY)) {
-        throw new Error(
-          `${ctx}.targetOffsetY must be a finite number when set (got ${JSON.stringify(a.targetOffsetY)})`,
-        );
-      }
-      targetOffsetY = a.targetOffsetY;
-    }
-    if (a.appearElevated !== undefined) {
-      if (typeof a.appearElevated !== 'boolean') {
-        throw new Error(
-          `${ctx}.appearElevated must be a boolean when set (got ${JSON.stringify(a.appearElevated)})`,
-        );
-      }
-      if (a.appearElevated === true && appearAnimation === undefined) {
-        throw new Error(
-          `${ctx}.appearElevated:true requires appearAnimation to be set — the elevation is only meaningful for three-phase teleports`,
-        );
-      }
-      appearElevated = a.appearElevated;
+    targetOffsetY = v.optionalFinite(a, 'targetOffsetY', ctx);
+    appearElevated = v.optionalBoolean(a, 'appearElevated', ctx);
+    if (appearElevated === true && appearAnimation === undefined) {
+      throw new Error(
+        `${ctx}.appearElevated:true requires appearAnimation to be set — the elevation is only meaningful for three-phase teleports`,
+      );
     }
   } else if (type === 'summon') {
     // Summon: plays a one-shot cast animation; on `frame` it spawns minions
@@ -1246,30 +870,8 @@ function validateAttack(
       kinds.push(k);
     }
     summonKinds = kinds;
-    const countRaw = a.summonCount;
-    if (
-      typeof countRaw !== 'number' ||
-      !Number.isInteger(countRaw) ||
-      countRaw <= 0
-    ) {
-      throw new Error(
-        `${ctx}.summonCount must be a positive integer (got ${JSON.stringify(countRaw)})`,
-      );
-    }
-    summonCount = countRaw;
-    if (a.summonMaxAlive !== undefined) {
-      const maxRaw = a.summonMaxAlive;
-      if (
-        typeof maxRaw !== 'number' ||
-        !Number.isInteger(maxRaw) ||
-        maxRaw <= 0
-      ) {
-        throw new Error(
-          `${ctx}.summonMaxAlive must be a positive integer when set (got ${JSON.stringify(maxRaw)})`,
-        );
-      }
-      summonMaxAlive = maxRaw;
-    }
+    summonCount = v.requirePositiveInt(a, 'summonCount', ctx);
+    summonMaxAlive = v.optionalPositiveInt(a, 'summonMaxAlive', ctx);
   } else {
     // melee / ranged / magic — animated, frame-gated, range-checked
     animation = requireAnimKeyExists(ctx, 'animation', a.animation, animations);
@@ -1302,18 +904,7 @@ function validateAttack(
 
     if (type === 'melee') {
       hitboxes = parseHitbox();
-      if (a.lungeDistance !== undefined) {
-        if (
-          typeof a.lungeDistance !== 'number' ||
-          !Number.isFinite(a.lungeDistance) ||
-          a.lungeDistance <= 0
-        ) {
-          throw new Error(
-            `${ctx}.lungeDistance must be a positive number when set (got ${JSON.stringify(a.lungeDistance)})`,
-          );
-        }
-        lungeDistance = a.lungeDistance;
-      }
+      lungeDistance = optionalPositive('lungeDistance');
     } else {
       projectileAnimIdle = requireAnimKeyExists(
         ctx,
@@ -1328,27 +919,10 @@ function validateAttack(
         animations,
       );
       projectileSpeed = requirePositive('projectileSpeed');
-      const requireFiniteNumber = (field: string): number | undefined => {
-        const value = a[field];
-        if (value === undefined) return undefined;
-        if (typeof value !== 'number' || !Number.isFinite(value)) {
-          throw new Error(
-            `${ctx}.${field} must be a finite number when set (got ${JSON.stringify(value)})`,
-          );
-        }
-        return value;
-      };
-      projectileOriginX = requireFiniteNumber('projectileOriginX');
-      projectileOriginY = requireFiniteNumber('projectileOriginY');
-      if (a.projectileStraight !== undefined) {
-        if (typeof a.projectileStraight !== 'boolean') {
-          throw new Error(
-            `${ctx}.projectileStraight must be a boolean when set (got ${JSON.stringify(a.projectileStraight)})`,
-          );
-        }
-        projectileStraight = a.projectileStraight;
-      }
-      verticalAlignMarginPx = requireFiniteNumber('verticalAlignMarginPx');
+      projectileOriginX = v.optionalFinite(a, 'projectileOriginX', ctx);
+      projectileOriginY = v.optionalFinite(a, 'projectileOriginY', ctx);
+      projectileStraight = v.optionalBoolean(a, 'projectileStraight', ctx);
+      verticalAlignMarginPx = v.optionalFinite(a, 'verticalAlignMarginPx', ctx);
       if (
         verticalAlignMarginPx !== undefined &&
         (verticalAlignMarginPx < 0 || projectileStraight !== true)
@@ -1376,143 +950,64 @@ function validateAttack(
   // requireGroundedTarget is an opt-in AoE-only modifier. Reject it on other
   // types so a typo (e.g. set on a melee swing) fails loudly at boot rather
   // than silently doing nothing at runtime.
-  if (a.requireGroundedTarget !== undefined) {
-    if (type !== 'aoe') {
+  // AoE-only modifiers. Each rejects on other types so a typo (e.g. set on a
+  // melee swing) fails loudly at boot rather than silently doing nothing.
+  const requireAoeOnly = (field: string): void => {
+    if (a[field] !== undefined && type !== 'aoe') {
       throw new Error(
-        `${ctx}.requireGroundedTarget is only valid on type "aoe" (got type "${type}")`,
+        `${ctx}.${field} is only valid on type "aoe" (got type "${type}")`,
       );
     }
-    if (typeof a.requireGroundedTarget !== 'boolean') {
-      throw new Error(
-        `${ctx}.requireGroundedTarget must be a boolean when set (got ${JSON.stringify(a.requireGroundedTarget)})`,
-      );
-    }
-    requireGroundedTarget = a.requireGroundedTarget;
+  };
+  requireAoeOnly('requireGroundedTarget');
+  requireGroundedTarget = v.optionalBoolean(a, 'requireGroundedTarget', ctx);
+
+  requireAoeOnly('minAirborneDodgeClearancePx');
+  minAirborneDodgeClearancePx = v.optionalPositive(
+    a,
+    'minAirborneDodgeClearancePx',
+    ctx,
+  );
+  if (
+    minAirborneDodgeClearancePx !== undefined &&
+    a.requireGroundedTarget !== true
+  ) {
+    throw new Error(
+      `${ctx}.minAirborneDodgeClearancePx requires requireGroundedTarget=true to take effect`,
+    );
   }
 
-  if (a.minAirborneDodgeClearancePx !== undefined) {
-    if (type !== 'aoe') {
-      throw new Error(
-        `${ctx}.minAirborneDodgeClearancePx is only valid on type "aoe" (got type "${type}")`,
-      );
-    }
-    if (
-      typeof a.minAirborneDodgeClearancePx !== 'number' ||
-      !Number.isFinite(a.minAirborneDodgeClearancePx) ||
-      a.minAirborneDodgeClearancePx <= 0
-    ) {
-      throw new Error(
-        `${ctx}.minAirborneDodgeClearancePx must be a positive finite number when set (got ${JSON.stringify(a.minAirborneDodgeClearancePx)})`,
-      );
-    }
-    if (a.requireGroundedTarget !== true) {
-      throw new Error(
-        `${ctx}.minAirborneDodgeClearancePx requires requireGroundedTarget=true to take effect`,
-      );
-    }
-    minAirborneDodgeClearancePx = a.minAirborneDodgeClearancePx;
+  requireAoeOnly('requireOpenSky');
+  requireOpenSky = v.optionalBoolean(a, 'requireOpenSky', ctx);
+
+  requireAoeOnly('groundProjectVfx');
+  groundProjectVfx = v.optionalBoolean(a, 'groundProjectVfx', ctx);
+  if (a.requireGroundedTarget === true && groundProjectVfx === true) {
+    throw new Error(
+      `${ctx} cannot set both requireGroundedTarget and groundProjectVfx — they describe opposite mid-air behaviors (suppress vs reproject)`,
+    );
   }
 
-  if (a.requireOpenSky !== undefined) {
-    if (type !== 'aoe') {
-      throw new Error(
-        `${ctx}.requireOpenSky is only valid on type "aoe" (got type "${type}")`,
-      );
-    }
-    if (typeof a.requireOpenSky !== 'boolean') {
-      throw new Error(
-        `${ctx}.requireOpenSky must be a boolean when set (got ${JSON.stringify(a.requireOpenSky)})`,
-      );
-    }
-    requireOpenSky = a.requireOpenSky;
+  requireAoeOnly('vfxDelayMs');
+  vfxDelayMs = v.optionalNonNegative(a, 'vfxDelayMs', ctx);
+
+  requireAoeOnly('vfxSoundId');
+  vfxSoundId = v.optionalString(a, 'vfxSoundId', ctx);
+
+  requireAoeOnly('vfxSoundLeadMs');
+  vfxSoundLeadMs = v.optionalNonNegative(a, 'vfxSoundLeadMs', ctx);
+  if (vfxSoundLeadMs !== undefined && vfxSoundId === undefined) {
+    throw new Error(
+      `${ctx}.vfxSoundLeadMs requires vfxSoundId to also be set`,
+    );
   }
 
-  if (a.groundProjectVfx !== undefined) {
-    if (type !== 'aoe') {
-      throw new Error(
-        `${ctx}.groundProjectVfx is only valid on type "aoe" (got type "${type}")`,
-      );
-    }
-    if (typeof a.groundProjectVfx !== 'boolean') {
-      throw new Error(
-        `${ctx}.groundProjectVfx must be a boolean when set (got ${JSON.stringify(a.groundProjectVfx)})`,
-      );
-    }
-    if (a.requireGroundedTarget === true && a.groundProjectVfx === true) {
-      throw new Error(
-        `${ctx} cannot set both requireGroundedTarget and groundProjectVfx — they describe opposite mid-air behaviors (suppress vs reproject)`,
-      );
-    }
-    groundProjectVfx = a.groundProjectVfx;
-  }
-
-  if (a.vfxDelayMs !== undefined) {
-    if (type !== 'aoe') {
-      throw new Error(
-        `${ctx}.vfxDelayMs is only valid on type "aoe" (got type "${type}")`,
-      );
-    }
-    if (
-      typeof a.vfxDelayMs !== 'number' ||
-      !Number.isFinite(a.vfxDelayMs) ||
-      a.vfxDelayMs < 0
-    ) {
-      throw new Error(
-        `${ctx}.vfxDelayMs must be a non-negative finite number when set (got ${JSON.stringify(a.vfxDelayMs)})`,
-      );
-    }
-    vfxDelayMs = a.vfxDelayMs;
-  }
-
-  if (a.vfxSoundId !== undefined) {
-    if (type !== 'aoe') {
-      throw new Error(
-        `${ctx}.vfxSoundId is only valid on type "aoe" (got type "${type}")`,
-      );
-    }
-    if (typeof a.vfxSoundId !== 'string' || a.vfxSoundId.length === 0) {
-      throw new Error(
-        `${ctx}.vfxSoundId must be a non-empty string when set (got ${JSON.stringify(a.vfxSoundId)})`,
-      );
-    }
-    vfxSoundId = a.vfxSoundId;
-  }
-
-  if (a.vfxSoundLeadMs !== undefined) {
-    if (type !== 'aoe') {
-      throw new Error(
-        `${ctx}.vfxSoundLeadMs is only valid on type "aoe" (got type "${type}")`,
-      );
-    }
-    if (
-      typeof a.vfxSoundLeadMs !== 'number' ||
-      !Number.isFinite(a.vfxSoundLeadMs) ||
-      a.vfxSoundLeadMs < 0
-    ) {
-      throw new Error(
-        `${ctx}.vfxSoundLeadMs must be a non-negative finite number when set (got ${JSON.stringify(a.vfxSoundLeadMs)})`,
-      );
-    }
-    if (a.vfxSoundId === undefined) {
-      throw new Error(
-        `${ctx}.vfxSoundLeadMs requires vfxSoundId to also be set`,
-      );
-    }
-    vfxSoundLeadMs = a.vfxSoundLeadMs;
-  }
-
+  requireAoeOnly('hurtSource');
   if (a.hurtSource !== undefined) {
-    if (type !== 'aoe') {
-      throw new Error(
-        `${ctx}.hurtSource is only valid on type "aoe" (got type "${type}")`,
-      );
-    }
-    if (a.hurtSource !== 'melee' && a.hurtSource !== 'projectile') {
-      throw new Error(
-        `${ctx}.hurtSource must be "melee" or "projectile" when set (got ${JSON.stringify(a.hurtSource)})`,
-      );
-    }
-    hurtSource = a.hurtSource;
+    hurtSource = v.requireOneOf(a, 'hurtSource', ctx, [
+      'melee',
+      'projectile',
+    ] as const);
   }
 
   // Combo chaining is only meaningful for attacks that complete via the
@@ -1579,11 +1074,8 @@ function validateAttack(
     }
   }
 
-  let damageHalfWidth: number | undefined;
-  let damageHalfHeight: number | undefined;
   const validateAoeHalfDim = (field: 'damageHalfWidth' | 'damageHalfHeight'): number | undefined => {
-    const value = a[field];
-    if (value === undefined) return undefined;
+    if (a[field] === undefined) return undefined;
     if (type !== 'aoe') {
       throw new Error(
         `${ctx}.${field} is only valid on type "aoe" (got type "${type}")`,
@@ -1594,15 +1086,10 @@ function validateAttack(
         `${ctx}.${field} is only consulted on sprite-less AoEs (vfxAnimation unset) — the VFX path damages via sprite overlap, not overlapRect`,
       );
     }
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-      throw new Error(
-        `${ctx}.${field} must be a positive finite number (got ${JSON.stringify(value)})`,
-      );
-    }
-    return value;
+    return v.requirePositive(a, field, ctx);
   };
-  damageHalfWidth = validateAoeHalfDim('damageHalfWidth');
-  damageHalfHeight = validateAoeHalfDim('damageHalfHeight');
+  const damageHalfWidth = validateAoeHalfDim('damageHalfWidth');
+  const damageHalfHeight = validateAoeHalfDim('damageHalfHeight');
 
   return {
     type,
@@ -1691,47 +1178,18 @@ function validateAnim(
   animKey: string,
   raw: unknown,
 ): AnimatedEntityAnimConfig {
-  if (raw == null || typeof raw !== 'object') {
-    throw new Error(
-      `entityRegistry["${identifier}"].animations["${animKey}"] is not an object`,
-    );
-  }
-  const anim = raw as Record<string, unknown>;
-  const requireNum = (field: string): number => {
-    const value = anim[field];
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-      throw new Error(
-        `entityRegistry["${identifier}"].animations["${animKey}"].${field} must be a positive number`,
-      );
-    }
-    return value;
-  };
-  const file = anim.file;
-  if (typeof file !== 'string' || file.length === 0) {
-    throw new Error(
-      `entityRegistry["${identifier}"].animations["${animKey}"].file must be a non-empty string`,
-    );
-  }
-  const optionalNum = (field: string): number | undefined => {
-    const value = anim[field];
-    if (value === undefined) return undefined;
-    if (typeof value !== 'number' || !Number.isFinite(value)) {
-      throw new Error(
-        `entityRegistry["${identifier}"].animations["${animKey}"].${field} must be a number when set`,
-      );
-    }
-    return value;
-  };
+  const ctx = `entityRegistry["${identifier}"].animations["${animKey}"]`;
+  const anim = v.requireObject(raw, ctx);
   return {
-    file,
-    frameWidth: requireNum('frameWidth'),
-    frameHeight: requireNum('frameHeight'),
-    frameCount: requireNum('frameCount'),
+    file: v.requireString(anim, 'file', ctx),
+    frameWidth: v.requirePositive(anim, 'frameWidth', ctx),
+    frameHeight: v.requirePositive(anim, 'frameHeight', ctx),
+    frameCount: v.requirePositive(anim, 'frameCount', ctx),
     loops: anim.loops !== false,
-    anchorX: optionalNum('anchorX'),
-    anchorY: optionalNum('anchorY'),
-    spawnAnchorY: optionalNum('spawnAnchorY'),
-    displayScale: optionalNum('displayScale'),
+    anchorX: v.optionalFinite(anim, 'anchorX', ctx),
+    anchorY: v.optionalFinite(anim, 'anchorY', ctx),
+    spawnAnchorY: v.optionalFinite(anim, 'spawnAnchorY', ctx),
+    displayScale: v.optionalFinite(anim, 'displayScale', ctx),
   };
 }
 
