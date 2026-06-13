@@ -11,6 +11,28 @@ import type {
   LoiterPathPoint,
 } from './types';
 
+/**
+ * parseLdtk — turns a raw LDtk project into the game's level model.
+ *
+ * Stateless query functions over a parsed LdtkProject: validate/parse the JSON,
+ * look up a level by name, index the tileset/entity definitions, and project
+ * each level's layers into render-ready view structs (tile layers, decoration-
+ * entity layers, IntGrid) plus its spawnable entity list. Three load-bearing
+ * conventions live here: LDtk stores layers front-most-first so render order is
+ * the *reversed* array with a back-to-front depth computed over the original
+ * indices; decoration alpha is the entity-def tileOpacity composited onto the
+ * layer __opacity; and getEntities enriches each instance in place with a
+ * world-px loiterPath and its source __levelId (neither native to LDtk).
+ *
+ * Inputs:  a raw LDtk JSON string, then the parsed LdtkProject / LdtkLevel; an
+ *          optional skip-set and entity-def map for the decoration pass.
+ * Outputs: the parsed project, lookup maps, render-view arrays, and the
+ *          per-level entity list (mutated with loiterPath / __levelId).
+ * @calledby the level-loading and rendering pipeline, when a level is built.
+ * @calls    only JSON.parse and the LDtk type accessors — no engine or I/O.
+ */
+
+// parses the raw LDtk JSON and sanity-checks that a levels array is present
 export function parseLdtkProject(rawJson: string): LdtkProject {
   let parsed: unknown;
   try {
@@ -25,6 +47,7 @@ export function parseLdtkProject(rawJson: string): LdtkProject {
   return parsed as LdtkProject;
 }
 
+// finds a level by name, throwing with the full available list if it's missing
 export function getLevel(project: LdtkProject, identifier: string): LdtkLevel {
   const level = project.levels.find((candidate) => candidate.identifier === identifier);
   if (!level) {
@@ -34,6 +57,7 @@ export function getLevel(project: LdtkProject, identifier: string): LdtkLevel {
   return level;
 }
 
+// Tileset definitions keyed by uid (matches a layer's __tilesetDefUid).
 export function getTilesetDefs(project: LdtkProject): Map<number, LdtkTilesetDef> {
   const map = new Map<number, LdtkTilesetDef>();
   for (const ts of project.defs.tilesets) {
@@ -68,9 +92,7 @@ export interface RenderableTileLayer {
   depth: number;
 }
 
-// LDtk stores layer instances top-to-bottom (front-most first). Returns them
-// in render order (back-to-front) so callers iterate and depth-stack
-// consistently. Entity-only layers and tile-empty layers are filtered out.
+// projects a level's tile layers into back-to-front render structs, skipping empty/tileset-less layers
 export function getRenderableLayers(level: LdtkLevel): RenderableTileLayer[] {
   const total = level.layerInstances.length;
   const layers: RenderableTileLayer[] = [];
@@ -141,16 +163,7 @@ export interface RenderableEntityLayer {
   depth: number;
 }
 
-// Entities-type layers whose entity instances carry __tile references.
-// Returned in render order (back-to-front), parallel to getRenderableLayers,
-// so callers can render decorations using the same depth scheme as tile
-// layers — preserving the LDtk-authored stacking between tile layers and
-// entity-decoration layers.
-//
-// `skipIdentifiers` lets the caller suppress entities whose visual is owned
-// by gameplay code (e.g. Player spawns) — LDtk includes a __tile preview on
-// every entity def, so without this filter the live sprite would render
-// alongside a frozen decoration of itself.
+// projects Entities-type layers into decoration draw lists (back-to-front); composites tileOpacity onto layer opacity
 export function getRenderableEntityLayers(
   level: LdtkLevel,
   skipIdentifiers?: ReadonlySet<string>,
@@ -209,6 +222,8 @@ export interface IntGridData {
   csv: ReadonlyArray<number>;
 }
 
+// The level's first IntGrid layer as a flat CSV grid (collision/metadata
+// source), or null if the level has none.
 export function getIntGrid(level: LdtkLevel): IntGridData | null {
   const li = level.layerInstances.find((l) => l.__type === 'IntGrid');
   if (!li || !li.intGridCsv) return null;
@@ -220,6 +235,7 @@ export function getIntGrid(level: LdtkLevel): IntGridData | null {
   };
 }
 
+// flattens all entity instances across a level's layers, stamping each with world-px loiterPath and __levelId
 export function getEntities(level: LdtkLevel): LdtkEntityInstance[] {
   const out: LdtkEntityInstance[] = [];
   for (const li of level.layerInstances) {
@@ -240,12 +256,7 @@ export function getEntities(level: LdtkLevel): LdtkEntityInstance[] {
   return out;
 }
 
-// Reads the "loiterPath" Point-Array field (if authored) and converts its
-// cell coords to world-space px. Returns null when the field is absent,
-// not an array, or empty — callers treat null as "no path, use default
-// loiter behavior". Single-Point and non-array values are intentionally
-// ignored: a one-waypoint path isn't a path, and silently falling back
-// keeps the runtime tolerant of partial authoring.
+// converts the "loiterPath" Point-Array field to world-px waypoints; returns null when absent or empty
 function resolveLoiterPath(
   instance: LdtkEntityInstance,
   level: LdtkLevel,

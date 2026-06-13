@@ -2,16 +2,24 @@ import type Phaser from 'phaser';
 import type { Player } from '../entities/Player';
 import type { CharacterModeId } from '../sprites/characterTypes';
 
-// Player state preserved across LDtk hot-reloads AND across save→death→
-// respawn. Transient action state (locked attacks, combo counter, dash
-// duration) is intentionally NOT preserved — restoring mid-attack into a
-// freshly-built world is more confusing than letting the player drop back
-// to idle for one frame.
-//
-// To extend: add the field here, capture it in snapshotPlayer(), apply it in
-// restorePlayer(). Resource fields (HP/ammo/magic) round-trip through
-// Player.applyRestoredState(); position/velocity/mode/facing have dedicated
-// setters in restorePlayer().
+/**
+ * playerSnapshot — captures and restores player state across world rebuilds.
+ *
+ * A plain data snapshot plus its capture/apply pair, used to carry the player
+ * through an LDtk hot-reload AND a save→death→respawn. Only persistent state
+ * (position, velocity, mode, facing, resources) is preserved; transient action
+ * state (locked attacks, combo counter, dash duration) is intentionally dropped,
+ * since restoring mid-attack into a freshly-built world reads worse than dropping
+ * to idle for one frame. Restore is skipped when the snapshot position no longer
+ * lands inside any level, leaving the fresh spawn to stand.
+ *
+ * Inputs:  a live (or null) Player to snapshot; a snapshot + camera to restore.
+ * Outputs: a PlayerSnapshot, or mutations to the rebuilt player + camera.
+ * @calledby the world-rebuild path (HMR reload and respawn), around the teardown.
+ * @calls    the player's resource/position/mode/facing setters and the camera.
+ */
+
+// Persistent player state carried across a world rebuild; add fields here + in both fns to extend.
 export interface PlayerSnapshot {
   x: number;
   y: number;
@@ -28,6 +36,7 @@ export interface PlayerSnapshot {
   healItems: number;
 }
 
+// Captures the current player into a snapshot; returns null if the player or its body isn't ready.
 export function snapshotPlayer(
   player: Player | null | undefined,
 ): PlayerSnapshot | null {
@@ -49,10 +58,7 @@ export function snapshotPlayer(
   };
 }
 
-// Applies a snapshot to the (freshly rebuilt) player. `insideAnyLevel` is the
-// caller's check that the snapshot position still lands inside the new world
-// — when an LDtk edit moved/removed the level under the player, the restore
-// is skipped and the fresh spawn position stands.
+// Applies a snapshot to the freshly rebuilt player; skipped if the position no longer lands in a level.
 export function restorePlayer(
   player: Player,
   camera: Phaser.Cameras.Scene2D.Camera,
@@ -70,13 +76,9 @@ export function restorePlayer(
   player.setPosition(snapshot.x, snapshot.y);
   player.setVelocity(snapshot.vx, snapshot.vy);
   player.setCurrentMode(snapshot.mode);
-  // setFacing must come after setCurrentMode: switching mode plays a fresh
-  // idle animation that re-anchors with the *current* flipX. Setting flip
-  // last guarantees the final anchor matches the restored facing.
+  // Flip after mode switch so the fresh idle anchors to the correct facing.
   player.setFacing(snapshot.flipX);
-  // Resource fields go through applyRestoredState so Player owns the
-  // clamping. Done after the mode switch so any future mode-dependent
-  // resource cap can read the right max.
+  // Resources after mode switch so any mode-dependent cap reads the right max.
   player.applyRestoredState({
     health: snapshot.health,
     gun1Ammo: snapshot.gun1Ammo,

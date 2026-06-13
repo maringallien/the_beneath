@@ -1,22 +1,32 @@
-// A* over a NavGraph. Plain, dependency-free: a binary min-heap open set with
-// lazy deletion (stale entries skipped via a closed set), Euclidean heuristic in
-// world px (admissible — it never overestimates the walk distance, and jump edges
-// only cost MORE), and a hard expansion cap so a hopeless query (no route, or a
-// goal walled off) bails in bounded time instead of scanning the whole world.
-
 import type { NavGraph } from './NavGraph';
 
-// Min-heap keyed by priority, storing parallel id/priority arrays to avoid object
-// churn. Lazy deletion: a node may be pushed multiple times with improving
-// priorities; the closed set in findPath ignores the stale pops.
+/**
+ * NavPathfinder — plain, dependency-free A* over a NavGraph.
+ *
+ * Open set is a binary min-heap with lazy deletion (a node may be re-pushed at an
+ * improving priority; a closed set drops the stale pops). The heuristic is the
+ * Euclidean distance in world px — admissible because it never overestimates the
+ * walk distance and jump edges only cost MORE. A hard expansion cap makes a
+ * hopeless query (no route, or a goal walled off) bail in bounded time rather
+ * than scan the whole world.
+ *
+ * Inputs:  a built NavGraph plus start/goal node ids and an expansion budget.
+ * Outputs: the inclusive node-id path, or null when unreachable within budget.
+ * @calledby the enemy navigation layer, when a chaser needs a route around walls.
+ * @calls    only the graph's node and edge accessors.
+ */
+
+// Min-heap with parallel id/priority arrays; lazy deletion — stale pops are skipped by the closed set.
 class MinHeap {
   private readonly ids: number[] = [];
   private readonly prio: number[] = [];
 
+  // Number of entries currently in the heap.
   size(): number {
     return this.ids.length;
   }
 
+  // Inserts id at priority p and sifts up to restore heap order.
   push(id: number, p: number): void {
     this.ids.push(id);
     this.prio.push(p);
@@ -29,6 +39,7 @@ class MinHeap {
     }
   }
 
+  // Removes and returns the lowest-priority id; caller must guard size() > 0.
   pop(): number {
     const top = this.ids[0];
     const lastId = this.ids.pop() as number;
@@ -52,6 +63,7 @@ class MinHeap {
     return top;
   }
 
+  // Swaps the id+priority pair at index `a` with the pair at index `b`.
   private swap(a: number, b: number): void {
     const ti = this.ids[a];
     this.ids[a] = this.ids[b];
@@ -62,11 +74,13 @@ class MinHeap {
   }
 }
 
+// Admissible A* heuristic: straight-line world-px distance from node `id` to the goal.
 function heuristic(graph: NavGraph, id: number, goalX: number, goalY: number): number {
   const n = graph.node(id);
   return Math.hypot(n.x - goalX, n.y - goalY);
 }
 
+// Walks the came-from chain and returns the start→end node-id path.
 function reconstruct(cameFrom: Map<number, number>, end: number): number[] {
   const path = [end];
   let c = end;
@@ -80,8 +94,7 @@ function reconstruct(cameFrom: Map<number, number>, end: number): number[] {
   return path;
 }
 
-// Returns the node-id path from `start` to `goal` (inclusive), or null if no
-// route is found within `maxExpansions`.
+// A* from start to goal; returns the inclusive node-id path or null if unreachable within the expansion budget.
 export function findPath(
   graph: NavGraph,
   start: number,

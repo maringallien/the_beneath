@@ -1,20 +1,25 @@
 import Phaser from 'phaser';
 import type { IntGridData } from '../ldtk/parseLdtk';
 
+/**
+ * LevelCollision — builds the invisible per-level collision tilemap from IntGrid.
+ *
+ * Turns an LDtk IntGrid CSV into an undrawn Phaser tilemap layer whose solidity
+ * mirrors the grid. Deliberately separate from the visual renderer so it doesn't
+ * inherit Tilemap's grid-locked, one-tile-per-cell constraints when LDtk auto-
+ * rules emit off-grid or stacked decorations. Layer tile indices are the raw
+ * IntGrid values, so surface-aware callers can read them back per tile.
+ *
+ * Inputs:  the scene, an IntGrid (CSV + dims), a tileset key, a world offset.
+ * Outputs: a hidden TilemapLayer with collision set, positioned in world space.
+ * @calledby the world-build pipeline, once per level during scene setup.
+ * @calls    Phaser's tilemap factory (make/addTilesetImage/createLayer).
+ */
+
+// Sentinel index for empty cells; Phaser then returns null for tile lookups there.
 const EMPTY_TILE_INDEX = -1;
 
-// Builds an invisible Phaser tilemap layer whose collision shape mirrors the
-// IntGrid CSV. Decoupled from the visual rendering (LevelRenderer) so we don't
-// fight Tilemap's grid-locked, one-tile-per-cell constraints when LDtk auto-
-// rules emit off-grid or stacked decorations. Caller passes a tileset texture
-// key purely to satisfy the Tilemap API — the layer is never drawn.
-// `worldOffsetX/Y` shifts the layer to its level's world position, so multiple
-// per-level collision tilemaps coexist in the same scene without overlap.
-//
-// Tile indices on the layer are the raw IntGrid values (1=ground, 2=bridge,
-// ...). Callers like GameScene.getIntGridValueAt read tile.index to decide
-// surface-specific behavior (e.g. pebble footsteps on ground only). Empty
-// cells are EMPTY_TILE_INDEX so Phaser returns null for getTileAtWorldXY.
+// Builds an invisible collision TilemapLayer from the IntGrid CSV; non-zero values are solid and carry their raw value for surface-aware callers.
 export function buildIntGridCollision(
   scene: Phaser.Scene,
   intGrid: IntGridData,
@@ -57,9 +62,7 @@ export function buildIntGridCollision(
     throw new Error('buildIntGridCollision: failed to create collision layer');
   }
   layer.setVisible(false);
-  // Every non-empty IntGrid value is solid for now. setCollisionByExclusion
-  // future-proofs against new IntGrid values being added in LDtk without
-  // having to thread the value set through here.
+  // Exclude-based so new IntGrid values added in LDtk are solid by default without updating this code.
   layer.setCollisionByExclusion([EMPTY_TILE_INDEX]);
   return layer;
 }

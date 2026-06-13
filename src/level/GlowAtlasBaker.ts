@@ -9,39 +9,47 @@ import {
 import type { LdtkTilesetDef } from '../ldtk/types';
 import { tilesetTextureKey } from './TilesetRegistry';
 
-// Texture key for a tileset's sibling glow atlas. LevelRenderer reads from
-// this key to decide whether to emit a glow image per tile, so the suffix
-// scheme MUST stay in sync with bakeGlowAtlasForTileset.
+/**
+ * GlowAtlasBaker — one-shot pre-bake of a per-tileset "glow" texture used to
+ * give bright foreground pixels a soft emissive halo.
+ *
+ * At preload, for each tileset it reads the source PNG, finds every pixel whose
+ * luminance clears FOREGROUND_GLOW_LUMINANCE_THRESHOLD, and paints an additive
+ * radial halo at that position into a sibling canvas registered under a suffixed
+ * texture key. The glow canvas matches the source dimensions and re-slices the
+ * SAME frame grid (frameWidth/height/margin/spacing), so glow frame `t` lines up
+ * one-to-one with source frame `t` — the renderer can request a glow image by the
+ * same frame index. It also records which frame indices actually contain a bright
+ * pixel, at module scope, so the renderer can skip frames that would bake empty.
+ * INVARIANT: the texture-key suffix scheme and the frame-grid math here must stay
+ * in sync with what the renderer assumes.
+ *
+ * Inputs:  the scene's texture cache and an LDtk tileset def (uid, grid, padding,
+ *          spacing); reads the already-loaded source tileset image.
+ * Outputs: a registered LINEAR-filtered glow canvas texture with per-tile frames,
+ *          plus the module-scope bright-frame index; returns whether one was made.
+ * @calledby the preload/level-setup pass, once per tileset before rendering.
+ * @calls    the Canvas 2D API for pixel reads and halo compositing, and Phaser's
+ *           texture cache to register the result.
+ */
+
+// Texture key for a tileset's sibling glow atlas; suffix must stay in sync with the renderer.
 export function glowAtlasTextureKey(tilesetUid: number): string {
   return tilesetTextureKey(tilesetUid) + FOREGROUND_GLOW_TEXTURE_SUFFIX;
 }
 
-// Per-atlas index of frames that contain at least one bright pixel. Populated
-// by bakeGlowAtlasForTileset, consumed by LevelRenderer to skip emitting glow
-// Images for tiles whose source frame would render fully transparent. Lives
-// at module scope (not on the texture) so the bake step owns its own
-// bookkeeping without touching Phaser internals; the cache survives HMR
-// because the bake step itself is idempotent and re-uses cached glow textures
-// when present.
+// Per-atlas set of frame indices containing a bright pixel; used by the renderer to skip empty glow tiles.
 const brightFrameSets = new Map<string, ReadonlySet<number>>();
 
+// Frame indices that contain a bright pixel for this glow texture key (undefined
+// if the tileset was never baked / had none).
 export function getBrightFrames(
   glowKey: string,
 ): ReadonlySet<number> | undefined {
   return brightFrameSets.get(glowKey);
 }
 
-// One-shot pre-bake at preload. Reads the tileset's PNG, locates every pixel
-// whose luminance exceeds FOREGROUND_GLOW_LUMINANCE_THRESHOLD, and paints a
-// soft radial halo into a sibling canvas at the same position. Frame slicing
-// mirrors the source tileset's frameWidth/frameHeight/margin/spacing exactly,
-// so a foreground tile rendered with frame `t` from the source resolves to
-// the matching glow frame `t` on the atlas.
-//
-// Returns true if any bright pixels were found (the atlas was registered);
-// false if the tileset has no qualifying pixels (no atlas registered — the
-// renderer short-circuits via textures.exists). Idempotent: a second call for
-// the same uid no-ops once the glow texture is in cache.
+// Bakes the glow atlas for one tileset: paints a radial halo per bright pixel into a sibling canvas texture. Idempotent.
 export function bakeGlowAtlasForTileset(
   scene: Phaser.Scene,
   def: LdtkTilesetDef,
@@ -52,8 +60,6 @@ export function bakeGlowAtlasForTileset(
   if (!scene.textures.exists(sourceKey)) return false;
 
   const sourceTexture = scene.textures.get(sourceKey);
-  // getSourceImage returns whatever backed the load — <img> for PNGs through
-  // Phaser's loader, <canvas> in some HMR paths. Both work with drawImage.
   const srcImg = sourceTexture.getSourceImage() as
     | HTMLImageElement
     | HTMLCanvasElement;
@@ -61,8 +67,7 @@ export function bakeGlowAtlasForTileset(
   const height = srcImg.height;
   if (width === 0 || height === 0) return false;
 
-  // Read source pixels via an intermediate canvas. getImageData() requires a
-  // 2D context and the original Image element doesn't expose pixel data.
+  // Read pixels via a canvas; getImageData() requires a 2D context the original Image doesn't expose.
   const readCanvas = document.createElement('canvas');
   readCanvas.width = width;
   readCanvas.height = height;
@@ -78,16 +83,13 @@ export function bakeGlowAtlasForTileset(
   outCanvas.height = height;
   const outCtx = outCanvas.getContext('2d');
   if (!outCtx) return false;
-  // Additive composition: overlapping halos accumulate, so a tight cluster
-  // of bright pixels reads brighter than an isolated dot.
+  // Additive composition: overlapping halos accumulate so dense clusters glow brighter.
   outCtx.globalCompositeOperation = 'lighter';
 
   const radius = FOREGROUND_GLOW_RADIUS_PX;
   let bright = 0;
 
-  // Frame-grid params for mapping a source pixel back to its frame index.
-  // Mirrors the layout registerGlowFrames produces — so the set keyed by
-  // frame index here is consumed verbatim by getBrightFrames at render time.
+  // Frame-grid math mirrors registerGlowFrames so the bright-frame index lines up at render time.
   const fw = def.tileGridSize;
   const fh = def.tileGridSize;
   const margin = def.padding;
@@ -111,10 +113,7 @@ export function bakeGlowAtlasForTileset(
       const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
       if (luminance < FOREGROUND_GLOW_LUMINANCE_THRESHOLD) continue;
 
-      // Record which frame the bright pixel lives inside. Pixels in the
-      // margin/spacing gutters between frames don't belong to any frame —
-      // skip them for the index but still paint the halo so the visual
-      // bleed (rare, only near tileset edges) doesn't disappear.
+      // Record the frame index for this pixel; gutter pixels are skipped for the index but still get a halo.
       const xRel = x - margin;
       const yRel = y - margin;
       if (xRel >= 0 && yRel >= 0) {
@@ -138,19 +137,14 @@ export function bakeGlowAtlasForTileset(
   registerGlowFrames(scene, targetKey, width, height, def);
   brightFrameSets.set(targetKey, brightFrames);
 
-  // LINEAR sampling so halos stay smooth at camera zoom — same trick used by
-  // the magic orb and pause word textures. The global pixelArt:true config
-  // would otherwise nearest-sample the soft gradient into hard banding.
+  // LINEAR so halos stay smooth at camera zoom; pixelArt:true would nearest-sample the gradient into banding.
   scene.textures
     .get(targetKey)
     .setFilter(Phaser.Textures.FilterMode.LINEAR);
   return true;
 }
 
-// Stamps a soft radial halo at (cx, cy) in the source pixel's color. Uses a
-// radial gradient with stops sampled along the FALLOFF_EXPONENT curve; the
-// gradient interpolates linearly between stops, which is visually
-// indistinguishable from the exact curve at a halo of a few px.
+// Stamps a soft radial halo at (cx, cy) using the source pixel's color and the falloff curve.
 function paintHalo(
   ctx: CanvasRenderingContext2D,
   cx: number,
@@ -174,12 +168,7 @@ function paintHalo(
   ctx.fill();
 }
 
-// Adds per-tile frames to the glow texture so a numeric frame-index lookup
-// resolves to the same source-tile crop the original spritesheet loader
-// produced. Phaser's spritesheet loader keys frames by integer index in
-// row-major order with margin + spacing exactly as configured — we mirror
-// the same iteration so frame `t` on the source matches frame `t` on the
-// glow atlas one-to-one.
+// Registers per-tile frames on the glow texture in the same row-major order the spritesheet loader uses.
 function registerGlowFrames(
   scene: Phaser.Scene,
   textureKey: string,
@@ -192,8 +181,7 @@ function registerGlowFrames(
   const fh = def.tileGridSize;
   const margin = def.padding;
   const spacing = def.spacing;
-  // Last frame fully fits when its right edge (margin + cols*(fw+spacing) - spacing)
-  // is <= width. Solving for cols → floor((width - margin*2 + spacing) / (fw + spacing)).
+  // Only register fully-fitting frames: floor((width - margin*2 + spacing) / (fw + spacing)).
   const cols = Math.max(
     0,
     Math.floor((width - margin * 2 + spacing) / (fw + spacing)),

@@ -19,12 +19,22 @@ import {
   CAMERA_ZOOM,
 } from '../constants';
 
-// Screen-pinned "leaving combat zone" warning + countdown, shown while the
-// player is outside an active boss arena (driven by GameScene.updateBossLeash).
-// Three stacked lines — headline, large seconds counter, hint — authored in
-// screen pixels and converted to world space at CAMERA_ZOOM each frame so they
-// stay pinned under camera scroll and render crisply at zoom, exactly like
-// BossHud. Owned by GameScene; visible only during an escape countdown.
+/**
+ * CombatZoneWarning — screen-pinned "leaving combat zone" warning + countdown.
+ *
+ * Shown while the player strays outside an active boss arena. Three stacked
+ * lines — headline, large seconds counter, hint — are authored in screen pixels
+ * and converted to world space at CAMERA_ZOOM each frame, so they stay pinned
+ * under camera scroll and render crisply at zoom (the same trick BossHud uses).
+ * Visible only during an escape countdown; toggled and ticked by its owner.
+ *
+ * Inputs:  scene (for text objects + tweens); per-frame the integer seconds left
+ *          and the active camera.
+ * Outputs: three managed Phaser.Text lines and their fade-in tweens.
+ * @calledby the gameplay scene's boss-leash logic, while the player is outside
+ *           an active arena with the escape timer running.
+ * @calls    the scene's text factory and tween manager.
+ */
 export class CombatZoneWarning {
   private readonly warningText: Phaser.GameObjects.Text;
   private readonly countdownText: Phaser.GameObjects.Text;
@@ -34,6 +44,7 @@ export class CombatZoneWarning {
   // Dedup so the counter texture is only re-rasterized when the digit changes.
   private lastSeconds = -1;
 
+  // Creates the three text lines (headline, counter, hint) hidden at the origin; update() positions them.
   constructor(private readonly scene: Phaser.Scene) {
     this.warningText = scene.add.text(0, 0, BOSS_ESCAPE_WARNING_TEXT, {
       fontFamily: BOSS_ESCAPE_WARNING_FONT_FAMILY,
@@ -63,9 +74,7 @@ export class CombatZoneWarning {
     }
   }
 
-  // Toggles the whole overlay. On show, fades the lines in and forces a counter
-  // repaint; on hide, kills any in-flight fade so a re-show starts clean. Deduped
-  // so per-frame calls from GameScene are cheap.
+  // Shows or hides the overlay; on show fades in from alpha 0 and resets the digit dedup.
   setVisible(visible: boolean): void {
     if (visible === this.visible) return;
     this.visible = visible;
@@ -74,9 +83,7 @@ export class CombatZoneWarning {
       line.setVisible(visible);
     }
     if (visible) {
-      // Force the next update() to (re)write the digit even if it matches the
-      // last value shown before the overlay was hidden.
-      this.lastSeconds = -1;
+      this.lastSeconds = -1; // force digit repaint even if unchanged since last show
       for (const line of this.lines) {
         line.setAlpha(0);
         this.scene.tweens.add({
@@ -88,8 +95,7 @@ export class CombatZoneWarning {
     }
   }
 
-  // Repositions the stacked lines in world space and refreshes the counter.
-  // No-op while hidden. secondsLeft is the integer countdown value (3 → 2 → 1).
+  // Repositions the stacked lines in world space and refreshes the counter digit; no-op while hidden.
   update(secondsLeft: number, camera: Phaser.Cameras.Scene2D.Camera): void {
     if (!this.visible) return;
 
@@ -108,9 +114,7 @@ export class CombatZoneWarning {
 
     const cx = toWorldX(camera.width * 0.5);
     const cy = toWorldY(camera.height * BOSS_ESCAPE_VIEWPORT_FRACTION_Y);
-    // Stack around the anchor: counter centered on it, headline above, hint
-    // below. displayHeight is already in world units (zoom-resolved); the gap is
-    // screen px → world via ÷zoom so spacing holds at any zoom.
+    // Counter centered on anchor; headline above, hint below; gap in screen px ÷ zoom.
     const gap = BOSS_ESCAPE_LINE_GAP_PX / zoom;
     const warnH = this.warningText.displayHeight;
     const countH = this.countdownText.displayHeight;
@@ -121,6 +125,7 @@ export class CombatZoneWarning {
     this.subText.setPosition(cx, cy + countH * 0.5 + gap + subH * 0.5);
   }
 
+  // Tears down: cancels each line's tweens and destroys its text object.
   destroy(): void {
     for (const line of this.lines) {
       this.scene.tweens.killTweensOf(line);

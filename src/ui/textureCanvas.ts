@@ -1,17 +1,22 @@
 import Phaser from 'phaser';
 
-// Shared helper for embedding Phaser texture frames in the DOM. The merchant
-// shop and the player HUD both render pixel-art (and procedural) game textures
-// inside HTML by drawing a single frame onto an HTMLCanvasElement the browser
-// can scale via CSS. Kept here so the two overlays share one implementation
-// rather than each carrying a private copy.
+/**
+ * textureCanvas — embeds Phaser texture frames into the DOM as <canvas>.
+ *
+ * Shared helper letting the merchant shop and the player HUD render pixel-art
+ * (and procedural) game textures inside HTML by drawing a single frame onto an
+ * HTMLCanvasElement the browser scales via CSS. Kept here so the two overlays
+ * share one implementation rather than each carrying a private copy.
+ *
+ * Inputs:  a Phaser scene (for its texture cache), a texture key, and an
+ *          optional frame index/name.
+ * Outputs: draws onto a canvas (or returns a freshly allocated one).
+ * @calledby the DOM overlays that show game textures as HTML — shop icons and
+ *           the HUD's icons/sliders.
+ * @calls    the scene's texture cache and the canvas 2D drawing API.
+ */
 
-// Draws the given texture frame onto `canvas` at the frame's native pixel size,
-// with image smoothing disabled so pixel-art sources stay crisp. The canvas
-// backing store is (re)sized to the frame, so the same canvas can be redrawn
-// with a different frame later (e.g. the HP slider swapping fill levels)
-// without allocating a new element. CSS width/height on the canvas drives the
-// on-screen scaling. Returns false if the frame or 2D context is unavailable.
+// Draws a texture frame onto a canvas at native pixel size with smoothing off; resizes the canvas to match the frame.
 export function drawTextureFrame(
   canvas: HTMLCanvasElement,
   scene: Phaser.Scene,
@@ -44,9 +49,7 @@ export function drawTextureFrame(
   return true;
 }
 
-// Convenience wrapper: allocate a fresh canvas sized to the frame and draw it.
-// Used where the texture is static for the element's lifetime (shop item
-// icons, the ammo/coin/heart HUD icons).
+// Allocates a fresh canvas and draws the given frame into it; use for static one-off icons.
 export function frameCanvas(
   scene: Phaser.Scene,
   key: string,

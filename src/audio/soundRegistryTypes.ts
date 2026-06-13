@@ -1,68 +1,48 @@
-// Schema for the JSON-authored sound registry. Each sound id (e.g.
-// "cave_drips_flowing") maps to one SoundDefinition describing where the file
-// lives and how it should be played by default. The registry is the single
-// source of truth for audio assets — adding a new sound is one JSON entry,
-// not a hand-rolled load call in PreloadScene.
+/**
+ * soundRegistryTypes — the schema for the JSON-authored sound registry.
+ *
+ * Pure type declarations (no logic). Each sound id (e.g. "cave_drips_flowing")
+ * maps to one SoundDefinition describing where the file lives and how it should
+ * play by default; the surrounding interfaces describe the level-ambience,
+ * entity-binding, and player-state-driven groupings the SoundManager reads. The
+ * registry is the single source of truth for audio assets — adding a sound is
+ * one JSON entry, not a hand-rolled load call in PreloadScene.
+ *
+ * Inputs:  none — type definitions only.
+ * Outputs: the exported types/interfaces below, consumed by the registry loader,
+ *          SoundManager, and MusicPlayer.
+ * @calledby the audio loaders/managers that parse and shape sound-registry data.
+ * @calls    nothing — a leaf type module.
+ */
 
+// the three top-level audio buckets
 export type SoundCategory = 'ambience' | 'sfx' | 'music';
 
-// Spatial audio parameters for sounds attached to world positions (e.g.
-// entity-anchored fans/HVAC). Volume falls off linearly from defaultVolume
-// at minRadius to zero at maxRadius. Required for sounds bound to entities
-// in `entitySounds`; ignored for level ambience.
+// linear volume falloff from defaultVolume at minRadius to 0 at maxRadius; required for entity-anchored sounds
 export interface SpatialConfig {
   readonly minRadius: number;
   readonly maxRadius: number;
 }
 
 export interface SoundDefinition {
-  // Path to the audio file, relative to /public (Vite serves /public at the
-  // site root). e.g. "assets/audio/ambience/cave_drips_flowing.ogg".
+  // relative to /public (Vite root). e.g. "assets/audio/ambience/cave_drips_flowing.ogg"
   readonly path: string;
   readonly category: SoundCategory;
-  // Whether playback should loop. Ambience and music typically loop; sfx
-  // typically don't.
   readonly loop: boolean;
-  // Volume in [0, 1]. SoundManager multiplies this by the master volume
-  // when starting playback.
+  // SoundManager multiplies this by master volume; keep it in [0, 1]
   readonly defaultVolume: number;
-  // Optional playback rate multiplier. 1.0 = normal speed/pitch (default).
-  // Phaser couples speed and pitch — 1.3 plays 30% faster AND 30% higher
-  // pitched. Used when an audio asset's natural tempo doesn't match the
-  // animation cadence it's anchored to (e.g. footsteps on metal stairs
-  // recorded at a slower walking pace than the player's run speed).
+  // playback rate; Phaser couples speed+pitch so 1.3 = 30% faster and 30% higher
   readonly rate?: number;
-  // Optional spatial config. Present only on sounds intended to be attached
-  // to a world position (entity sounds). Absent on level-ambience sounds,
-  // which are played non-positionally at defaultVolume.
+  // present only on entity-anchored sounds; absent = non-positional (played at defaultVolume)
   readonly spatial?: SpatialConfig;
 }
 
-// Per-level customization of which sounds play. When a level identifier
-// (e.g. LDtk "Level_3") is present in `levelOverrides`, the ambience list
-// for that level replaces `globalAmbience` while the player is inside it.
+// ambience list that replaces globalAmbience while the player is inside a specific level
 export interface LevelAmbienceOverride {
   readonly ambience: ReadonlyArray<string>;
 }
 
-// Named slots for sounds driven by the player's state machine rather than by
-// level transition or entity proximity. Each slot references a sound id from
-// `sounds`. SoundManager exposes one toggle per slot via
-// setPlayerStateSoundActive(slot, active).
-//   - movement: cloth/wool loop that plays while the player's body anim is
-//     anything other than idle or death.
-//   - footstepsGround: footstep loop that plays while the player is running
-//     on "ground" (IntGrid value 1) tiles.
-//   - footstepsBridge: footstep loop that plays while the player is running
-//     on "bridge" (IntGrid value 2) tiles. Mutually exclusive with the
-//     footstepsGround slot — only one footstep surface is active at a time.
-//   - wallSlide: scraping loop that plays while the player is wall-sliding
-//     (pressing into a wall while falling). Crossfades in/out on contact via
-//     the same PLAYER_STATE_CROSSFADE_MS path the other slots use.
-//   - falling: soft wind whoosh that swells in during a sustained free fall.
-//     Unlike the other slots, Player.ts gates it behind a short delay (so
-//     small hops never trigger it) and drives it with a longer fade-in and a
-//     quick fade-out via the optional fadeMs arg on setPlayerStateSoundActive.
+// state-machine-driven loops toggled via setPlayerStateSoundActive; movement=cloth, footsteps*=surface steps, wallSlide=scrape, falling=wind-whoosh
 export interface PlayerStateSounds {
   readonly movement?: string;
   readonly footstepsGround?: string;
@@ -71,9 +51,7 @@ export interface PlayerStateSounds {
   readonly falling?: string;
 }
 
-// Union of slot keys in PlayerStateSounds. Listed explicitly (rather than
-// derived via `keyof PlayerStateSounds`) so a new slot can't be referenced
-// in code before its key is added here AND its sound id is wired up.
+// listed explicitly so a new slot can't be referenced in code before its key is added here AND wired up
 export type PlayerSoundSlot =
   | 'movement'
   | 'footstepsGround'
@@ -81,22 +59,14 @@ export type PlayerSoundSlot =
   | 'wallSlide'
   | 'falling';
 
-// Periodic one-shot binding for a moving creature (e.g. crow caw). The
-// SoundManager scheduler picks a uniformly-random delay in [minIntervalMs,
-// maxIntervalMs] between firings. Each firing is gated on the bound sprite
-// being within the sound's spatial.maxRadius of the player (falloff math
-// matches the looping spatial path), so distant crows stay silent.
+// scheduler picks a random delay in [minIntervalMs, maxIntervalMs]; fires are gated on player distance
 export interface PeriodicEntitySoundBinding {
   readonly soundId: string;
   readonly minIntervalMs: number;
   readonly maxIntervalMs: number;
 }
 
-// Surface tag for a walk sound. `'always'` plays whenever the enemy is in a
-// walking state (e.g. ghoul's mud footsteps). `'ground'` / `'bridge'` are
-// gated on the IntGrid tile under the enemy's feet — only the binding
-// matching the current surface fades in, the other surface bindings stay
-// muted. See setEnemyWalkSoundEnabled in SoundManager.
+// 'always' = plays whenever walking; 'ground'/'bridge' = gated on the IntGrid tile underfoot
 export type WalkSoundSurface = 'always' | 'ground' | 'bridge';
 
 export interface EntityWalkSoundBinding {
@@ -106,53 +76,24 @@ export interface EntityWalkSoundBinding {
 
 export interface SoundRegistry {
   readonly sounds: Readonly<Record<string, SoundDefinition>>;
-  // Sound ids that play scene-wide when the game starts. Persist across
-  // level transitions and scene restarts (SoundManager keeps the BaseSound
-  // instances alive and modulates volume on level change).
+  // play scene-wide from start; persist across level transitions (SoundManager keeps the voices alive)
   readonly globalAmbience: ReadonlyArray<string>;
-  // Per-level ambience overrides. When the player enters a level present
-  // here, SoundManager crossfades from globalAmbience to this set.
+  // per-level overrides; SoundManager crossfades from globalAmbience to this set on entry
   readonly levelOverrides: Readonly<Record<string, LevelAmbienceOverride>>;
-  // Bindings from LDtk entity identifier (e.g. "House2") to one or more
-  // spatial sound ids. Every instance of the bound entity in the LDtk world
-  // gets a looping audio source per bound id, anchored at its world position
-  // with volume falling off per the sound's `spatial` block. Each referenced
-  // sound MUST have a spatial config — the loader enforces this.
+  // static entity loops anchored at LDtk world position; all ids must have spatial config
   readonly entitySounds: Readonly<Record<string, ReadonlyArray<string>>>;
-  // Bindings for moving entities (wasps, crows, etc). Same shape as
-  // entitySounds, but the SoundManager anchors these to the live sprite's
-  // position each frame instead of a static LDtk pivot, so the loop tracks
-  // the creature as it flies/walks around. Each referenced sound MUST have
-  // a spatial config — loader enforces.
+  // same as entitySounds but anchored to the live sprite position each frame (wasps, crows, etc.)
   readonly movingEntitySounds: Readonly<Record<string, ReadonlyArray<string>>>;
-  // State-gated spatial loops tied to walking/chasing. Unlike movingEntitySounds
-  // (which plays continuously while alive), entityWalkSounds are registered
-  // muted and only audible while the enemy is in a walking state — Enemy.ts
-  // toggles them via setEnemyWalkSoundEnabled on state transitions. The JSON
-  // accepts: a single string, an array of strings, or an object with
-  // `ground`/`bridge` keys for surface-gated footsteps (only the binding
-  // matching the tile underfoot fades in during chase). Each referenced sound
-  // MUST be spatial + looping. Bindings without a surface tag (`'always'`)
-  // play whenever the enemy is in a walking state.
+  // registered muted, only audible while the enemy walks; JSON accepts string/array/surface-object forms
   readonly entityWalkSounds: Readonly<
     Record<string, ReadonlyArray<EntityWalkSoundBinding>>
   >;
-  // Per-entity ordered playlists that loop indefinitely. SoundManager plays
-  // the ids in order, advances on each sound's natural COMPLETE, wraps back
-  // to index 0 at the end, and tracks position via BaseSound.pause/resume so
-  // an interruption (e.g. the widow's teleport) resumes mid-clip rather than
-  // restarting it. Each referenced sound MUST have spatial config and
-  // loop=false — the playlist provides the looping behavior, individual
-  // clips play once per turn.
+  // ordered playlists that loop by advancing on COMPLETE; ids must be spatial+non-looping
   readonly entitySoundSequences: Readonly<Record<string, ReadonlyArray<string>>>;
-  // Periodic one-shots per moving entity. Independent of movingEntitySounds —
-  // a crow can both buzz (continuous loop via movingEntitySounds) AND caw
-  // (occasional one-shot via this list).
+  // intermittent one-shots per entity; independent of movingEntitySounds (a crow can buzz AND caw)
   readonly entityPeriodicSounds: Readonly<
     Record<string, ReadonlyArray<PeriodicEntitySoundBinding>>
   >;
-  // Sounds toggled by the player's state machine. Optional — a registry that
-  // omits the key resolves every slot to undefined (SoundManager treats this
-  // as "no movement sound configured" and the toggle becomes a no-op).
+  // optional; omitted key = every slot resolves null = toggle is a no-op
   readonly playerStateSounds: PlayerStateSounds;
 }

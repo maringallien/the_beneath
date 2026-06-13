@@ -1,3 +1,19 @@
+/**
+ * characterTypes — the shared vocabulary for the character-animation registry.
+ *
+ * Pure type/interface declarations (no logic) describing how a character mode's
+ * spritesheets are parsed into animations, how the player's cross-mode action
+ * keys map onto concrete registry entries, and which modes are wheel-selectable
+ * vs. overlay/source-only. The registry pipeline (preload, register, key
+ * resolution) and Player.ts both speak in these shapes.
+ *
+ * Inputs:  none — type declarations only.
+ * Outputs: the named types/interfaces below.
+ * @calledby the character-mode registry loader/resolver and the player entity.
+ * @calls    nothing — a leaf type module.
+ */
+
+// Broad bucket an animation falls into, used by the registry to group/classify.
 export type AnimationCategory =
   | 'movement'
   | 'attack'
@@ -5,6 +21,7 @@ export type AnimationCategory =
   | 'traversal'
   | 'ranged';
 
+// Geometry of one spritesheet strip plus per-animation rendering overrides.
 export interface FrameData {
   sheetWidth: number;
   sheetHeight: number;
@@ -25,14 +42,20 @@ export interface FrameData {
   // index of the sheet (registration emits a 1-frame anim). Used for held
   // poses like block_idle that freeze on one frame of a multi-frame strip.
   poseFrame?: number;
+  // True when the source name was ambiguous and the parser had to guess the
+  // category/loop semantics; flagged so registration can warn rather than fail.
   ambiguous?: boolean;
 }
 
+// A named [startFrame, endFrame] slice within one animation strip (e.g. a
+// charge phase vs. release phase of the same attack).
 export interface AnimationStage {
   startFrame: number;
   endFrame: number;
 }
 
+// One fully-described animation: its registry key, source file, classification,
+// loop flag, frame geometry, the original sheet name, and optional sub-stages.
 export interface SimpleAnimation {
   type: 'simple';
   key: string;
@@ -44,6 +67,8 @@ export interface SimpleAnimation {
   stages?: Record<string, AnimationStage>;
 }
 
+// All animations for one character mode, keyed by logical name, plus the mode's
+// identity and asset path. The unit the preload/register pipeline consumes.
 export interface CharacterModeRegistry {
   type: 'standard';
   id: string;
@@ -94,6 +119,8 @@ export type LogicalAnimationKey =
   | 'death'
   | 'take_hit';
 
+// The resolver's output: the concrete registry key to play, optionally routed
+// to a different mode's spritesheet via sourceMode.
 export interface ResolvedAnimation {
   registryKey: string;
   // When set, resolves the animation against this mode's spritesheet instead

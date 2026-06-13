@@ -14,11 +14,21 @@ import {
 } from '../../sprites/characterLoader';
 import type { PreviewAttach, PreviewClipSpec } from '../animatedSpritePreview';
 
-// Combat-tab content: for each of the four attacks, the looping animation (a
-// list of clips for AnimatedSpritePreview) plus the player-facing copy. The clip
-// data is derived from the sprite registry and combat constants — the combo
-// orders, gun grip offsets, and damage/cost numbers all come from the same
-// sources the gameplay uses, so this never drifts from how attacks really work.
+/**
+ * combatClips — builds the manual's Combat-tab weapon demos.
+ *
+ * For each attack (sword combo, teleport strike, magic, the two guns) it produces
+ * a looping animation (a list of clips for AnimatedSpritePreview) plus the
+ * player-facing copy and key chips. Clip data is derived from the sprite registry
+ * and combat constants — combo orders, gun grip offsets, and damage/cost numbers
+ * all come from the same sources the gameplay uses, so the manual never drifts
+ * from how the attacks really work.
+ *
+ * Inputs:  the sprite/animation registry and combat tuning constants.
+ * Outputs: a list of WeaponDemo descriptors (data only; no scene/DOM side effects).
+ * @calledby the manual overlay, when assembling the Combat tab.
+ * @calls    the sprite-loader key/frame helpers that mirror the live attack setup.
+ */
 
 export type WeaponDemoId = 'sword' | 'teleport' | 'magic' | 'gun1' | 'gun2';
 
@@ -34,24 +44,18 @@ export interface WeaponDemo {
   readonly clips: ReadonlyArray<PreviewClipSpec>;
 }
 
-// Swings chain with no hold between them so the combo flows continuously, just
-// like an in-game chain (rather than stalling after each hit).
+// no hold between swings so the combo flows; brief rest only at the loop seam
 const COMBO_HOLD = 0;
-// A brief rest only at the loop seam — after the combo's final hit, before it
-// repeats — so the cycle has a natural breath instead of snapping back.
 const COMBO_LOOP_HOLD = 6;
 
-// Sword body sheets are full-size (displayScale 1); the gun body is the
-// gunslinger no-gun art. Read its scale from the registry so the overlay offset
-// math matches PlayerGun exactly.
+// read display scale from registry so gun overlay offsets match PlayerGun exactly
 function bodyScale(): number {
   return getAnimationFrameInfo('gunslinger_body_idle')?.displayScale ?? 0.89;
 }
 
 const GUNSLINGER_BODY_IDLE_KEY = 'gunslinger_body_idle';
 
-// Gun overlay attachment, mirroring PlayerGun.syncToOwner at a neutral
-// (barrel-right) aim: grip pivot, body-space offset, and the body scale.
+// gun overlay attachment mirroring PlayerGun.syncToOwner at a neutral aim angle
 function gunAttach(): PreviewAttach {
   return {
     offsetX: GUN_OVERLAY_PIVOT_OFFSET_X,
@@ -71,9 +75,7 @@ function swordSwing(step: number, hold: number): PreviewClipSpec {
   };
 }
 
-// One swing of the magic combo. magicAttackAnimKey maps combo step → sheet in
-// the in-game cast order (1 → attack1, 2 → attack3, …), so iterating steps 1..5
-// reproduces the real magic chain.
+// one step of the magic combo — magicAttackAnimKey maps step→sheet in cast order
 function magicSwing(step: number, hold: number): PreviewClipSpec {
   return {
     layers: [{ textureKey: magicAttackAnimKey(step) }],
@@ -81,8 +83,7 @@ function magicSwing(step: number, hold: number): PreviewClipSpec {
   };
 }
 
-// Gun demo: an idle beat (body + holstered/ready gun) then a fire clip (body +
-// muzzle animation), looped — so it reads rest → fire → rest like real shots.
+// two-clip idle→fire loop for a gun preview, layering the overlay over the body like PlayerGun does
 function gunClips(mode: 'gunslinger_gun1' | 'gunslinger_gun2'): PreviewClipSpec[] {
   const attach = gunAttach();
   const idle: PreviewClipSpec = {
@@ -102,6 +103,7 @@ function gunClips(mode: 'gunslinger_gun1' | 'gunslinger_gun2'): PreviewClipSpec[
   return [idle, fire];
 }
 
+// builds all Combat-tab weapon demos with clip loops, key chips, and copy drawn from combat constants
 export function buildWeaponDemos(): ReadonlyArray<WeaponDemo> {
   // The click combo is the five regular swings (attack1–5). attack6 is NOT part
   // of it — it's the separate teleport strike below — so it's excluded here.

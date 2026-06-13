@@ -5,6 +5,25 @@ import {
   type GunslingerProjectileMode,
 } from '../sprites/characterLoader';
 
+/**
+ * Projectile — a gun-fired bullet/energy shot sprite with one-shot impact.
+ *
+ * An Arcade sprite (gravity off) that flies along its launch velocity, rotates
+ * to face it (mirrored Y in the left half-plane so it never renders upside-down),
+ * and detonates exactly once — on the first overlap-driven impact, a world-bounds
+ * hit, or a lifetime-timeout fallback. The single-detonation guard plus disabling
+ * the body on impact is load-bearing: it stops the body re-overlapping its target
+ * for every frame of the explode clip (which would stack damage and one-shot any
+ * enemy). Tidies its world-bounds listener and lifetime timer on destroy.
+ *
+ * Inputs:  scene + spawn options (position, mode, velocity, damage); registry-
+ *          loaded projectile animations; physics overlap/world-bounds events.
+ * Outputs: a moving sprite that deals `damage` on overlap, plays its explode clip,
+ *          and self-destroys.
+ * @calledby the player's gun-firing code, when a shot is loosed.
+ * @calls    the projectile animation-key helper, Arcade physics (velocity, world-
+ *           bounds), and the scene timer for the lifetime cap.
+ */
 export interface ProjectileSpawnOptions {
   x: number;
   y: number;
@@ -25,6 +44,7 @@ export class Projectile extends Phaser.Physics.Arcade.Sprite {
     body: Phaser.Physics.Arcade.Body,
   ) => void;
 
+  // spawns and launches the projectile; throws if the idle texture isn't loaded
   constructor(scene: Phaser.Scene, options: ProjectileSpawnOptions) {
     const idleKey = projectileAnimKey(options.mode, 'idle');
     if (!scene.textures.exists(idleKey)) {
@@ -41,15 +61,11 @@ export class Projectile extends Phaser.Physics.Arcade.Sprite {
     scene.physics.add.existing(this);
 
     this.body.setAllowGravity(false);
-    // Bounce 0,0 so worldbounds collision halts the projectile cleanly
-    // before our handler swaps to the explode animation. The 4th arg enables
-    // the worldbounds event for this body.
+    // bounce 0,0 halts it cleanly at a wall; 4th arg enables the world-bounds event
     this.body.setCollideWorldBounds(true, 0, 0, true);
 
     this.body.setVelocity(options.velocityX, options.velocityY);
-    // Rotate to face the velocity direction; mirror Y when aiming into the
-    // left half-plane so the sprite never renders upside-down (mirrors the
-    // PlayerGun's flipY-when-aimed-left convention).
+    // mirror Y in the left half-plane so the sprite never renders upside-down
     const angle = Math.atan2(options.velocityY, options.velocityX);
     this.setRotation(angle);
     this.setFlipY(Math.abs(angle) > Math.PI / 2);
@@ -82,14 +98,17 @@ export class Projectile extends Phaser.Physics.Arcade.Sprite {
     });
   }
 
+  // True once the projectile has detonated (overlap callers gate on this).
   hasExploded(): boolean {
     return this.exploded;
   }
 
+  // Damage this projectile deals on a hit (set at spawn, per gun mode).
   getDamage(): number {
     return this.damage;
   }
 
+  // detonates once; disables the body immediately so no damage ticks stack during the explode clip
   onImpact(): void {
     if (this.exploded) return;
     this.exploded = true;
@@ -100,11 +119,6 @@ export class Projectile extends Phaser.Physics.Arcade.Sprite {
     }
 
     this.setVelocity(0, 0);
-    // Disabling the body removes it from Arcade's overlap/collision lookups,
-    // so further per-frame overlap callbacks against this projectile stop
-    // firing. Without this, the projectile keeps overlapping its target for
-    // the duration of the explode animation (many frames) and stacks damage
-    // ticks — a single shot then kills enemies in one hit regardless of HP.
     this.body.enable = false;
 
     const explodeKey = projectileAnimKey(this.mode, 'explode');

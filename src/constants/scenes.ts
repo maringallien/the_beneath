@@ -1,6 +1,22 @@
-// Scene keys, level routing, spawn markers, and the cross-scene event
-// names emitted on the GameScene event bus.
+/**
+ * scenes constants — scene keys, level routing, spawn markers, and cross-scene
+ * event names.
+ *
+ * The registry keys every Phaser scene is launched under, the LDtk level/entity
+ * identifiers that anchor where the world renders and where the player spawns,
+ * and the string names of the events emitted on the gameplay scene's event bus.
+ * The CURRENT/STARTING level ids are single sources of truth — the world build
+ * and tileset preload both read them, so they must stay aligned.
+ *
+ * Inputs:  none — compile-time constants.
+ * Outputs: SCENE_KEYS, the *_LEVEL_/*_SPAWN_IDENTIFIER strings, and the *_EVENT names.
+ * @calledby the scene manager when registering/launching scenes, the world
+ *           builder and preloader resolving levels, and the publishers and
+ *           listeners on the gameplay scene's event bus (save, boss, doors, shops).
+ * @calls    nothing — a leaf data module.
+ */
 
+// Registry keys each Phaser scene is launched under.
 export const SCENE_KEYS = {
   BOOT: 'BootScene',
   PRELOAD: 'PreloadScene',
@@ -10,41 +26,22 @@ export const SCENE_KEYS = {
   VICTORY: 'VictoryScene',
 } as const;
 
-// LDtk level identifier rendered by GameScene. The PreloadScene must inspect
-// the same identifier when picking which tilesets to load — keep them aligned.
+// PreloadScene must use the same identifier when picking tilesets — keep them aligned.
 export const CURRENT_LEVEL_IDENTIFIER = 'Level_5';
 
-// LDtk level the player spawns into on a fresh boot. buildWorld selects the
-// PLAYER_SPAWN_IDENTIFIER marker in THIS level as the player and ignores spawn
-// markers in any other level, so this constant is the single source of truth
-// for the start location. Triggers the landing page overlay (LandingScene) at
-// first launch so the player is framed for the start screen.
+// buildWorld uses the spawn marker only in this level; single source of truth for the start location.
 export const STARTING_LEVEL_IDENTIFIER = 'Level_3';
 
-// LDtk entity identifier for the player's spawn marker. buildWorld keeps only
-// the one in STARTING_LEVEL_IDENTIFIER, so test markers placed in other levels
-// are ignored rather than tripping the "multiple players" guard in spawnEntities.
+// buildWorld keeps only the marker in STARTING_LEVEL_IDENTIFIER to avoid tripping the "multiple players" guard.
 export const PLAYER_SPAWN_IDENTIFIER = 'Sword_master_spawn';
 
-// Emitted by a Save crystal when the player commits its hold-E interaction.
-// GameScene listens on its own scene event bus (not on the Player) so the
-// listener is scoped to the world build/teardown lifecycle. Payload is the
-// Save instance so the scene can place the "Game Saved" toast above the
-// specific crystal that was interacted with.
+// Payload is the Save instance so the scene can place the toast above the right crystal.
 export const SAVE_REQUESTED_EVENT = 'save-requested';
 
-// Emitted on the GameScene event bus by Enemy.enterDeadState when a boss dies,
-// with the boss's LDtk identifier as payload. GameScene records the defeat and
-// fires the victory flow once all REQUIRED_BOSS_IDENTIFIERS are down.
+// Payload is the boss's LDtk identifier; GameScene fires the victory flow once all required bosses are down.
 export const BOSS_DEFEATED_EVENT = 'boss-defeated';
 
-// Emitted on the GameScene event bus by a key-locked Door when the player
-// completes a hold-E without the matching key. GameScene shows the fade message.
 export const KEY_DOOR_LOCKED_EVENT = 'key-door-locked';
 
-// Merchant shops. Tech_shop_spawn sells ammo; Mushroom_merchant_spawn sells
-// magic orbs. The merchant entity emits SHOP_REQUESTED_EVENT on hold-E commit
-// and GameScene shows a DOM-based ShopOverlay (src/ui/ShopOverlay) over the
-// canvas. Payload is `{ kind: 'tech' | 'mushroom' }` so the overlay picks
-// the right inventory.
+// Payload `{ kind: 'tech' | 'mushroom' }` so the ShopOverlay picks the right inventory.
 export const SHOP_REQUESTED_EVENT = 'shop-requested';

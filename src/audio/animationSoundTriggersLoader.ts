@@ -6,19 +6,34 @@ import type {
   AnimationTrigger,
 } from './animationSoundTriggersTypes';
 
-// Validates the on-disk JSON at module load. Fails fast on:
-//   - unknown top-level keys
-//   - non-array trigger lists
-//   - duplicate trigger names within an anim
-//   - frameIndex < 1 or non-integer
-//   - soundId not declared in soundRegistry.json
-// Matches the validation done by tools/anim-sound-aligner/save-plugin.mjs so
-// a tool-saved file is guaranteed to load (no asymmetry).
+/**
+ * animationSoundTriggersLoader — parses, validates, and exposes the
+ * frame-synced animation→sound trigger table.
+ *
+ * Builds a frozen, validated registry from animationSoundTriggers.json at module
+ * load and serves trigger lists keyed by full Phaser anim key. Validation fails
+ * fast on: unknown top-level / per-trigger keys, a non-object triggers map or
+ * non-array trigger list, a duplicate trigger name within an anim, an anim key or
+ * name/soundId that breaks the /^[A-Za-z0-9_]+$/ shape, a non-integer or <1
+ * frameIndex, or a soundId not declared in soundRegistry.json. This mirrors the
+ * validation in tools/anim-sound-aligner/save-plugin.mjs, so a tool-saved file is
+ * guaranteed to load (no asymmetry). Optional fields that are zero/false are
+ * normalized to undefined so a parsed trigger only carries flags that do something.
+ *
+ * Inputs:  the bundled animationSoundTriggers.json and the sound-registry lookup
+ *          (to verify each referenced soundId exists).
+ * Outputs: a frozen AnimationSoundTriggers registry plus the trigger-lookup
+ *          accessors below; throws at load on any malformed entry.
+ * @calledby the audio playback layer resolving which sounds fire on which anim
+ *           frames, and diagnostic tooling enumerating the table.
+ * @calls    the shared validation helpers and the sound-registry definition lookup.
+ */
 
 const TRIGGER_NAME_REGEX = /^[A-Za-z0-9_]+$/;
 const SOUND_ID_REGEX = /^[A-Za-z0-9_]+$/;
 const ANIM_KEY_REGEX = /^[A-Za-z0-9_]+$/;
 
+// validates one trigger entry; optional flags are only included when meaningfully set
 function validateTrigger(
   ctx: string,
   raw: unknown,
@@ -57,8 +72,7 @@ function validateTrigger(
     );
   }
   const frameIndex = v.requirePositiveInt(entry, 'frameIndex', ctx);
-  // Zero/false normalize to undefined so the parsed trigger only carries the
-  // optional fields that actually do something.
+  // zero/false normalize to undefined so the parsed trigger only carries fields that do something
   const audioStartOffsetMsRaw = v.optionalNonNegative(
     entry,
     'audioStartOffsetMs',
@@ -90,6 +104,7 @@ function validateTrigger(
     : { ...withStop, repeatPerLoop };
 }
 
+// built once at module load; a bad JSON file fails the import loudly rather than misfiring at runtime
 const REGISTRY: AnimationSoundTriggers = (() => {
   const raw = triggersRaw as Record<string, unknown>;
   for (const key of Object.keys(raw)) {
@@ -127,20 +142,17 @@ const REGISTRY: AnimationSoundTriggers = (() => {
   return Object.freeze({ triggers: Object.freeze(out) });
 })();
 
+// shared frozen empty list for anims with no triggers
 const EMPTY: ReadonlyArray<AnimationTrigger> = Object.freeze([]);
 
-// Returns the trigger list bound to a full animation key (the Phaser anim
-// key as registered by characterLoader). Returns the empty array when no
-// triggers are authored for that anim — callers iterate without a null
-// check.
+// returns the trigger list for an anim key, or the shared empty array — so callers can always iterate without a null check
 export function getTriggersFor(
   fullAnimKey: string,
 ): ReadonlyArray<AnimationTrigger> {
   return REGISTRY.triggers[fullAnimKey] ?? EMPTY;
 }
 
-// Exposes every (animKey, triggers) pair. Intended for diagnostic tooling
-// and future bulk-validation passes; not used on the hot path.
+// every (animKey, triggers) pair; for diagnostics and bulk validation, not on the hot path
 export function listAllTriggers(): ReadonlyArray<
   readonly [string, ReadonlyArray<AnimationTrigger>]
 > {

@@ -12,31 +12,34 @@ import {
 } from '../constants';
 import type { GameScene } from './GameScene';
 
-// Full-screen win overlay launched on top of GameScene (which is paused beneath
-// it) when the final boss (the Heart Hoarder) dies. Fades a solid-black scrim +
-// "YOU WON" title in over the frozen world, holds for VICTORY_HOLD_MS, then
-// auto-returns to the home/title screen. A click / Enter / Space skips the hold.
-//
-// Return path: GameScene.restartRun(true) rebuilds the world, resets the run-
-// progress store, and re-shows the landing page — the same path the pause menu's
-// Quit uses. Mirrors PauseScene's launch/resume/stop dance: GameScene.
-// triggerVictory() does launch(VICTORY) → pause(GAME); returnToTitle() rebuilds
-// the world, resumes GAME (so its update loop is live behind the re-shown landing
-// page), then stops this scene.
-//
-// The title reuses the Nosifer display font for thematic continuity with the
-// start screen.
+/**
+ * VictoryScene — the full-screen "YOU WON" win overlay.
+ *
+ * Launched on top of the game scene (paused beneath it) when the final boss
+ * (the Heart Hoarder) dies. Fades a solid-black scrim + "YOU WON" title in over
+ * the frozen world, holds for VICTORY_HOLD_MS, then auto-returns to the
+ * home/title screen; a click / Enter / Space skips the hold. The return path
+ * rebuilds the world in place AND resets the run-progress store, then re-shows
+ * the landing page (the same path the pause menu's Quit takes), so play
+ * resumes behind a fresh title screen. The title reuses the Nosifer display
+ * font for thematic continuity with the start screen.
+ *
+ * Inputs:  the victory tuning constants and a handle to the game scene.
+ * Outputs: a scrim + title overlay; on exit, the world rebuild + run reset.
+ * @calledby the win flow, when the final boss is defeated.
+ * @calls    the game scene's run-rebuild path and Phaser scene resume/stop.
+ */
 export class VictoryScene extends Phaser.Scene {
   private dim!: Phaser.GameObjects.Rectangle;
   private title!: Phaser.GameObjects.Text;
-  // Guards against a double-activation (the auto-return timer racing a skip
-  // click / key) firing two restartRun calls.
+  // Prevents the auto-return timer and a skip input from both firing restartRun.
   private accepting = true;
 
   constructor() {
     super({ key: SCENE_KEYS.VICTORY });
   }
 
+  // Builds the scrim + title, fades them in, then holds and schedules the auto-return.
   create(): void {
     this.accepting = true;
     const { width, height } = this.cameras.main;
@@ -57,8 +60,7 @@ export class VictoryScene extends Phaser.Scene {
 
     this.layout();
 
-    // Fade the black scrim + title in from transparent for a soft reveal over
-    // the frozen world.
+    // Fade in from transparent for a soft reveal over the frozen world.
     this.dim.setAlpha(0);
     this.title.setAlpha(0);
     this.tweens.add({
@@ -72,10 +74,7 @@ export class VictoryScene extends Phaser.Scene {
       alpha: 1,
       duration: VICTORY_FADE_IN_MS,
       ease: 'Sine.easeOut',
-      // Once "YOU WON" is fully revealed, hold it, then return home on its own.
-      // Skip inputs are armed only here — not during the fade — so the attack
-      // click that landed the killing blow can't instantly bounce the player
-      // home before the screen has even shown.
+      // On full reveal: arm skip, then hold and return home on its own.
       onComplete: () => {
         this.armSkip();
         this.time.delayedCall(VICTORY_HOLD_MS, () => this.returnToTitle());
@@ -86,8 +85,7 @@ export class VictoryScene extends Phaser.Scene {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.onShutdown, this);
   }
 
-  // Lets an impatient player skip the hold and go home immediately. Bound after
-  // the reveal so a held attack input can't skip the screen on frame one.
+  // Arms click/Enter/Space to skip the hold; bound after the reveal so the killing blow can't trigger it.
   private armSkip(): void {
     this.input.on('pointerdown', this.returnToTitle, this);
     const kb = this.input.keyboard;
@@ -97,25 +95,25 @@ export class VictoryScene extends Phaser.Scene {
     }
   }
 
+  // Stretch the scrim to the new viewport and re-center the title.
   private onResize(): void {
     const { width, height } = this.cameras.main;
     this.dim.setSize(width, height);
     this.layout();
   }
 
+  // Drop the resize listener so it doesn't outlive the scene.
   private onShutdown(): void {
     this.scale.off(Phaser.Scale.Events.RESIZE, this.onResize, this);
   }
 
+  // Center the title horizontally at the configured viewport fraction down.
   private layout(): void {
     const { width, height } = this.cameras.main;
     this.title.setPosition(width / 2, height * VICTORY_TITLE_VIEWPORT_FRACTION_Y);
   }
 
-  // Abandon the run and go back to the home/title screen. GameScene.restartRun
-  // rebuilds the world in place AND resets the run-progress store; we then resume
-  // GameScene (its loop was halted by triggerVictory's pause) and stop this
-  // overlay, leaving the landing page on top of a fresh world.
+  // Rebuilds the world, resets run progress, resumes the game scene, and stops this overlay.
   private returnToTitle(): void {
     if (!this.accepting) return;
     this.accepting = false;

@@ -7,18 +7,32 @@ import {
 } from './entityRegistryLoader';
 import type { AnimatedEntityConfig } from './entityRegistryTypes';
 
-// Generic animated decoration entity driven by the entityRegistry JSON.
-// Mirrors Player's anchor-and-body wiring but with no input, no combat,
-// no overlays — just plays an animation in place at its LDtk-placed
-// position. The whole class exists to turn "this LDtk identifier is
-// animated" into "a Phaser sprite running an animation" without N
-// hand-written subclasses, so per-entity behavior lives in JSON.
+/**
+ * AnimatedEntity — the registry-driven base sprite for every animated entity.
+ *
+ * Turns "this LDtk identifier is animated" into "a Phaser sprite running an
+ * animation" by reading the entityRegistry JSON, so per-entity behavior lives
+ * in data instead of N hand-written subclasses. The baseline just plays an
+ * animation in place at the LDtk-placed position (no input, combat, or overlays
+ * of its own); Door, Enemy, and friends subclass it for behavior. Owns the
+ * anchor-and-body wiring — on every ANIMATION_START it re-derives origin, scale,
+ * and physics-body size/offset from the sprite's per-anim anchor, the invariant
+ * that keeps the body aligned to the art across anim swaps and facing flips.
+ *
+ * Inputs:  scene, spawn x/y, an LDtk identifier resolved against the registry
+ *          (config: animations, physicsBody, gravity, defaultAnimation).
+ * Outputs: a depth-sorted animated sprite with a correctly anchored body.
+ * @calledby the entity factory at level load, and subclass constructors via super.
+ * @calls    the entity-registry lookup, the per-anim sprite-anchor resolver, and
+ *           Phaser's animation/physics systems.
+ */
 export class AnimatedEntity extends Phaser.Physics.Arcade.Sprite {
   declare body: Phaser.Physics.Arcade.Body;
 
   private readonly identifier: string;
   protected readonly config: AnimatedEntityConfig;
 
+  // looks up the registry entry, sets up physics/animation, and starts the default anim at a random phase
   constructor(scene: Phaser.Scene, x: number, y: number, identifier: string) {
     const config = getEntityRegistryEntry(identifier);
     if (!config) {
@@ -40,23 +54,13 @@ export class AnimatedEntity extends Phaser.Physics.Arcade.Sprite {
     scene.add.existing(this);
     scene.physics.add.existing(this);
 
-    // Render above tile layers, mirroring the depth applied to Player in
-    // GameScene. Without this, entities sit at depth 0 and disappear under
-    // foreground tile layers (Foreground1/2/3 in this project's LDtk).
+    // above tile layers; depth 0 would hide entities under LDtk foreground layers
     this.setDepth(ENTITY_DEPTH);
 
-    // applyAnimationAnchor uses the registry's physicsBody size each anim
-    // swap; setting it once here is the steady-state default until the
-    // first ANIMATION_START fires (which is immediately, from the play
-    // below, so this is mostly a safety net).
+    // applyAnimationAnchor overwrites this on the first ANIMATION_START; just a safety net
     this.body.setSize(config.physicsBody.width, config.physicsBody.height);
-    // Gravity defaults to false: the baseline pipeline animates entities
-    // in place. Per-entity override via config.gravity lets ground-bound
-    // enemies opt in later when AI/wander gets layered on.
+    // gravity off by default; config.gravity lets ground-bound enemies opt in
     this.body.setAllowGravity(config.gravity === true);
-    // Entities never push back against walls in the baseline. Disabling
-    // immovable + collision keeps Phaser's broad-phase cheap when N
-    // entities spawn across the world.
     this.body.setImmovable(false);
 
     this.on(
@@ -66,19 +70,11 @@ export class AnimatedEntity extends Phaser.Physics.Arcade.Sprite {
     );
 
     this.play(initialKey);
-    // Random phase offset so a clutch of identical entities (e.g. a row
-    // of crows) doesn't flap in lockstep. setProgress is a 0..1 cursor
-    // into the current anim's duration; Phaser tolerates re-seeding the
-    // same anim it just started playing.
+    // random phase so identical entities (e.g. a row of crows) don't animate in lockstep
     this.anims.setProgress(Math.random());
   }
 
-  // Plays a named animation from this entity's config. Returns false when
-  // the animation is not in this entity's config — graceful degradation
-  // for partial-anim entities (e.g. The_hive has only idle + death). The
-  // baseline never calls this from outside, but the hook is here so a
-  // future behavior layer can drive idle ↔ walk transitions without
-  // having to re-do the registry lookup itself.
+  // plays a logical (un-namespaced) anim key; returns false and no-ops if absent
   playLogical(animKey: string): boolean {
     if (!(animKey in this.config.animations)) return false;
     const fullKey = entityAnimFullKey(this.identifier, animKey);
@@ -86,15 +82,12 @@ export class AnimatedEntity extends Phaser.Physics.Arcade.Sprite {
     return true;
   }
 
+  // This entity's LDtk identifier (its registry key).
   getIdentifier(): string {
     return this.identifier;
   }
 
-  // Flips the sprite horizontally and re-applies the anchor so the physics
-  // body offset stays correct in world space. Mirrors Player.setFacing — kept
-  // separate (rather than promoting to a base class) because AnimatedEntity
-  // is the only common ancestor and exposing this here lets Enemy face the
-  // player without touching the private anchor handler.
+  // flips the sprite and re-applies the body anchor so it stays correct after a facing change
   setFacing(faceLeft: boolean): void {
     if (this.flipX === faceLeft) return;
     this.setFlipX(faceLeft);
@@ -104,6 +97,7 @@ export class AnimatedEntity extends Phaser.Physics.Arcade.Sprite {
     }
   }
 
+  // re-derives origin, scale, and body offset from the new anim's anchor data — must run on every anim swap and flip
   private applyAnimationAnchor(animation: Phaser.Animations.Animation): void {
     const { width: bodyW, height: bodyH } = this.config.physicsBody;
     const {

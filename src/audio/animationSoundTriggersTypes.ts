@@ -1,28 +1,31 @@
-// Runtime-side shapes for src/audio/animationSoundTriggers.json. Authored by
-// the tools/anim-sound-aligner browser tool and read by Player.ts (and any
-// future entity that needs animation-frame-driven audio).
+/**
+ * animationSoundTriggersTypes — runtime-side shapes for the
+ * animationSoundTriggers.json data file.
+ *
+ * Pure type definitions: the schema for animation-frame-driven sound effects
+ * (a trigger fires a one-shot when an animation reaches a frame threshold).
+ * Authored by the tools/anim-sound-aligner browser tool and consumed by the
+ * entity that plays frame-synced audio (currently the player, plus any future
+ * entity needing it).
+ *
+ * Inputs:  none — declarations only.
+ * Outputs: the AnimationTrigger / AnimationSoundTriggers interfaces below.
+ * @calledby the audio loader that parses the triggers JSON and the entity code
+ *           that fires sounds off animation-frame events.
+ * @calls    nothing — a leaf type module.
+ */
 
 export interface AnimationTrigger {
-  // Stable name for the trigger within an animation. Used as the per-anim
-  // dedup key so the trigger fires at most once per anim playthrough even
-  // though ANIMATION_UPDATE fires every frame.
+  // dedup key within an anim so the trigger fires at most once per playthrough
   readonly name: string;
   readonly soundId: string;
-  // 1-based, matching Phaser AnimationFrame.index. The trigger fires when
-  // frame.index >= frameIndex (first frame at-or-past the threshold wins).
+  // 1-based (Phaser AnimationFrame.index); fires when frame.index >= frameIndex
   readonly frameIndex: number;
-  // Skip this many milliseconds into the audio buffer when firing. Lets a
-  // trigger play the *middle* of a sound (e.g., cut off a long wind-up).
-  // Omitted / 0 = play from the start. Must be >= 0 if present.
+  // ms into the buffer to start playback; omit/0 = from the start
   readonly audioStartOffsetMs?: number;
-  // When true, the spawned sound is stopped on ANIMATION_COMPLETE (or
-  // ANIMATION_START of the next anim) so audio longer than the anim
-  // doesn't overhang. Default false: sound plays to its natural end.
+  // when true, stops the sound on ANIMATION_COMPLETE so it doesn't overhang the anim
   readonly stopOnAnimComplete?: boolean;
-  // When true, this trigger's fired-flag is reset on ANIMATION_REPEAT so it
-  // re-fires on every loop iteration (use for per-step / per-beat effects
-  // like footsteps). Default false: trigger fires once per anim play and
-  // long clips can outlast multiple loop cycles without restacking.
+  // when true, resets the fired-flag on ANIMATION_REPEAT so it fires every loop iteration
   readonly repeatPerLoop?: boolean;
 }
 

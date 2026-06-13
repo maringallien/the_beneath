@@ -1,25 +1,27 @@
 import Phaser from 'phaser';
 import { gameConfig } from './config/gameConfig';
 
+/**
+ * main — application entry point.
+ *
+ * Constructs the single Phaser.Game from gameConfig and installs the tab-hidden
+ * audio guard. Music muting is NOT handled here: the music preference gates only
+ * the soundtrack and is applied by the MusicPlayer, so SFX and ambience are left
+ * alone. This file's one job beyond construction is suspending Web Audio while
+ * the tab is hidden (see the visibility handler below).
+ *
+ * Inputs:  gameConfig; the DOM visibilitychange event.
+ * Outputs: the running Phaser game; suspend/resume of the Web Audio output.
+ * @calledby the browser, as the bundle's top-level module on page load.
+ * @calls    Phaser game construction and the Web Audio context suspend/resume.
+ */
+
 const game = new Phaser.Game(gameConfig);
 
-// The music on/off preference (the OPTIONS speaker icon) gates ONLY the
-// soundtrack now — it is applied by the MusicPlayer (src/audio/MusicPlayer.ts),
-// which subscribes to the preference and fades the looping track in/out. It is
-// deliberately NOT wired to game.sound.mute here: ambience and SFX must keep
-// playing when music is muted, so there is no master-mute apply in this file.
+// Music preference is handled by MusicPlayer only — no master mute here so SFX/ambience keep playing.
 
-// Pause all audio while the game tab is in the background.
-//
-// Phaser's pauseOnBlur suspends the Web Audio context on window *blur*, but
-// switching to another browser *tab* fires `visibilitychange` without a window
-// blur — the page keeps OS focus, only the tab is hidden. The render loop
-// stalls (requestAnimationFrame is throttled while hidden), yet Web Audio runs
-// on its own thread, so looping ambience/music keeps playing. Listen to the DOM
-// visibility event directly and suspend/resume the audio output to match. We
-// only resume a context we suspended ourselves, so this never overrides
-// Phaser's own blur/focus handling or the pre-gesture autoplay lock (the
-// context stays 'suspended' until the first user interaction unlocks it).
+// Suspend Web Audio on tab-hide; visibilitychange catches tab-switches that don't fire window blur.
+// We only resume contexts we suspended so we never override Phaser's blur handling or the autoplay lock.
 let suspendedByVisibility = false;
 
 const webAudioContext = (): AudioContext | null =>
@@ -31,14 +33,13 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     const context = webAudioContext();
     if (context) {
-      // Only a running context can be meaningfully suspended; a still-locked
-      // one (no user gesture yet) is left alone.
+      // Only suspend a running context; leave a still-locked one alone.
       if (context.state === 'running') {
         void context.suspend();
         suspendedByVisibility = true;
       }
     } else {
-      // HTML5 Audio / NoAudio fallback (uncommon under Phaser.AUTO).
+      // HTML5 Audio / NoAudio fallback (rare under Phaser.AUTO).
       game.sound.pauseAll();
       suspendedByVisibility = true;
     }

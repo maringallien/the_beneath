@@ -1,31 +1,34 @@
 import Phaser from 'phaser';
 import { getAnimationFrameInfo } from '../sprites/characterLoader';
 
-// Animated spritesheet preview rendered into a standalone DOM <canvas>, used by
-// the "How to Play" manual's Combat tab to loop the player's sword / magic / gun
-// attacks.
-//
-// Why this exists instead of a Phaser sprite: the pause menu calls
-// anims.pauseAll(), so any Phaser-driven animation is frozen while the manual is
-// open. This widget owns its own requestAnimationFrame loop and draws frames
-// straight from the already-loaded spritesheet textures, so it keeps animating
-// regardless of the global AnimationManager state. It also never touches the
-// Phaser display list — purely a DOM element the overlay positions with CSS.
-//
-// Frame layout (size, count, anchor, displayScale) is read from the sprite
-// registry via getAnimationFrameInfo so a preview can never drift from how the
-// frame is drawn in-game.
+/**
+ * animatedSpritePreview — a self-driving spritesheet preview on a DOM <canvas>.
+ *
+ * Loops the player's sword / magic / gun attack frames in the "How to Play"
+ * manual's Combat tab. It exists instead of a Phaser sprite because the pause
+ * menu calls anims.pauseAll(), freezing every Phaser animation while the manual
+ * is open: this widget owns its own requestAnimationFrame loop and blits frames
+ * straight from the already-loaded spritesheet textures, so it keeps animating
+ * regardless of the global AnimationManager state, and never touches the Phaser
+ * display list (it is a plain DOM element the overlay positions with CSS). Frame
+ * layout (size, count, anchor, displayScale) is read from the sprite registry via
+ * getAnimationFrameInfo, so a preview can never drift from the in-game drawing.
+ *
+ * Inputs:  clip specs (texture keys, frame orders, optional gun-overlay attach)
+ *          plus a fit box in CSS px; the registry's per-animation frame info.
+ * Outputs: an <canvas> element that the widget animates on its own rAF loop.
+ * @calledby the manual overlay, when showing the combat preview while the rest of
+ *           the game (and its animations) is paused.
+ * @calls    the sprite registry's frame-info lookup and the loaded textures'
+ *           frame cut-rects, then 2D-canvas drawImage on each tick.
+ */
 
-// Places a layer on top of a clip's BASE layer rather than on the shared ground
-// baseline — used for the gun overlay, which rides on the gunslinger body at a
-// fixed grip offset (mirrors PlayerGun.syncToOwner).
+// Gun overlay attach: positions a layer on the base sprite at a fixed grip offset (mirrors PlayerGun.syncToOwner).
 export interface PreviewAttach {
-  // Offset, in the base layer's SOURCE pixels, from the base sprite's origin
-  // point (its display origin: anchorX horizontally, vertical centre) to this
-  // layer's pivot. Multiplied by `scale` at draw time. (= GUN_OVERLAY_PIVOT_*.)
+  // Offset in source px from the base sprite's origin to this layer's pivot; multiplied by scale at draw time.
   readonly offsetX: number;
   readonly offsetY: number;
-  // This layer's own pivot, as a fraction of its frame (e.g. the gun grip).
+  // This layer's own pivot as a fraction of its frame (e.g. the gun grip).
   readonly originX: number;
   readonly originY: number;
   // Scale this layer (and the offset) is drawn at — the owner/body scale.
@@ -35,67 +38,56 @@ export interface PreviewAttach {
 }
 
 export interface PreviewLayerSpec {
-  // Phaser texture key (identical to the animation full key, e.g.
-  // 'sword_master_attack1' or 'gun1_overlay_attack1').
+  // Phaser texture key for this layer's spritesheet.
   readonly textureKey: string;
   // Frames to show, in order. Defaults to every frame (0 … frameCount-1).
   readonly frameOrder?: ReadonlyArray<number>;
-  // When present, this layer is attached to the clip's base layer. When absent,
-  // the layer is the base: ground-anchored by its JSON anchor so its feet sit on
-  // the shared baseline. The FIRST layer of a clip must be a base (no attach).
+  // When present, this layer attaches to the base; when absent it is the base, ground-anchored. First layer must be base.
   readonly attach?: PreviewAttach;
 }
 
 export interface PreviewClipSpec {
-  // Drawn back-to-front; layer 0 is the base. A single-layer clip is one swing
-  // of a combo; a two-layer clip is body + gun overlay.
+  // Layers drawn back-to-front; layer 0 is the base (body or single-layer swing).
   readonly layers: ReadonlyArray<PreviewLayerSpec>;
-  // Extra ticks to hold the clip's last frame before advancing — a beat between
-  // combo swings or between gun shots. Defaults to 0.
+  // Extra ticks to hold the last frame — a pause between combo swings / gun shots.
   readonly holdFrames?: number;
 }
 
 export interface AnimatedSpritePreviewOptions {
   readonly scene: Phaser.Scene;
-  // Clips played in order, then looped. Sword/magic pass one clip per combo
-  // step; guns pass an idle beat + a fire clip.
+  // Clips played in order then looped (one per combo step for sword/magic; idle beat + fire for guns).
   readonly clips: ReadonlyArray<PreviewClipSpec>;
   // Playback rate. Defaults to the character animation rate (12 fps).
   readonly fps?: number;
-  // Fit the whole animation (all clips/frames) inside this box, in CSS px,
-  // preserving aspect with the figure's feet on the bottom. Wide swing frames
-  // are bounded by width, tall spell frames by height — so every preview stays
-  // within its stage regardless of the sheet's native proportions.
+  // CSS-px box to fit the whole animation inside, aspect-preserved, feet on the bottom.
   readonly maxWidthPx: number;
   readonly maxHeightPx: number;
 }
 
 const DEFAULT_FPS = 12;
-// Padding (source px, pre-fit) around the union bounds so anti-aliased edges and
-// wide swing frames never clip against the canvas border.
+// A small padding around the union bounds so wide swing frames never clip the canvas border.
 const BOUNDS_PADDING = 2;
 
-// One resolved layer occurrence within a clip: the source image, per-frame cut
-// rects, and the draw geometry (all in display units relative to the baseline
-// ground point, before the final fit scale is applied).
+// Resolved layer: source image, per-frame cut rects, and draw geometry in display units relative to the ground point.
 interface LayerDescriptor {
   readonly image: CanvasImageSource;
   readonly cutRects: ReadonlyArray<{ x: number; y: number; w: number; h: number }>;
   readonly frameWidth: number;
   readonly frameHeight: number;
   readonly scale: number; // display-unit scale (displayScale or body scale)
-  readonly originPxX: number; // pivot within the frame, in source px
+  readonly originPxX: number; // pivot within the frame in source px
   readonly originPxY: number;
-  readonly pivotX: number; // pivot position in display units, from ground point
+  readonly pivotX: number; // pivot position in display units from ground point
   readonly pivotY: number;
   readonly rotation: number;
 }
 
-// A single rendered tick: which absolute frame each layer shows.
+// One rendered tick: which frame each layer shows.
 interface SequenceStep {
   readonly draws: ReadonlyArray<{ layer: LayerDescriptor; frameIndex: number }>;
 }
 
+// Mutable accumulator for the union of all layers' extents (display units, relative to the ground point).
 interface Bounds {
   minX: number;
   maxX: number;
@@ -111,7 +103,7 @@ export class AnimatedSpritePreview {
   private readonly sequence: ReadonlyArray<SequenceStep>;
   private readonly available: boolean;
 
-  // Backing-store transform from display units to device pixels.
+  // Scales display units to device pixels for the backing store.
   private readonly fitScale: number;
   private readonly groundX: number;
   private readonly groundY: number;
@@ -121,6 +113,7 @@ export class AnimatedSpritePreview {
   private lastTimeMs = 0;
   private stepIndex = 0;
 
+  // Resolves clips into a render sequence, sizes the canvas to the union bounds, and draws the first frame.
   constructor(options: AnimatedSpritePreviewOptions) {
     this.fps = options.fps ?? DEFAULT_FPS;
 
@@ -137,10 +130,7 @@ export class AnimatedSpritePreview {
     const unionW = Math.max(1, built.bounds.maxX - built.bounds.minX);
     const unionH = Math.max(1, built.bounds.maxY - built.bounds.minY);
 
-    // Contain the union bounds within the box: device-px-per-display-unit is
-    // bounded by whichever axis is tighter, so nothing overflows or is squashed.
-    // The backing store is at device resolution (dpr-aware) and CSS sizes it back
-    // down, so the crisp nearest-neighbour upscale survives onto HiDPI screens.
+    // Fit within the box: tightest axis wins; backing store at device res so HiDPI stays crisp.
     this.fitScale = Math.min(
       (options.maxWidthPx * dpr) / unionW,
       (options.maxHeightPx * dpr) / unionH,
@@ -150,23 +140,21 @@ export class AnimatedSpritePreview {
     canvas.style.width = `${Math.round(canvas.width / dpr)}px`;
     canvas.style.height = `${Math.round(canvas.height / dpr)}px`;
 
-    // Ground point (where every layer's baseline anchor maps) in backing-store px.
+    // Ground point in backing-store px (where every layer's baseline anchor maps).
     this.groundX = -built.bounds.minX * this.fitScale;
     this.groundY = -built.bounds.minY * this.fitScale;
 
     this.renderStep(0);
   }
 
-  // True when every referenced texture was loaded. When false the canvas is
-  // blank and the caller should show a fallback instead.
+  // True when every referenced texture loaded; false means the canvas is blank and the caller should show a fallback.
   isAvailable(): boolean {
     return this.available;
   }
 
+  // Starts the rAF loop; no-op if already running, textures missing, or single static frame.
   start(): void {
     if (this.rafId !== null || !this.available || this.sequence.length <= 1) {
-      // Nothing to animate (missing textures, or a single static frame): the
-      // constructor already drew the first frame.
       return;
     }
     this.lastTimeMs = performance.now();
@@ -174,6 +162,7 @@ export class AnimatedSpritePreview {
     this.rafId = requestAnimationFrame(this.tick);
   }
 
+  // Halts the rAF loop if running; leaves the last frame on the canvas.
   stop(): void {
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
@@ -181,17 +170,18 @@ export class AnimatedSpritePreview {
     }
   }
 
+  // Stops the loop and removes the canvas from the DOM.
   destroy(): void {
     this.stop();
     this.el.remove();
   }
 
+  // rAF callback: advances the frame index on each fps interval and re-renders; clamps accumulator after tab-switch gaps.
   private readonly tick = (now: number): void => {
     const frameMs = 1000 / this.fps;
     this.accumulatorMs += now - this.lastTimeMs;
     this.lastTimeMs = now;
-    // Guard against tab-switch / breakpoint gaps producing a huge catch-up burst.
-    if (this.accumulatorMs > frameMs * 4) this.accumulatorMs = frameMs;
+    if (this.accumulatorMs > frameMs * 4) this.accumulatorMs = frameMs; // clamp after tab-switch gaps
 
     let advanced = false;
     while (this.accumulatorMs >= frameMs) {
@@ -204,6 +194,7 @@ export class AnimatedSpritePreview {
     this.rafId = requestAnimationFrame(this.tick);
   };
 
+  // Clears the canvas and blits one sequence step back-to-front with nearest-neighbour scaling.
   private renderStep(index: number): void {
     if (!this.ctx) return;
     const step = this.sequence[index];
@@ -215,6 +206,7 @@ export class AnimatedSpritePreview {
     }
   }
 
+  // Blits one layer's frame at its pivot with combined layer×fit scale and optional rotation.
   private drawLayerFrame(
     ctx: CanvasRenderingContext2D,
     layer: LayerDescriptor,
@@ -244,9 +236,7 @@ export class AnimatedSpritePreview {
   }
 }
 
-// Resolves every clip's layers into draw descriptors, the looping render
-// sequence, and the union bounds (display units, relative to the ground point).
-// Returns available:false if any referenced texture is missing.
+// Resolves all clips into a looping render sequence and accumulates the union bounds; returns available:false if any texture is missing.
 function buildDescriptors(
   scene: Phaser.Scene,
   clips: ReadonlyArray<PreviewClipSpec>,
@@ -281,8 +271,7 @@ function buildDescriptors(
 
     if (descriptors.length === 0) continue;
 
-    // Clip length = the longest layer's frame list; shorter layers (e.g. a
-    // 1-frame body under a multi-frame gun overlay) wrap via modulo.
+    // Clip length = longest layer's frame list; shorter layers wrap via modulo.
     const clipLen = Math.max(
       1,
       ...clip.layers.map((l, i) =>
@@ -305,6 +294,7 @@ function buildDescriptors(
   return { available, sequence, bounds };
 }
 
+// Builds one tick at clip-time t; short layers wrap under longer ones via modulo.
 function buildStep(
   descriptors: ReadonlyArray<LayerDescriptor>,
   orders: ReadonlyArray<ReadonlyArray<number>>,
@@ -319,6 +309,7 @@ function buildStep(
   return { draws };
 }
 
+// Returns the spec's frame order, or all frames 0..n-1 when unspecified.
 function frameOrderFor(
   spec: PreviewLayerSpec,
   desc: LayerDescriptor,
@@ -327,8 +318,8 @@ function frameOrderFor(
   return Array.from({ length: desc.cutRects.length }, (_, i) => i);
 }
 
-// Builds one layer descriptor. `base` is the clip's already-resolved base layer
-// (null when resolving the base itself), needed to position an attached layer.
+// Builds a layer descriptor from its spec; base layers pivot on their anchor, attached layers ride the base at a fixed offset.
+// Returns null if the texture is missing (makes the whole preview unavailable).
 function resolveLayer(
   scene: Phaser.Scene,
   spec: PreviewLayerSpec,
@@ -354,8 +345,7 @@ function resolveLayer(
 
   if (spec.attach) {
     if (!base) return null; // an attached layer needs a base to ride on
-    // Base sprite's display origin point (anchorX horizontally, vertical
-    // centre), in display units relative to the ground point.
+    // Base display origin in display units relative to the ground point.
     const ownerX = 0; // ground sits under the base's anchorX column
     const ownerY = (base.frameHeight / 2 - baseAnchorY(base)) * base.scale;
     const scale = spec.attach.scale;
@@ -373,7 +363,7 @@ function resolveLayer(
     };
   }
 
-  // Base layer: pivot is its anchor, which maps onto the ground point (0,0).
+  // Base layer: anchor maps onto the ground point (0,0).
   return {
     image,
     cutRects,
@@ -388,14 +378,12 @@ function resolveLayer(
   };
 }
 
-// Recovers a base descriptor's source-pixel anchorY from its stored geometry
-// (base pivot == anchor, so originPxY is the anchorY).
+// Recovers the base layer's source-pixel anchorY (stored as originPxY since base pivot == anchor).
 function baseAnchorY(base: LayerDescriptor): number {
   return base.originPxY;
 }
 
-// Expands `bounds` to include a layer's drawn rect (display units, relative to
-// ground), accounting for any fixed rotation about its pivot.
+// Expands bounds to enclose a layer's drawn rect, rotating its corners first to capture rotated overlays correctly.
 function growBounds(bounds: Bounds, layer: LayerDescriptor): void {
   const s = layer.scale;
   const left = -layer.originPxX * s;

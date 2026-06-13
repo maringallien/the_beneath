@@ -11,21 +11,37 @@ import {
   PROJECTILE_GUN2_SPEED,
 } from '../constants';
 
+/**
+ * playerProjectileConfig — per-gun-mode firing parameters, resolved from the
+ * animation registry once at boot.
+ *
+ * Firing is overlay-only: the gun sprite's attack1 clip is the visible gunshot,
+ * so its "fire" stage frame index drives projectile-spawn timing and its
+ * animation-complete event ends the locked-attack window (the body has no
+ * attack1). This module reads those registry stages plus the projectile tuning
+ * constants and bakes them into one immutable map keyed by firing mode.
+ *
+ * Inputs:  the gun-overlay animation registry (stage frames + natural duration)
+ *          and the projectile speed/damage/fire-rate constants.
+ * Outputs: a frozen mode → ProjectileFireConfig map; throws if the registry is
+ *          missing the expected "fire" stage or natural duration.
+ * @calledby the player firing system at construction, to precompute fire configs.
+ * @calls    the character-loader registry queries for overlay stages/durations.
+ */
+
 export interface ProjectileFireConfig {
-  // Overlay anim key (the gun sprite). The body has no attack1 anymore —
-  // firing is overlay-only, so the lifecycle (fire-frame trigger, complete
-  // event) is sourced from the overlay's animation events.
+  // Gun overlay anim key (firing is overlay-only; body has no attack1).
   readonly overlayKey: string;
+  // 0-based frame index at which the projectile spawns.
   readonly fireFrame: number;
   readonly speed: number;
   readonly damage: number;
   readonly mode: 'gunslinger_gun1' | 'gunslinger_gun2';
-  // Overlay play duration (ms). Undefined = use the registry's natural
-  // duration. Set for gun1 to apply the fire-rate multiplier, which also
-  // shortens the locked-attack window so the player can fire again sooner.
+  // Override play duration (ms); set for gun1 to apply the fire-rate multiplier.
   readonly overlayDurationMs?: number;
 }
 
+// Builds the immutable mode → fire-config map from the animation registry; throws if the "fire" stage is missing.
 export function buildProjectileFireConfigs(): ReadonlyMap<
   'gunslinger_gun1' | 'gunslinger_gun2',
   ProjectileFireConfig
@@ -34,9 +50,6 @@ export function buildProjectileFireConfigs(): ReadonlyMap<
     'gunslinger_gun1' | 'gunslinger_gun2',
     ProjectileFireConfig
   >();
-  // Firing is overlay-only — the gun sprite's attack1 is the visible gunshot,
-  // so its "fire" stage frame index drives projectile spawn timing and its
-  // animation-complete event ends the locked-attack window.
   const gun1OverlayKey = gunOverlayAnimKey('gunslinger_gun1', 'attack1');
   const gun2OverlayKey = gunOverlayAnimKey('gunslinger_gun2', 'attack1');
   const gun1Stage = getAnimationStage(gun1OverlayKey, 'fire');

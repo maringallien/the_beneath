@@ -9,8 +9,7 @@ import {
   SHOP_PRICE_HEAL_ITEM,
 } from '../../../constants';
 
-// Fully-upgraded orb cap (base + every Crystal Pouch tier), so the copy tracks
-// the constants instead of hardcoding the number.
+// fully-upgraded orb cap derived from constants so copy never drifts
 const MAGIC_MAX_CAPACITY =
   BASE_MAX_MAGIC + MAGIC_UPGRADE_CAPACITY_STEPS.reduce((sum, step) => sum + step, 0);
 import {
@@ -22,9 +21,20 @@ import {
   titledBlock,
 } from '../manualSection';
 
-// Items tab — what you pick up, what's in the world, and where to spend coins.
-// Pickup rows reuse the HUD glyphs; world features and merchants are short
-// name/detail rows. Numbers come from the economy constants.
+/**
+ * itemsSection — builds the manual's Items tab.
+ *
+ * Covers what you pick up, what's in the world, and where to spend coins. Pickup
+ * rows reuse the HUD glyphs; world features and merchants are short name/detail
+ * rows. Every number in the copy (heal/ammo amounts, shop prices, the orb-cap
+ * range) is interpolated from the economy constants, so the tab tracks the real
+ * tuning instead of hardcoding values.
+ *
+ * Inputs:  the economy constants; the shared manual-section DOM builders.
+ * Outputs: a ManualSection (its root element; no live previews).
+ * @calledby the manual overlay, when assembling the Items tab.
+ * @calls    the shared manual-section element/row/block builders.
+ */
 
 const WORLD_FEATURES: ReadonlyArray<{ name: string; detail: string }> = [
   {
@@ -48,6 +58,7 @@ const WORLD_FEATURES: ReadonlyArray<{ name: string; detail: string }> = [
   },
 ];
 
+// builds the Items tab: pickups, world features, and merchant descriptions
 export function buildItemsSection(): ManualSection {
   const root = sectionRoot();
 

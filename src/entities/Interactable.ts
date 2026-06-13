@@ -1,38 +1,36 @@
-// Generic "hold E to interact" contract. Any entity that opts in by
-// implementing this interface gets picked up by InteractionManager — no per-
-// entity wiring in GameScene. A structural interface (not a base class) keeps
-// Chest free to extend AnimatedEntity while still being addressable as an
-// interactable. Add new interactables by implementing the interface and
-// registering them via InteractionManager.register / .registerAll.
+/**
+ * Interactable — the generic "hold E to interact" contract.
+ *
+ * Any entity that opts in by implementing this interface gets picked up by the
+ * interaction manager with no per-entity wiring in the scene. A structural
+ * interface (not a base class) lets an entity keep its own inheritance (e.g.
+ * Chest extending AnimatedEntity) while still being addressable as an
+ * interactable. Add new interactables by implementing the interface and
+ * registering them with the interaction manager.
+ *
+ * Inputs:  implementors expose their anchor, range, gate, and a side-effecting
+ *          handler; the guard takes an arbitrary unknown value.
+ * Outputs: the contract the interaction manager consumes; a type predicate.
+ * @calledby the interaction manager's per-frame closest-target scan and hold
+ *           dispatch; implementors are the world's interactable entities.
+ * @calls    nothing — a contract plus a structural type guard.
+ */
 
 export interface Interactable {
-  // World-space coords used both for proximity tests and for anchoring the
-  // E icon (the icon renders above this point by INTERACTION_ICON_OFFSET_Y_PX).
-  // For sprites this is typically (sprite.x, body.top - small gap).
+  // World-space anchor for proximity tests and for placing the E icon.
   getInteractionAnchor(): { readonly x: number; readonly y: number };
 
-  // Squared form so the manager's per-frame closest-target scan can avoid a
-  // sqrt. Most entities return INTERACTION_RANGE_SQ from constants; an entity
-  // with a wider trigger (e.g. a future NPC at 80 px) returns its own value.
+  // Squared distance threshold — avoids a sqrt in the per-frame scan.
   getInteractionRangeSq(): number;
 
-  // False once the entity has been "used up" (e.g. an opened chest) or while
-  // mid-animation transition. The manager skips !canInteract() targets in its
-  // closest-target search and hides the icon if the current target's gate
-  // flips false mid-hold.
+  // False when the entity is "used up" or mid-transition; manager skips it.
   canInteract(): boolean;
 
-  // Fires when the player completes the hold. The entity owns all side effects
-  // (play anim, change state, emit SFX). The manager re-checks canInteract()
-  // immediately after dispatch so a single-use entity falls out of the icon
-  // selection without any extra bookkeeping by the caller.
+  // Called when the player completes the hold; entity owns all side effects.
   onInteract(): void;
 }
 
-// Type guard for narrowing arbitrary GameObjects to Interactable. Reserved for
-// places that hold a heterogeneous list (e.g. spawned.others) — when an array
-// is already typed as ReadonlyArray<Interactable> from EntityFactory the guard
-// isn't needed.
+// Duck-type check that an unknown value implements all four Interactable methods.
 export function isInteractable(obj: unknown): obj is Interactable {
   if (obj == null || typeof obj !== 'object') return false;
   const candidate = obj as Record<string, unknown>;

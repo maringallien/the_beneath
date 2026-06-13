@@ -1,23 +1,27 @@
-// Persistent music VOLUME preference, driven by the volume bar in the OPTIONS
-// panel. The MusicPlayer reads getMusicVolume() for the soundtrack's target
-// level and subscribes via onMusicVolumeChange() to follow the slider live.
-//
-// This gates the soundtrack ONLY — ambience and SFX are unaffected. Volume 0
-// means muted; the speaker icon and the M-key shortcut flip between 0 and the
-// last audible level via toggleMusicMuted().
-//
-// The value is kept in module state (single source of truth across the app) and
-// mirrored to localStorage so it survives reloads. Reads/writes are wrapped in
-// try/catch because localStorage can throw (private-browsing quotas, disabled
-// storage); on failure we fall back to the in-memory value.
+/**
+ * musicSettings — the persistent music-volume preference and its pub/sub.
+ *
+ * Owns the soundtrack volume as module state (the single source of truth across
+ * the app), driven by the OPTIONS-panel volume bar. Gates the soundtrack ONLY —
+ * ambience and SFX are unaffected. Volume 0 means muted; the speaker icon and
+ * the M-key shortcut flip between 0 and the last audible level. The value is
+ * mirrored to localStorage so it survives reloads, and a notify list lets the
+ * soundtrack follow the slider live without polling. All localStorage access is
+ * wrapped in try/catch (it can throw under private-browsing quotas or disabled
+ * storage) and falls back to the in-memory value.
+ *
+ * Inputs:  the OPTIONS volume bar / mute shortcut; localStorage on load.
+ * Outputs: the current volume, an enabled boolean, and change notifications.
+ * @calledby the OPTIONS UI (set/toggle) and the soundtrack player (read +
+ *           subscribe for its live target level).
+ * @calls    localStorage for persistence and the registered change listeners.
+ */
 
 const VOLUME_KEY = 'the_beneath.musicVolume';
-// Legacy on/off key from before the volume bar existed. Read once for migration
-// so a player who had music muted stays muted after the upgrade.
+// legacy boolean key from before the volume bar; read once for migration so a muted player stays muted
 const LEGACY_ENABLED_KEY = 'the_beneath.musicEnabled';
 
-// Default level when nothing is stored — matches main_theme's registry-designed
-// mix so a fresh player hears the soundtrack at its intended volume.
+// matches main_theme's intended mix so a fresh player hears the right volume without configuring anything
 export const DEFAULT_MUSIC_VOLUME = 0.45;
 
 type MusicVolumeListener = (volume: number) => void;
@@ -26,9 +30,7 @@ const listeners = new Set<MusicVolumeListener>();
 
 let musicVolume = readPersistedVolume();
 
-// Remembered level for mute/unmute: unmuting restores this rather than the
-// default, so a player who set music low doesn't jump back to full default when
-// they un-mute. Seeded from the loaded volume (or the default if loaded muted).
+// unmuting restores this so a low-volume player doesn't jump to the full default
 let lastAudibleVolume = musicVolume > 0 ? musicVolume : DEFAULT_MUSIC_VOLUME;
 
 function clamp01(value: number): number {
@@ -36,9 +38,7 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-// Loads the persisted volume, falling back to DEFAULT_MUSIC_VOLUME for a fresh
-// player or an unreadable value. Migrates the legacy boolean: a stored
-// musicEnabled === 'false' (and no volume yet) resolves to muted.
+// reads persisted volume from localStorage on init; migrates the legacy boolean key; falls back to default
 function readPersistedVolume(): number {
   try {
     const raw = localStorage.getItem(VOLUME_KEY);
@@ -57,14 +57,12 @@ export function getMusicVolume(): number {
   return musicVolume;
 }
 
-// Convenience boolean for the speaker-icon on/off state. Music is "enabled"
-// whenever it's audible.
+// true when the track is audible (volume > 0); drives the speaker-icon state
 export function isMusicEnabled(): boolean {
   return musicVolume > 0;
 }
 
-// Sets the music volume (clamped to [0, 1]), persists it, and notifies
-// subscribers. No-ops when unchanged so listeners don't fire redundantly.
+// sets, persists, and broadcasts the music volume; no-ops when unchanged; remembers non-zero levels for unmute
 export function setMusicVolume(value: number): void {
   const next = clamp01(value);
   if (next === musicVolume) return;
@@ -73,13 +71,12 @@ export function setMusicVolume(value: number): void {
   try {
     localStorage.setItem(VOLUME_KEY, String(next));
   } catch {
-    // Persistence failed; the in-memory value still drives this session.
+    // persistence failed; in-memory value still drives this session
   }
   for (const listener of listeners) listener(musicVolume);
 }
 
-// Mutes (→ 0) or unmutes (→ last audible level) the music. Returns the new
-// enabled state. Drives the M-key shortcut and the speaker-icon click.
+// toggles mute; unmutes to the last audible level (or default); returns the new enabled state
 export function toggleMusicMuted(): boolean {
   if (musicVolume > 0) {
     setMusicVolume(0);
@@ -89,8 +86,7 @@ export function toggleMusicMuted(): boolean {
   return musicVolume > 0;
 }
 
-// Subscribes to volume changes; returns an unsubscribe function. The MusicPlayer
-// uses this to track the slider without polling.
+// subscribes to volume changes; returns an unsubscribe function
 export function onMusicVolumeChange(listener: MusicVolumeListener): () => void {
   listeners.add(listener);
   return () => {

@@ -2,19 +2,32 @@ import type Phaser from 'phaser';
 import type { AnimatedSpritePreview } from '../animatedSpritePreview';
 import { createHudIcon, type HudIconName } from '../hudIcons';
 
-// Shared contract + DOM helpers for the "How to Play" manual's tab sections.
-// Each section builds a detached element tree; ManualOverlay mounts them in the
-// scrolling content host and toggles which one is visible. Sections that contain
-// animated sprite previews return them so the overlay can start/stop their rAF
-// loops as the tab gains/loses focus (only the visible tab animates).
+/**
+ * manualSection — shared contract and DOM helpers for the "How to Play" manual tabs.
+ *
+ * Defines the ManualSection return shape every tab builder produces and the small
+ * set of element-construction helpers they share (section root, paragraphs, titled
+ * blocks, key-chip rows, and HUD-glyph / typographic-marker rows). Each builder
+ * assembles a detached element tree; the manual overlay mounts the trees in its
+ * scrolling host and toggles which one is visible. A section carrying animated
+ * sprite previews returns them so the overlay can start/stop their rAF loops as a
+ * tab gains or loses focus — only the visible tab animates.
+ *
+ * Inputs:  plain strings/class names from the tab builders, plus HUD icon names.
+ * Outputs: detached DOM nodes and the ManualSection contract used by every tab.
+ * @calledby the per-tab section builders, while assembling their element trees.
+ * @calls    the DOM document for element creation and the shared HUD icon factory.
+ */
 
 export interface ManualSection {
   readonly el: HTMLElement;
   readonly previews: ReadonlyArray<AnimatedSpritePreview>;
 }
 
+// A tab builder: takes the scene (for sprite previews) and returns its section.
 export type SectionBuilder = (scene: Phaser.Scene) => ManualSection;
 
+// create a typed DOM element with optional class and text — base primitive for all helpers
 export function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
@@ -26,10 +39,12 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+// The empty root container a tab builder fills and returns as its section element.
 export function sectionRoot(): HTMLElement {
   return el('div', 'manual-section');
 }
 
+// A styled <p> of body copy (defaults to the standard manual paragraph class).
 export function paragraph(
   text: string,
   className = 'manual-p',
@@ -37,8 +52,7 @@ export function paragraph(
   return el('p', className, text);
 }
 
-// Titled block reusing the options-tab category heading style, returning the
-// outer block plus the body the caller fills.
+// builds a headed block and returns the outer wrapper and the empty body to fill
 export function titledBlock(title: string): {
   block: HTMLElement;
   body: HTMLElement;
@@ -50,9 +64,7 @@ export function titledBlock(title: string): {
   return { block, body };
 }
 
-// A row of key chips reusing the Controls-tab key styling. Pass `joiner` (e.g.
-// "+") to render a separator between chips when the keys are pressed together
-// (a combo like Space + L-Click) rather than being alternatives.
+// renders key chips in a row; optional joiner (e.g. "+") marks keys pressed together
 export function keyChips(
   keys: ReadonlyArray<string>,
   className = 'manual-keys',
@@ -66,8 +78,7 @@ export function keyChips(
   return row;
 }
 
-// Icon + name + description row, using the real HUD SVG glyphs so the legend and
-// item lists match the live HUD exactly. Shared by the HUD and Items tabs.
+// legend row with the real HUD SVG glyph, a name, and a description
 export function glyphRow(
   iconName: HudIconName,
   name: string,
@@ -84,8 +95,7 @@ export function glyphRow(
   return row;
 }
 
-// Plain text row aligned with glyphRow but with a typographic marker instead of
-// an SVG (e.g. the "✚"/"◆" symbols, or the ?/! detection icons).
+// like glyphRow but uses a plain text character instead of an SVG glyph
 export function markerRow(
   marker: string,
   name: string,

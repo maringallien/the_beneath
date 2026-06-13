@@ -1,16 +1,24 @@
-// Modern, monochrome HUD icon set authored as inline SVG. The player HUD renders
-// these instead of the old pixel-art / procedural texture icons so the glyphs are
-// crisp at any size and fully styled from CSS: every shape is painted with
-// `currentColor`, so the surrounding rule controls colour (white = active,
-// translucent = depleted) and opacity with no per-icon state. The underlying
-// game textures (coin / heart / orb / hud_ammo) stay registered for the shop and
-// world drops; only the HUD stops referencing them.
+/**
+ * hudIcons — modern, monochrome HUD icon set authored as inline SVG.
+ *
+ * The player HUD renders these instead of the old pixel-art / procedural texture
+ * icons, so the glyphs are crisp at any size and fully styled from CSS: every
+ * shape is painted with `currentColor`, so the surrounding rule controls colour
+ * (white = active, translucent = depleted) and opacity with no per-icon state.
+ * Glyph geometry is the path data below; a builder emits a fresh <svg> per call
+ * (DOM nodes can't be shared between mount points). The underlying game textures
+ * (coin / heart / orb / hud_ammo) stay registered for the shop and world drops;
+ * only the HUD stops referencing them.
+ *
+ * Inputs:  an icon name + a CSS class string per build.
+ * Outputs: freshly-created SVG/DOM nodes; no shared or retained state.
+ * @calledby the player HUD overlay, building its resource/weapon glyph rows.
+ * @calls    only the DOM API (createElementNS, attribute setters).
+ */
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-// Every glyph is authored in a 24×24 box and scaled down by CSS. Filled paths use
-// the nonzero rule, so a single `d` may hold several sub-paths (e.g. the sword's
-// blade + guard + grip) and still render as one solid silhouette.
+// 24×24 viewBox; single path `d` may hold several sub-paths (nonzero fill = one solid silhouette).
 const VIEW_BOX = '0 0 24 24';
 
 export type HudIconName =
@@ -23,9 +31,7 @@ export type HudIconName =
   | 'gun2' // shotgun ammo + weapon indicator (shotgun silhouette)
   | 'sword'; // weapon indicator
 
-// One drawable primitive. Most glyphs are a single filled `path`; a path may set
-// fillRule:'evenodd' to punch holes (e.g. the coin's engraved rim groove). The
-// `circle` form (filled disc or stroked ring) stays available for round shapes.
+// One drawable primitive: a filled path (evenodd to punch holes) or a circle (disc or stroked ring).
 type Shape =
   | { readonly tag: 'path'; readonly d: string; readonly fillRule?: 'evenodd' }
   | {
@@ -33,8 +39,7 @@ type Shape =
       readonly cx: number;
       readonly cy: number;
       readonly r: number;
-      // present → outlined ring of this stroke width; absent → filled disc.
-      readonly stroke?: number;
+      readonly stroke?: number; // present = outlined ring; absent = filled disc
     };
 
 const HEART_D =
@@ -44,8 +49,7 @@ const HEART_D =
 // Lightning bolt — stamina powers the dash, so the meter reads as "energy".
 const BOLT_D = 'M7 2V13H10V22L17 10H13L17 2Z';
 
-// Mana crystal — a faceted gem (flat table, out to the girdle, down to a pointed
-// culet), matching the magic world pickup. Distinct from the round coin.
+// Mana crystal — faceted gem matching the magic world pickup.
 const CRYSTAL_D = 'M7 5H17L21 10L12 20L3 10Z';
 
 const PLUS_D = 'M10 4H14V10H20V14H14V20H10V14H4V10H10Z';
@@ -57,26 +61,20 @@ const SWORD_D =
   'M11.1 14H12.9V18.5H11.1Z' +
   'M10.4 18.5H13.6V20H10.4Z';
 
-// Pistol silhouette (G1) — compact: a short horizontal slide, a small trigger
-// block, and a grip angling down from the rear. Showing the two ammo counters as
-// different *weapons* (compact pistol vs long shotgun) separates them at a glance
-// far better than the two near-identical cartridges did.
+// Compact pistol silhouette (G1) — slide, trigger block, angled rear grip.
 const PISTOL_D =
   'M4 6H20V10H4Z' + // slide / barrel
   'M11 10H13.5V12.5H11Z' + // trigger block
   'M5.5 9.5H10L8.5 17H4Z'; // grip (angled, at the rear)
 
-// Shotgun silhouette (G2) — a long gun: an extended barrel with an under-pump, a
-// receiver, a trigger grip, and a butt-stock at the rear. Its long horizontal
-// outline is unmistakable next to the compact pistol.
+// Long shotgun silhouette (G2) — extended barrel, pump, receiver, butt-stock; unmistakable next to the pistol.
 const SHOTGUN_D =
   'M2 6H16V8.5H2Z' + // long barrel
   'M6 8.5H9.5V11H6Z' + // pump / foregrip
   'M13 6H22.5V12.5H19V11H13Z' + // receiver + butt-stock
   'M14.5 11H16.5V14.5H14.5Z'; // trigger grip
 
-// Every glyph except the coin is one or more filled paths. The coin is built
-// specially (a "$" stamped into a solid disc — see appendStampedCoin).
+// Shape table for every glyph except the coin (which uses the stamped-mask builder).
 const ICON_SHAPES: Record<Exclude<HudIconName, 'coin'>, readonly Shape[]> = {
   heart: [{ tag: 'path', d: HEART_D }],
   stamina: [{ tag: 'path', d: BOLT_D }],
@@ -87,6 +85,7 @@ const ICON_SHAPES: Record<Exclude<HudIconName, 'coin'>, readonly Shape[]> = {
   sword: [{ tag: 'path', d: SWORD_D }],
 };
 
+// Appends one shape to the svg as a currentColor path or circle.
 function appendShape(svg: SVGSVGElement, shape: Shape): void {
   if (shape.tag === 'path') {
     const path = document.createElementNS(SVG_NS, 'path');
@@ -110,6 +109,7 @@ function appendShape(svg: SVGSVGElement, shape: Shape): void {
   svg.appendChild(circle);
 }
 
+// Creates a blank aria-hidden svg shell with the 24×24 viewBox and the given CSS class.
 function baseSvg(className: string): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg');
   svg.setAttribute('viewBox', VIEW_BOX);
@@ -119,14 +119,10 @@ function baseSvg(className: string): SVGSVGElement {
   return svg;
 }
 
-// Stamped "$" coin: a solid currentColor disc with a dollar sign knocked out via
-// an SVG mask (white disc = visible, black "$" = transparent), so the symbol
-// reads as a dark stamp on the coin against the HUD's dark panel — a struck coin
-// that matches the solid fill of the other glyphs. The mask id is made unique per
-// instance so coins never share one mask.
 let coinMaskSeq = 0;
 const COIN_STAMP_FONT =
   'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+// Draws a solid disc with a "$" knocked out via SVG mask so it reads as a struck coin.
 function appendStampedCoin(svg: SVGSVGElement): void {
   coinMaskSeq += 1;
   const maskId = `hud-coin-mask-${coinMaskSeq}`;
@@ -137,7 +133,7 @@ function appendStampedCoin(svg: SVGSVGElement): void {
   body.setAttribute('cx', '12');
   body.setAttribute('cy', '12');
   body.setAttribute('r', '9');
-  body.setAttribute('fill', 'white'); // visible coin body
+  body.setAttribute('fill', 'white');
   mask.appendChild(body);
   const stamp = document.createElementNS(SVG_NS, 'text');
   stamp.setAttribute('x', '12');
@@ -147,7 +143,7 @@ function appendStampedCoin(svg: SVGSVGElement): void {
   stamp.setAttribute('font-family', COIN_STAMP_FONT);
   stamp.setAttribute('font-size', '15');
   stamp.setAttribute('font-weight', '700');
-  stamp.setAttribute('fill', 'black'); // knocked-out dollar sign
+  stamp.setAttribute('fill', 'black');
   stamp.textContent = '$';
   mask.appendChild(stamp);
 
@@ -164,9 +160,7 @@ function appendStampedCoin(svg: SVGSVGElement): void {
   svg.appendChild(disc);
 }
 
-// Builds a fresh <svg> glyph for the given icon. A new node is returned each call
-// (DOM nodes can't be shared between mount points, and the heart row needs many
-// independent copies). `className` is applied to the root for CSS sizing + colour.
+// Returns a fresh svg glyph (new node per call — DOM nodes can't be shared between mount points).
 export function createHudIcon(name: HudIconName, className: string): SVGSVGElement {
   const svg = baseSvg(className);
   if (name === 'coin') {
@@ -177,11 +171,7 @@ export function createHudIcon(name: HudIconName, className: string): SVGSVGEleme
   return svg;
 }
 
-// A heart that can render a partial fill, built with the classic "rating" clip:
-// a grey "empty" heart sits in flow, and a white "fill" heart of fixed width is
-// overlaid inside an absolutely-positioned, overflow-hidden clip span. Narrowing
-// that span's width (set by the HUD per frame) reveals 0–100% of the heart from
-// the left. Returns the root plus the clip span whose width the caller animates.
+// Builds a two-layer (empty + fill) heart; narrowing the clip span's width shows 0–100% fill from the left.
 export function createFillableHeart(): {
   readonly root: HTMLSpanElement;
   readonly clip: HTMLSpanElement;

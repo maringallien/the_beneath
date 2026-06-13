@@ -6,16 +6,25 @@ import './detectionCorners.css';
 //   - conflict:      at least one enemy is engaging directly        → red.
 export type DetectionCornersLevel = 'clear' | 'investigating' | 'conflict';
 
-// Four L-shaped corner brackets pinned to the viewport edges, layered over the
-// Phaser canvas in the same #game parent as the player HUD (a sibling DOM
-// overlay, so the monochrome HUD panels are untouched). GameScene recolours them
-// each frame from the highest enemy alert level — a faint white when the player
-// is unseen, yellow while an enemy investigates, red in an active fight.
-//
-// DOM/CSS like the player HUD: the level is a single class on the root
-// (is-clear / is-investigating / is-conflict) that the brackets read via their
-// border-colour, so a state change is one class swap and CSS animates the
-// transition. pointer-events:none so it never eats gameplay input.
+/**
+ * DetectionCorners — the four viewport-edge alert brackets.
+ *
+ * Four L-shaped corner brackets pinned to the viewport edges, layered over the
+ * Phaser canvas in the same #game parent as the player HUD (a sibling DOM
+ * overlay, so the monochrome HUD panels are untouched). They are recoloured each
+ * frame from the highest enemy alert level: faint white when the player is
+ * unseen, yellow while an enemy investigates, red in an active fight. Styled
+ * like the HUD — the level is a single class on the root (is-clear /
+ * is-investigating / is-conflict) that the brackets read via their border
+ * colour, so a state change is one class swap and CSS animates the transition;
+ * pointer-events:none so it never eats gameplay input.
+ *
+ * Inputs:  the #game parent element; a per-frame detection level and visibility.
+ * Outputs: a DOM subtree whose root class encodes the current alert level.
+ * @calledby the gameplay scene — built at scene start, fed the aggregate alert
+ *           level each frame, hidden while paused, and torn down on shutdown.
+ * @calls    the DOM (element create/append/remove, classList) only.
+ */
 export class DetectionCorners {
   private readonly parent: HTMLElement;
   private rootEl: HTMLDivElement | null = null;
@@ -28,6 +37,7 @@ export class DetectionCorners {
     this.buildDom();
   }
 
+  // Swaps the root's is-* class to reflect the alert level; dedup'd so steady state touches no DOM.
   setLevel(level: DetectionCornersLevel): void {
     if (!this.rootEl || level === this.lastLevel) return;
     this.lastLevel = level;
@@ -52,6 +62,7 @@ export class DetectionCorners {
     this.lastLevel = null;
   }
 
+  // Builds the four corner bracket divs under a root with is-clear default and appends to parent.
   private buildDom(): void {
     const root = document.createElement('div');
     root.className = 'detection-corners is-clear';

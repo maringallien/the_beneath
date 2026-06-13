@@ -3,39 +3,43 @@ import { getTriggersFor, playOneShot } from '../audio';
 import { AnimatedEntity } from './AnimatedEntity';
 import { entityAnimFullKey, getEntityTrap } from './entityRegistryLoader';
 
-// Wall-clock pause after the bear trap's snap animation finishes before it
-// re-arms and switches back to the idle/armed loop. Gives the snap a
-// visible "settled" beat so the player sees the trap as triggered before
-// it's ready to bite again.
+/**
+ * Trap — the hazard entity, hosting three distinct trigger/damage machines.
+ *
+ * One class covers passive damage-on-overlap traps (spikes), directContact snap
+ * traps (the bear trap), trigger-driven ejector traps (smoke/flame, shocker,
+ * spike ejector), and the one-off swaying-sword fixture. Which machine runs is
+ * resolved at construction from the LDtk identifier + the registry trap block.
+ * Damage is gated, not automatic: snap/ejector traps defer the hit to a midpoint
+ * animation frame (TRAP_DAMAGE_FRAME_EVENT) so a victim who escapes the danger
+ * zone before that frame is spared, while the "directly above" / side-of-trap
+ * geometry that decides *who* gets hit is computed in GameScene, not here.
+ *
+ * Inputs:  scene, spawn x/y, LDtk identifier; per-frame trigger booleans and a
+ *          grounded-tile flag pushed in by GameScene's trap update.
+ * Outputs: drives its own animation + Arcade gravity (falling sword), plays
+ *          trigger-keyed one-shots, and emits TRAP_DAMAGE_FRAME_EVENT.
+ * @calledby the gameplay scene — spawned at level load, then ticked each frame
+ *           with the trigger state the scene computes per trap kind.
+ * @calls    the shared audio one-shot player, the registry/animation helpers,
+ *           and the Arcade body for the swaying sword's fall.
+ */
+
+// bear trap waits this long before re-arming
 const TRAP_REARM_DELAY_MS = 800;
 
-// Trigger style for ejector-class traps. 'overhead' fires while the player
-// is in the airspace above the body (smoke/flame ejector). 'attached-ground'
-// fires while the player is standing on the specific tile beneath the body
-// (spike ejector). Trigger condition itself is computed in GameScene; the
-// trap only stores the active boolean and drives cycle bookkeeping.
+// which spatial trigger condition this ejector uses
 export type EjectorKind = 'overhead' | 'attached-ground';
 
-// Per-identifier ejector behavior.
-//   `trailingCycles`: full cycles to play after the trigger releases.
-//     Overhead ejectors snap straight back to idle (0); attached-ground
-//     (spike) ejectors play 2 trailing cycles for a "windup releases" feel.
-//   `damageFrame`: 0-based frame index within the cycle animation at which
-//     TRAP_DAMAGE_FRAME fires. If omitted, the animation midpoint is used —
-//     fine for symmetric extend/retract cycles. Spike ejector extends early
-//     in its 18-frame sheet, so it overrides to frame 4.
+// Per-identifier ejector tuning: trailing cycle count, damage frame, and optional
+// per-side directional damage frames for ejectors that fire left then right.
 const EJECTOR_BY_IDENTIFIER: Record<
   string,
   {
     readonly kind: EjectorKind;
     readonly trailingCycles: number;
     readonly damageFrame?: number;
-    // Side-specific damage frames for traps that fire in opposite horizontal
-    // directions across the cycle (e.g. the shocker zaps left, then right).
-    // When set, replaces the single `damageFrame` — the trap emits one
-    // damage event per side, payload-tagged so GameScene can gate damage to
-    // victims on the matching side of the trap. Mutually exclusive with
-    // `damageFrame`; if both are set, directional wins.
+    // left/right damage frames for ejectors that fire in both directions (e.g. shocker)
     readonly directionalDamageFrames?: {
       readonly left: number;
       readonly right: number;
@@ -55,26 +59,14 @@ const EJECTOR_BY_IDENTIFIER: Record<
   },
 };
 
-// Custom event emitted by snap/ejector traps when their damaging animation
-// crosses its midpoint frame. GameScene listens and applies damage to any
-// victim currently overlapping the trap's body — that's how a player can
-// jump off a bear trap mid-snap (or out of an ejector's column mid-cycle)
-// and avoid the hit. Subscribers get the trap that fired as the first arg,
-// followed by an optional side tag ('left' | 'right') for directional
-// ejectors (the shocker fires twice per cycle, once per side).
+// fired when a snap/ejector reaches its damage frame; GameScene damages whoever
+// is still in the zone — escape before the frame and you avoid the hit
 export const TRAP_DAMAGE_FRAME_EVENT = 'trap-damage-frame';
 
-// Side tag passed to TRAP_DAMAGE_FRAME_EVENT subscribers for directional
-// ejectors. Undefined for omnidirectional traps (snap + non-directional
-// ejectors), where the damage zone alone decides who gets hit.
+// side tag on TRAP_DAMAGE_FRAME_EVENT for directional ejectors; undefined for omnidirectional traps
 export type TrapDamageSide = 'left' | 'right';
 
-// LDtk identifier for the ceiling-hung sword. Drives a separate state machine
-// in Trap (idle → snapping → falling → embedded) rather than ejector/snap
-// semantics: the trigger fires when the player passes UNDER the sword, the
-// string visibly snaps, the sword falls via Arcade gravity, and it embeds
-// in the floor on landing. Single fixture for now, so identifier-matching
-// is cleaner than adding registry plumbing for a one-off behavior.
+// the ceiling-hung sword, which runs its own idle→snapping→falling→embedded machine
 const SWAYING_SWORD_IDENTIFIER = 'Swaying_sword_spawn';
 const SWAYING_SWORD_ANIM_SNAP = 'swaying_sword_animation2';
 const SWAYING_SWORD_ANIM_FALL = 'swaying_sword_animation3';
@@ -82,113 +74,46 @@ const SWAYING_SWORD_ANIM_EMBED = 'swaying_sword_animation4';
 
 export type SwayingSwordState = 'idle' | 'snapping' | 'falling' | 'embedded';
 
-// Passive damage source. The trap plays its looping animation in place and
-// damages on body overlap. The "directly above" semantics are enforced in
-// GameScene's overlap handlers by comparing centers — the victim's body
-// center must sit above the trap's body center for damage to apply, so
-// walking past a side-mounted trap doesn't tick damage.
-//
-// Re-tick cadence is handled by the victim's own invuln/hurt window rather
-// than a per-trap timer: standing on spikes ticks at PLAYER_INVULN_MS for
-// the player, and at the enemy's hurt-state duration for enemies.
-//
-// Traps with `directContactAnimation` (e.g. the bear trap) swap to that
-// animation only when something makes direct ground-contact — stepping
-// directly onto the trap from above, not when jumping through the airspace
-// above it. The swap is one-shot per arming cycle; after the snap anim
-// completes plus TRAP_REARM_DELAY_MS, the trap re-arms by switching back
-// to its default animation and accepting a fresh trigger.
-//
-// Damage on snap traps is also gated by the directContact check — overlap
-// alone doesn't hurt the victim, only a clean "landed on it" contact does.
-// That keeps a player jumping through the airspace above a bear trap from
-// silently taking damage.
 export class Trap extends AnimatedEntity {
   private readonly damage: number;
   private readonly directContactAnimation: string | null;
   private readonly snapFullAnimKey: string | null;
   private directContactTriggered = false;
   private rearmTimer: Phaser.Time.TimerEvent | null = null;
-  // Per-frame "is the player currently in the trigger zone?" signal updated
-  // by GameScene.updateTraps. Definition of "in the trigger zone" depends on
-  // ejectorKind ('overhead' = in the column above; 'attached-ground' =
-  // standing on the tile beneath). Drives the next-cycle decision when the
-  // current cycle completes: replay while the player is still triggering,
-  // run trailing cycles after release, park on frame 0 when fully done.
+  // set each frame by GameScene; drives the next-cycle decision on completion
   private triggerActive = false;
-  // True between "cycle started" and "cycle's ANIMATION_COMPLETE fired".
-  // While set, a fresh trigger does NOT restart the animation — the cycle in
-  // progress is allowed to finish, even if the player has been knocked out
-  // of the trigger zone mid-cycle.
+  // true while the current ejector cycle is still playing
   private cycleInProgress = false;
-  // Trailing-cycle counter: decremented each time a post-release cycle
-  // completes. Set to trailingCycleCount when the trigger releases. While
-  // > 0, onAnimComplete chains another cycle even with triggerActive=false.
+  // decremented each time a post-release cycle completes
   private trailingCyclesRemaining = 0;
-  // Ejector behavior for this trap, or null for non-ejector (passive / snap)
-  // traps. Identifier-derived so non-ejector traps keep their normal
-  // looping behavior without per-entity registry plumbing.
   private readonly ejectorKind: EjectorKind | null;
-  // Number of full cycles to play after the trigger releases. 0 for overhead
-  // (instant return to idle), 2 for attached-ground (windup-tail feel).
   private readonly trailingCycleCount: number;
-  // Cached full key for the cycling animation, used by onAnimComplete to
-  // recognise its own completion event vs. unrelated animation completes
-  // (e.g. the bear-trap snap on a different trap subclass instance).
+  // cached so onAnimComplete can recognise its own completion vs. others
   private readonly cycleFullAnimKey: string | null;
-  // Animation whose midpoint frame fires the TRAP_DAMAGE_FRAME event.
-  // Set for snap traps (the snap animation) and ejector traps (the
-  // eject/cycle animation). Null for passive traps that damage on every
-  // overlap tick — those keep their previous immediate-damage semantics.
+  // the anim whose midpoint frame fires the damage event (snap or eject cycle)
   private readonly damagingAnimFullKey: string | null;
-  // 0-based frame index within damagingAnimFullKey at which the damage
-  // event fires — conventionally the animation's midpoint so the visual
-  // telegraphs the danger and the victim has time to escape before the hit.
   private readonly damageFrameIndex: number;
-  // Per-cycle guard so TRAP_DAMAGE_FRAME emits at most once per snap/cycle
-  // even though ANIMATION_UPDATE fires for every frame transition. Reset
-  // each time a new cycle starts (triggerDirectContact, startCycle).
+  // once-per-cycle guard so TRAP_DAMAGE_FRAME emits at most once per cycle
   private damageFrameFired = false;
-  // Directional damage frames for ejectors that fire in opposite directions
-  // across the cycle (e.g. shocker — left at one frame, right at another).
-  // Null for omnidirectional traps; when set, `damageFrameIndex` is unused
-  // and the per-side `*DamageFired` flags drive the once-per-cycle emit.
+  // directional damage frames for ejectors that fire left then right (e.g. shocker)
   private readonly directionalDamageFrames: {
     readonly left: number;
     readonly right: number;
   } | null;
-  // Per-cycle guards for the left/right damage emissions. Reset alongside
-  // damageFrameFired in startCycle / triggerDirectContact so each cycle
-  // starts with all flags cleared.
+  // once-per-cycle guards for the two directional damage emissions
   private leftDamageFired = false;
   private rightDamageFired = false;
-  // Tracks `${animKey}:${triggerName}` entries already fired during the
-  // current anim play, so per-frame ANIMATION_UPDATE doesn't re-trigger
-  // the same sound. Cleared on ANIMATION_START — mirrors Enemy.ts.
+  // dedup set so per-frame ANIMATION_UPDATE doesn't re-fire the same sound
   private readonly firedTriggers = new Set<string>();
-  // Swaying-sword state machine. Non-null only for the ceiling-hung sword;
-  // 'idle' = the swaying loop is playing and the trap is armed, 'snapping'
-  // = the string-snap animation is playing, 'falling' = gravity is on and
-  // the blade is in the air, 'embedded' = blade has landed and the trap is
-  // spent. State transitions live in tickSwayingSwordFall (grounded check)
-  // and onAnimComplete (snap → falling transition).
+  // swaying-sword state machine; null on non-sword traps
   private swayingSwordState: SwayingSwordState | null;
-  // Pre-resolved full anim key for the swaying-sword snap animation. Cached
-  // at constructor time so onAnimComplete can route by key without re-running
-  // entityAnimFullKey on every animation event. Fall/embed completions are
-  // ignored (the state machine advances on the grounded check, not on those
-  // animations completing), so we only need to recognise the snap key.
+  // cached full key for the snap anim so onAnimComplete can route by key
   private readonly swayingSwordSnapKey: string | null;
-  // Original spawn coordinates for swaying-sword traps. The sword falls under
-  // gravity and ends up embedded in the floor; resetting it (when the player
-  // leaves the level) needs to restore the ceiling-hung position.
+  // original ceiling position; needed to reset the sword when the player leaves the level
   private readonly spawnX: number;
   private readonly spawnY: number;
-  // Optional virtual damage zone for ejector traps. When set, GameScene's
-  // overhead trigger and isInTrapDamageZone use this rect (offset from the
-  // body center) instead of the physics body itself — so the body can stay
-  // small (matched to the visible device, for bullet/sword hit fidelity)
-  // while the actual hazard area still reaches the player.
+  // virtual damage zone for ejectors so the physics body can stay small (device-sized)
+  // while the hazard reach still covers the player
   private readonly damageZoneConfig: {
     readonly width: number;
     readonly height: number;
@@ -196,6 +121,7 @@ export class Trap extends AnimatedEntity {
     readonly offsetY: number;
   } | null;
 
+  // build a trap from its LDtk identifier, selecting the right damage machine
   constructor(scene: Phaser.Scene, x: number, y: number, identifier: string) {
     super(scene, x, y, identifier);
     const trap = getEntityTrap(identifier);
@@ -231,9 +157,7 @@ export class Trap extends AnimatedEntity {
       this.swayingSwordState = null;
       this.swayingSwordSnapKey = null;
     }
-    // Animation-gated damage applies to either the snap animation or the
-    // ejection cycle. Snap wins if both are somehow defined — no entity
-    // currently mixes the two, so the ordering is conservative.
+    // snap wins over ejector cycle if somehow both are defined
     if (this.directContactAnimation != null && this.snapFullAnimKey != null) {
       const snapAnim = this.config.animations[this.directContactAnimation];
       this.damagingAnimFullKey = this.snapFullAnimKey;
@@ -271,49 +195,35 @@ export class Trap extends AnimatedEntity {
     });
 
     if (this.ejectorKind != null) {
-      // Hold the ejector on frame 0 (closed/no-flame pose) until the player
-      // enters the trigger zone. Phaser's anim system stops playback but
-      // leaves the frame parked here.
+      // park on frame 0 (closed/no-flame pose) until the player enters the trigger zone
       this.anims.stop();
       this.setFrame(0);
     }
   }
 
+  // Damage this trap deals per hit (registry-configured).
   getDamage(): number {
     return this.damage;
   }
 
-  // True iff this trap should switch animation when something steps on it
-  // from above. Used by GameScene to gate the body-position check that
-  // triggers the snap and gates damage — non-snap traps skip both.
+  // True iff this is a snap trap; gates the scene's snap-and-damage body check.
   hasDirectContactAnimation(): boolean {
     return this.directContactAnimation !== null;
   }
 
-  // True iff this trap is currently armed and able to snap (and damage).
-  // Snap traps that have already triggered stay "spent" until the re-arm
-  // timer expires and resets them.
+  // True iff armed and able to snap; a triggered snap trap stays spent until
+  // its re-arm timer resets it.
   isArmed(): boolean {
     return !this.directContactTriggered;
   }
 
-  // True iff this trap delegates damage to the animation midpoint via
-  // TRAP_DAMAGE_FRAME instead of firing damage on every overlap tick.
-  // GameScene's overlap handlers use this to skip the immediate-damage
-  // path for snap and ejector traps — those get a single deferred hit
-  // per cycle, gated on "still in the danger zone at the damage frame".
+  // True iff damage is deferred to the midpoint frame (snap/ejector) rather than
+  // dealt on every overlap tick; one gated hit per cycle, not continuous.
   hasDeferredDamage(): boolean {
     return this.damagingAnimFullKey !== null;
   }
 
-  // One-shot animation swap fired when something lands directly on the
-  // trap. Idempotent within a single arming cycle: subsequent calls after
-  // the first are no-ops so something standing on a snapped trap doesn't
-  // restart the snap animation every frame. After the snap anim completes
-  // (handled in onAnimComplete) the trap re-arms via TRAP_REARM_DELAY_MS.
-  // Damage itself doesn't apply here — it fires at the snap's midpoint via
-  // TRAP_DAMAGE_FRAME, so a victim who jumps off before the midpoint
-  // escapes the bite even though they triggered the snap.
+  // fire the snap animation; damage hits at the midpoint frame, so escaping before it avoids the hit
   triggerDirectContact(): void {
     if (this.directContactTriggered) return;
     if (!this.directContactAnimation) return;
@@ -324,17 +234,13 @@ export class Trap extends AnimatedEntity {
     this.playLogical(this.directContactAnimation);
   }
 
-  // Ejector kind for this trap, or null for non-ejectors. Used by GameScene
-  // to pick the right per-frame trigger condition: overhead (in airspace
-  // above body) or attached-ground (standing on the tile directly below).
+  // Ejector kind (overhead / attached-ground), or null for non-ejectors; the
+  // scene uses it to pick the per-frame trigger condition.
   getEjectorKind(): EjectorKind | null {
     return this.ejectorKind;
   }
 
-  // World-space damage-zone rect for ejector traps that configured one. Null
-  // when no zone is configured — callers fall back to the physics body. The
-  // rect is recomputed from body.center each call so it tracks the trap if
-  // the body ever moves (it doesn't today, but the math is cheap).
+  // virtual damage zone rect in world space for ejectors; null means fall back to the physics body
   getDamageZoneBounds(): {
     left: number;
     right: number;
@@ -358,42 +264,31 @@ export class Trap extends AnimatedEntity {
     };
   }
 
-  // Current swaying-sword state, or null if this trap is not a swaying sword.
-  // GameScene uses this to gate the per-frame "player passes under" trigger
-  // check and to drive the fall→embedded grounded check.
+  // Current swaying-sword state, or null if this trap is not a swaying sword;
+  // gates the scene's "player passes under" and fall→embedded checks.
   getSwayingSwordState(): SwayingSwordState | null {
     return this.swayingSwordState;
   }
 
-  // Original spawn position. GameScene uses this to resolve which LDtk level a
-  // swaying-sword trap belongs to (the blade's runtime position changes once
-  // it falls and embeds, so the live x/y can't be used for the lookup).
+  // Original spawn position — the scene resolves the sword's owning LDtk level
+  // from this, since the blade's live x/y change once it falls and embeds.
   getSpawnX(): number {
     return this.spawnX;
   }
 
+  // See getSpawnX — the original spawn y.
   getSpawnY(): number {
     return this.spawnY;
   }
 
-  // Fires the swaying sword: plays the string-snap animation; once that
-  // completes the trap transitions into 'falling' (gravity on, blade-in-air
-  // texture). Idempotent — re-calling while not in 'idle' is a no-op so a
-  // player loitering under the sword during the snap doesn't restart it.
+  // start the sword falling; no-op unless idle so loitering under it can't restart the snap
   triggerSwayingSword(): void {
     if (this.swayingSwordState !== 'idle') return;
     this.swayingSwordState = 'snapping';
     this.playLogical(SWAYING_SWORD_ANIM_SNAP);
   }
 
-  // Per-frame hook from GameScene for swaying-sword traps. While in 'falling',
-  // transitions to 'embedded' only when a solid terrain tile sits directly
-  // beneath the blade — GameScene supplies that flag because the tilemap
-  // lookup lives on the scene. Arcade's own `body.blocked.down` could also be
-  // checked but body-vs-body contact (a bird crossing the fall path) can
-  // muddy `touching.down`, so we trust the explicit tile probe instead. No-op
-  // in every other state so GameScene can call this unconditionally on every
-  // swaying-sword trap each frame.
+  // embed the blade when solid terrain is beneath it; no-op in all other states
   tickSwayingSwordFall(onSolidTerrain: boolean): void {
     if (this.swayingSwordState !== 'falling') return;
     if (!onSolidTerrain) return;
@@ -403,19 +298,13 @@ export class Trap extends AnimatedEntity {
     this.playLogical(SWAYING_SWORD_ANIM_EMBED);
   }
 
-  // True iff this trap is currently dangerous as a falling sword: gravity-on,
-  // mid-air, damage on body overlap. GameScene's overlap handlers use this to
-  // skip the standard "victim center above trap center" gate — the falling
-  // sword damages everything below it, which is the inverse semantic.
+  // True iff dangerous as an in-air falling sword; the scene then inverts the
+  // usual "victim above trap" gate, since the blade damages everything below it.
   isFallingSword(): boolean {
     return this.swayingSwordState === 'falling';
   }
 
-  // Restores a triggered swaying-sword trap to its armed/idle state. Called
-  // by GameScene when the player has left the level the sword belongs to —
-  // the embedded blade is meant to persist for as long as the player is in
-  // the level, then re-arm off-screen so a returning player encounters a
-  // fresh trap. No-op when the trap is already idle or isn't a swaying sword.
+  // restore the embedded sword to its ceiling spawn so a returning player finds it fresh
   resetSwayingSword(): void {
     if (this.swayingSwordState === null) return;
     if (this.swayingSwordState === 'idle') return;
@@ -427,33 +316,20 @@ export class Trap extends AnimatedEntity {
     this.playLogical(this.config.defaultAnimation);
   }
 
-  // Called per-frame from GameScene.updateTraps for ejector traps. Stores
-  // the trigger state and drives cycle bookkeeping:
-  //   - Active transition (false→true): starts a cycle if none in progress;
-  //     clears any pending trailing cycles so we go back to pure looping.
-  //   - Release transition (true→false): arms trailing-cycle counter so
-  //     onAnimComplete keeps playing the configured number of extra full
-  //     cycles before parking on frame 0.
-  // Never stops an in-progress cycle — animation completion always drives
-  // the state machine, which keeps visuals coherent if the player gets
-  // knocked out of the trigger zone mid-cycle. No-op for non-ejector traps.
+  // push the per-frame trigger state; starts/chains cycles and arms the trailing-cycle tail
   setTriggered(active: boolean): void {
     if (this.ejectorKind == null) return;
     const wasActive = this.triggerActive;
     this.triggerActive = active;
     if (active) {
-      // Re-entering during trailing window cancels the countdown so the
-      // trap resumes pure looping without prematurely returning to idle.
+      // re-entry during the trailing window cancels the countdown (resume looping)
       this.trailingCyclesRemaining = 0;
       if (!this.cycleInProgress) {
         this.startCycle();
       }
     } else if (wasActive) {
       this.trailingCyclesRemaining = this.trailingCycleCount;
-      // Defensive: trigger released with no cycle running shouldn't happen
-      // (a cycle was started when triggerActive was first set), but if it
-      // does, kick off the first trailing cycle now so the counter still
-      // drains. Without this the trap would stick in idle with trailing > 0.
+      // defensive: release with no cycle running — kick off the first trailing cycle
       if (!this.cycleInProgress && this.trailingCyclesRemaining > 0) {
         this.trailingCyclesRemaining--;
         this.startCycle();
@@ -461,26 +337,17 @@ export class Trap extends AnimatedEntity {
     }
   }
 
+  // play one ejector cycle as a one-shot so ANIMATION_COMPLETE fires and the machine can decide to continue
   private startCycle(): void {
     if (this.cycleFullAnimKey == null) return;
     this.cycleInProgress = true;
     this.damageFrameFired = false;
     this.leftDamageFired = false;
     this.rightDamageFired = false;
-    // Override repeat to 0 — the registry marks this animation as looping
-    // (`loops: true`) so Phaser's default play() would repeat indefinitely
-    // and never fire ANIMATION_COMPLETE, defeating the cycle accounting.
-    // Forcing a one-shot cycle here makes "play through to the end, then
-    // decide whether to loop again" the explicit lifecycle.
     this.play({ key: this.cycleFullAnimKey, repeat: 0 });
   }
 
-  // Per-frame hook on the trap sprite. When the damaging animation reaches
-  // its midpoint frame, emit TRAP_DAMAGE_FRAME so GameScene can apply damage
-  // to anything still overlapping. The flag prevents the emit from firing
-  // twice in the same cycle (ANIMATION_UPDATE fires on every frame change).
-  // Directional ejectors emit twice per cycle (once per side, tagged with
-  // 'left' / 'right'); each side has its own once-per-cycle guard.
+  // drive frame-keyed audio then emit the damage event when the damage frame is reached
   private onAnimUpdate(
     animation: Phaser.Animations.Animation,
     frame: Phaser.Animations.AnimationFrame,
@@ -514,9 +381,7 @@ export class Trap extends AnimatedEntity {
     this.emit(TRAP_DAMAGE_FRAME_EVENT, this);
   }
 
-  // Single-frame animations (e.g. swaying sword anim3/anim4) never emit
-  // ANIMATION_UPDATE — Phaser only fires UPDATE on frame transitions. Process
-  // triggers here too so first-frame sounds still fire for those anims.
+  // clear the fired-trigger set and fire frame-0 audio (single-frame anims never get UPDATE)
   private onAnimStart(
     animation: Phaser.Animations.Animation,
     frame: Phaser.Animations.AnimationFrame,
@@ -525,6 +390,7 @@ export class Trap extends AnimatedEntity {
     this.fireFrameTriggers(animation, frame);
   }
 
+  // play any audio triggers registered for the current frame, deduped per play
   private fireFrameTriggers(
     animation: Phaser.Animations.Animation,
     frame: Phaser.Animations.AnimationFrame,
@@ -542,14 +408,8 @@ export class Trap extends AnimatedEntity {
     }
   }
 
+  // route animation-complete by machine: sword snap→falling, snap→rearm, ejector→chain or park
   private onAnimComplete(animation: Phaser.Animations.Animation): void {
-    // Swaying-sword string-snap finished — flip to 'falling': gravity on,
-    // blade-in-air texture, and let Arcade carry the sprite into the floor.
-    // tickSwayingSwordFall handles the landing transition. Snap completion is
-    // the only state advance driven by ANIMATION_COMPLETE; anim3 (falling)
-    // and anim4 (embedded) also fire COMPLETE but we ignore them — anim3's
-    // single frame is just held while gravity does the work, and anim4 is
-    // the terminal state with no further transitions.
     if (
       this.swayingSwordState === 'snapping' &&
       this.swayingSwordSnapKey != null &&
@@ -586,16 +446,12 @@ export class Trap extends AnimatedEntity {
     ) {
       this.cycleInProgress = false;
       if (this.triggerActive) {
-        // Player is still in the trigger zone — chain another cycle so the
-        // ejector keeps firing as long as they linger.
-        this.startCycle();
+        this.startCycle(); // still triggered — keep firing while they linger
       } else if (this.trailingCyclesRemaining > 0) {
-        // Player has left but trailing cycles still owed — keep going.
         this.trailingCyclesRemaining--;
-        this.startCycle();
+        this.startCycle(); // player left, trailing cycles still owed
       } else {
-        // Trigger fully released and trailing budget exhausted — park on
-        // frame 0 (idle pose) until the next trigger.
+        // released and trailing budget spent — park on frame 0 (idle pose)
         this.anims.stop();
         this.setFrame(0);
       }

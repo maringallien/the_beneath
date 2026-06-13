@@ -37,71 +37,68 @@ import { CreditsOverlay } from '../ui/CreditsOverlay';
 import { ManualOverlay } from '../ui/ManualOverlay';
 import type { GameScene } from './GameScene';
 
-// First-boot landing overlay launched on top of GameScene. Renders the
-// START word sprite inside a white bounding box at the right side of the
-// viewport, with OPTIONS and CREDITS banners stacked beneath it; the GameScene
-// side of the same flow holds its camera so the player sits on the left.
-// Clicking START (or pressing Enter/Space) fades both scene cameras to black,
-// then at full black hands off to GameScene.beginGameplay() and stops this
-// scene; GameScene holds the black for a beat and fades the world + HUD back
-// in. OPTIONS opens the shared How-to-Play manual (ManualOverlay, same as the
-// pause menu) and CREDITS opens a short title + author panel.
+/**
+ * LandingScene — the first-boot title overlay, launched on top of GameScene.
+ *
+ * Renders the START word sprite at the right of the viewport with OPTIONS and
+ * CREDITS banners stacked beneath, framed by a vignette + corner brackets; the
+ * GameScene side of the same flow holds its camera so the player sits on the
+ * left behind it. Committing START (click or Enter/Space) fades both scene
+ * cameras to black, then at full black hands off to gameplay and stops this
+ * scene — GameScene owns the subsequent black-hold and world/HUD fade-in.
+ * OPTIONS opens the shared How-to-Play manual (the same ManualOverlay the pause
+ * menu uses) and CREDITS opens a short title/author panel. The scene instance
+ * is reused across runs (Quit relaunches it), so create() re-arms the
+ * activation guard each time. An optional `fadeIn` launch flag (set on a no-save
+ * death relaunch) reveals the title from black in lockstep with the world.
+ *
+ * Inputs:  optional `{ fadeIn }` launch data; pointer/keyboard input; the live
+ *          GameScene (looked up by key) to fade and hand off to.
+ * Outputs: the title/menu display objects, hover/press sounds, the two DOM
+ *          overlays, and the camera fade chain that starts gameplay.
+ * @calledby the boot flow (launched over GameScene at startup) and the death/
+ *           Quit paths that return the player to the home screen.
+ * @calls    Phaser's scene/camera/tween/input systems, the shared one-shot
+ *           audio player, and the manual / credits DOM overlays.
+ */
 export class LandingScene extends Phaser.Scene {
   private startImage!: Phaser.GameObjects.Image;
-  // Secondary menu banners stacked under START, positioned in layout().
+  // OPTIONS and CREDITS banners stacked under START.
   private optionsImage!: Phaser.GameObjects.Image;
   private creditsImage!: Phaser.GameObjects.Image;
-  // DOM overlays, created lazily on first open and reused thereafter. Destroyed
-  // in onShutdown if either is still open when the scene stops.
+  // DOM overlays created lazily on first open; destroyed on scene shutdown if still open.
   private manualOverlay: ManualOverlay | null = null;
   private creditsOverlay: CreditsOverlay | null = null;
   private titleText!: Phaser.GameObjects.Text;
-  // Soft black gradient strips along each viewport edge, drawn beneath
-  // the START button and screen frame so it darkens the world only.
+  // Soft black gradient strips along each viewport edge.
   private vignette!: Phaser.GameObjects.Graphics;
-  // Decorated rectangle that wraps the whole viewport, drawn on top of
-  // the vignette so its stroke and corner accents stay legible.
+  // Corner bracket frame drawn on top of the vignette.
   private screenFrame!: Phaser.GameObjects.Graphics;
-  // Guards against a double-click / mash-enter racing two fade chains.
-  // Cleared by onStart on the first activation; the scene stops shortly
-  // after the fade-in completes so resetting it is unnecessary.
+  // Prevents a double-click or mash-Enter from racing two fade chains.
   private accepting = true;
-  // Set from launch data by init(). When the home screen is reached via a
-  // no-save death (GameScene fades the dying world out, then relaunches this
-  // scene), create() fades this camera up from black so the title reveals in
-  // lockstep with the world behind it. First boot and Quit pass nothing, so it
-  // stays false and the title snaps on as before.
+  // When true (no-save death relaunch), create() fades this camera up from black.
   private fadeInOnCreate = false;
 
+  // Registers the scene under its stable key (SCENE_KEYS.LANDING).
   constructor() {
     super({ key: SCENE_KEYS.LANDING });
   }
 
-  // Captures the launch-data payload from scene.launch(LANDING, data). Defaults
-  // keep the title snapping on instantly when no data is passed (first boot,
-  // Quit / Return to Title).
+  // Records the optional fadeIn launch flag (true only on a no-save-death relaunch).
   init(data: { fadeIn?: boolean } = {}): void {
     this.fadeInOnCreate = data.fadeIn ?? false;
   }
 
+  // Builds the full title screen — vignette, title, START + secondary banners, frame, inputs.
   create(): void {
-    // Reset the activation guard on every create(). Phaser reuses the scene
-    // instance, so when Quit relaunches LandingScene this field still holds the
-    // `false` left by the previous run's onStart — without this reset the START
-    // button would silently no-op the second time the home screen is shown.
+    // Phaser reuses the scene instance, so without this re-arm a Quit→relaunch
+    // would inherit onStart's `false` and START would silently no-op.
     this.accepting = true;
 
-    // Vignette goes in first so it sits behind everything else added in
-    // this scene. Phaser draws scene display-list entries in insertion
-    // order, so the START button + screen frame added below render on top.
+    // Added first → renders behind everything else in the scene.
     this.vignette = this.add.graphics();
 
-    // Word sprite sized via setScale so the source pixel grid scales
-    // uniformly. Origin centered for easier layout math — positions are
-    // the visual center of the START banner.
-    // Game title above the START button. LINEAR-filtered so the
-    // rasterized glyphs stay smooth at any window size instead of being
-    // nearest-sampled by the global pixelArt:true config.
+    // LINEAR-filtered so glyphs stay smooth at any window size (overrides global pixelArt config).
     this.titleText = this.add
       .text(0, 0, LANDING_TITLE_TEXT, {
         fontFamily: LANDING_TITLE_FONT_FAMILY,
@@ -111,12 +108,10 @@ export class LandingScene extends Phaser.Scene {
       })
       .setOrigin(0.5, 0.5);
     this.titleText.texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
-    // Phaser rasterizes the title to a texture at creation, so if the
-    // (self-hosted) display font hasn't finished loading yet the title bakes in
-    // the fallback face. Re-apply the family once the font is ready to force a
-    // re-render with the real glyphs.
+    // Re-render once the real display font is ready in case it baked in the fallback.
     this.refreshTitleFontWhenReady();
 
+    // START word sprite; centered origin so layout positions are its visual center.
     this.startImage = this.add
       .image(0, 0, LANDING_START_TEXTURE_KEY)
       .setOrigin(0.5, 0.5)
@@ -130,10 +125,7 @@ export class LandingScene extends Phaser.Scene {
       this.hoverOut(this.startImage, LANDING_START_DISPLAY_SCALE),
     );
 
-    // OPTIONS + CREDITS stacked beneath START (positioned in layout()). They
-    // share START's hover/press feedback at a smaller base scale so the primary
-    // action stays dominant. OPTIONS reuses the pause menu's word texture and
-    // its ManualOverlay; CREDITS opens the title/author panel.
+    // OPTIONS reuses the pause-menu texture; CREDITS opens the author panel.
     this.optionsImage = this.createMenuButton(PAUSE_OPTIONS_TEXTURE_KEY, () =>
       this.openManual(),
     );
@@ -141,64 +133,42 @@ export class LandingScene extends Phaser.Scene {
       this.openCredits(),
     );
 
-    // Screen-edge corner brackets added last so they render above the
-    // vignette and the START button.
+    // Added last → corner brackets render above the vignette and START.
     this.screenFrame = this.add.graphics();
     this.layout();
 
-    // Keyboard accessibility mirrors PauseScene — Enter or Space confirms
-    // the only action on screen. Scene-scoped listeners auto-detach on
-    // scene.stop(), no manual cleanup needed.
+    // Enter/Space confirm START; scene-scoped so they auto-detach on stop.
     const kb = this.input.keyboard;
     if (kb) {
       kb.on('keydown-ENTER', this.onStart, this);
       kb.on('keydown-SPACE', this.onStart, this);
     }
 
-    // Re-layout on window resize so the button stays anchored to the right
-    // edge of the viewport. gameConfig uses Phaser.Scale.RESIZE, so the
-    // canvas dimensions follow window size; without this the START button
-    // drifts off its target column on a window stretch.
+    // Re-layout on resize; the canvas follows the window so START would drift without it.
     this.scale.on(Phaser.Scale.Events.RESIZE, this.onResize, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.onShutdown, this);
 
-    // Reached via a no-save death: fade this camera (title + button + frame) up
-    // from black so it reveals together with the world GameScene is fading in.
-    // Set here on the freshly-booted scene so the camera definitely exists and
-    // the first rendered frame is already black — no pop of the title.
+    // No-save-death relaunch: fade the title camera up from black in lockstep with the world.
     if (this.fadeInOnCreate) {
       this.cameras.main.fadeIn(LANDING_FADE_IN_MS, 0, 0, 0);
     }
   }
 
+  // Re-runs layout when the window/canvas resizes.
   private onResize(): void {
     this.layout();
   }
 
+  // Cleans up the resize listener and destroys any open DOM overlays on scene stop.
   private onShutdown(): void {
     this.scale.off(Phaser.Scale.Events.RESIZE, this.onResize, this);
-    // Drop either DOM panel + its window listener if it's still open when the
-    // scene stops (e.g. Start committed while a panel was up), so it can't
-    // outlive the scene.
     this.manualOverlay?.destroy();
     this.manualOverlay = null;
     this.creditsOverlay?.destroy();
     this.creditsOverlay = null;
   }
 
-  // Safety net for the case where the title was rasterized before Nosifer
-  // finished loading (PreloadScene's boot gate normally prevents this, but a
-  // load that misses the FONT_BOOT_TIMEOUT_MS window can still slip through).
-  // Once the font is ready we force a re-rasterization with the real glyphs and
-  // re-center, since the metrics change.
-  //
-  // We canNOT just re-call setFontFamily(LANDING_TITLE_FONT_FAMILY): Phaser's
-  // TextStyle.setFontFamily short-circuits when the family string is unchanged
-  // (it was already set at creation), so that path never redraws. updateText()
-  // re-syncs the font and redraws the texture unconditionally.
-  //
-  // No-op if the Font Loading API is unavailable or the font fails to load —
-  // the fallback render already shown then just stays.
+  // Re-rasterizes the title when the display font loads, in case it baked in the fallback face.
   private refreshTitleFontWhenReady(): void {
     if (!document.fonts) return;
     document.fonts
@@ -214,21 +184,15 @@ export class LandingScene extends Phaser.Scene {
       });
   }
 
-  // Positions the START sprite at LANDING_BUTTON_VIEWPORT_FRACTION_X across
-  // the viewport (canvas pixels — this scene's camera has no zoom applied),
-  // stacks OPTIONS then CREDITS beneath it, then re-draws the frame.
+  // Positions all display objects against the live viewport and redraws the vignette and frame.
   private layout(): void {
     const { width, height } = this.cameras.main;
     const x = width * LANDING_BUTTON_VIEWPORT_FRACTION_X;
     const startY = height * LANDING_BUTTON_VIEWPORT_FRACTION_Y;
     this.startImage.setPosition(x, startY);
-    // Title shares the START button's X column so they stack visually.
     this.titleText.setPosition(x, height * LANDING_TITLE_VIEWPORT_FRACTION_Y);
 
-    // Stack OPTIONS then CREDITS below START, each centered on the same column.
-    // Heights are derived from the source frame height × base scale rather than
-    // displayHeight so an in-flight hover tween (which momentarily changes the
-    // live scale) can't perturb the stacked spacing.
+    // Use source height × scale (not displayHeight) so hover tween wobble can't perturb spacing.
     const gap = LANDING_MENU_BUTTON_GAP_PX;
     const scale = LANDING_MENU_BUTTON_DISPLAY_SCALE;
     const startHalf = (this.startImage.height * LANDING_START_DISPLAY_SCALE) / 2;
@@ -242,9 +206,7 @@ export class LandingScene extends Phaser.Scene {
     this.drawScreenFrame();
   }
 
-  // Builds one of the secondary menu banners (OPTIONS / CREDITS): a smaller
-  // word sprite that shares START's hover/press feedback. onActivate fires on
-  // click alongside a press pulse for the same kinetic confirm START gets.
+  // Creates a secondary menu banner (OPTIONS/CREDITS) with hover/press feedback.
   private createMenuButton(
     textureKey: string,
     onActivate: () => void,
@@ -264,9 +226,7 @@ export class LandingScene extends Phaser.Scene {
     return image;
   }
 
-  // Hover-in: tint + ease the sprite slightly outward from its base scale.
-  // killTweensOf clears any in-flight hover-out so rapid pointer movements
-  // don't pile up conflicting scale tweens on the same target.
+  // Plays the hover blip, tints, and eases the sprite up to hover scale.
   private hoverIn(image: Phaser.GameObjects.Image, baseScale: number): void {
     playOneShot(this, UI_BUTTON_HOVER_SOUND_ID);
     image.setTint(LANDING_BUTTON_HOVER_TINT);
@@ -280,7 +240,7 @@ export class LandingScene extends Phaser.Scene {
     });
   }
 
-  // Hover-out: clear tint + ease the sprite back to its base scale.
+  // Clears the tint and eases the sprite back to its base scale.
   private hoverOut(image: Phaser.GameObjects.Image, baseScale: number): void {
     image.clearTint();
     this.tweens.killTweensOf(image);
@@ -293,8 +253,7 @@ export class LandingScene extends Phaser.Scene {
     });
   }
 
-  // Press pulse — a brief inward dip then back to base scale, so a click feels
-  // physical. Shared by START (on commit) and the OPTIONS/CREDITS buttons.
+  // Brief scale-dip-and-back yoyo so a click reads as physical.
   private pressPulse(image: Phaser.GameObjects.Image, baseScale: number): void {
     this.tweens.killTweensOf(image);
     this.tweens.add({
@@ -307,11 +266,7 @@ export class LandingScene extends Phaser.Scene {
     });
   }
 
-  // Four black gradient strips along the viewport edges, each fading from
-  // LANDING_VIGNETTE_EDGE_ALPHA at the outside edge to 0 at THICKNESS_PX
-  // inward. Corners get a double dose where adjacent strips overlap, which
-  // reads naturally as a slightly stronger vignette in the corners.
-  // Uses fillGradientStyle's per-corner alpha overload (Phaser WebGL).
+  // Draws four gradient black strips along the viewport edges to form the vignette.
   private drawVignette(): void {
     const { width, height } = this.cameras.main;
     const thickness = LANDING_VIGNETTE_THICKNESS_PX;
@@ -337,9 +292,7 @@ export class LandingScene extends Phaser.Scene {
     this.vignette.fillRect(width - thickness, 0, thickness, height);
   }
 
-  // L-shaped brackets at each viewport corner — two perpendicular line
-  // segments meeting at the corner vertex, no connecting strokes between
-  // corners. Frames the shot without imposing a full rectangle.
+  // Draws an L-shaped bracket at each viewport corner (no connecting runs between them).
   private drawScreenFrame(): void {
     const { width, height } = this.cameras.main;
     const margin = LANDING_SCREEN_FRAME_MARGIN_PX;
@@ -373,31 +326,18 @@ export class LandingScene extends Phaser.Scene {
     this.screenFrame.lineBetween(right, bottom - len, right, bottom);
   }
 
-  // Click / Enter / Space → fade out (both cameras) → at full black hand off to
-  // GameScene → stop self (GameScene owns the black hold + world/HUD fade-in).
-  // Both cameras must fade together: the GameScene camera carries the world,
-  // this scene's camera carries the START button and frame. Driving from a
-  // single FADE_OUT_COMPLETE listener on the landing camera keeps the two fades
-  // synchronized — they share a duration so the other camera completes its fade
-  // by the same frame.
+  // Commits START: locks input, fades both cameras to black, then hands off to gameplay.
   private onStart(): void {
     if (!this.accepting) return;
     this.accepting = false;
-    // Lock out every button for the fade-out: START hands off to gameplay, and
-    // the secondary banners must not open a panel over the transition.
+    // Lock every button so no panel can open over the transition.
     this.startImage.disableInteractive();
     this.optionsImage.disableInteractive();
     this.creditsImage.disableInteractive();
 
-    // Heavy impact stinger the moment Start is committed (click or
-    // Enter/Space). playOneShot uses the game-global sound manager, so it
-    // carries through this scene's stop() and the fade-out into gameplay.
     playOneShot(this, UI_BOOM_SOUND_ID);
 
-    // Press pulse — brief inward dip then back, runs concurrently with
-    // the fade so the click feels physical even before the fade begins.
-    // Triggered for keyboard activations too so Enter/Space confirm
-    // gets the same kinetic feedback as a mouse click.
+    // Press pulse plays concurrently with the fade; fired for keyboard confirms too.
     this.pressPulse(this.startImage, LANDING_START_DISPLAY_SCALE);
 
     const gameScene = this.scene.get(SCENE_KEYS.GAME) as GameScene;
@@ -410,21 +350,14 @@ export class LandingScene extends Phaser.Scene {
     landingCam.once(
       Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE,
       () => {
-        // Now at full black. Hand off to GameScene, which performs the deferred
-        // gameplay setup under the black, holds the darkness for a dramatic
-        // beat, then fades the world and HUD in together. Stop this scene first
-        // so its camera's frame + START button can't re-reveal during that
-        // fade-in — only GameScene's camera should come back up.
+        // At full black: stop this scene before GameScene fades its world in so the title can't re-reveal.
         gameScene.beginGameplay();
         this.scene.stop();
       },
     );
   }
 
-  // OPTIONS → open the shared How-to-Play manual (same ManualOverlay the pause
-  // menu uses). Mirrors PauseScene.openManual: while the panel is up this scene's
-  // keyboard is disabled so its Enter/Space → Start binding can't fire
-  // underneath, and the full-viewport backdrop blocks clicks to the buttons.
+  // Opens the How-to-Play manual; disables this scene's keyboard while the panel is up.
   private openManual(): void {
     if (!this.accepting) return;
     if (this.manualOverlay?.isOpen() || this.creditsOverlay?.isOpen()) return;
@@ -435,8 +368,7 @@ export class LandingScene extends Phaser.Scene {
     this.manualOverlay.open({ onClose: () => this.reenableKeyboardNextTick() });
   }
 
-  // CREDITS → open the title/author panel (CreditsOverlay). Same input handling
-  // as openOptions.
+  // Opens the credits panel; same guards and keyboard handling as openManual.
   private openCredits(): void {
     if (!this.accepting) return;
     if (this.manualOverlay?.isOpen() || this.creditsOverlay?.isOpen()) return;
@@ -447,13 +379,12 @@ export class LandingScene extends Phaser.Scene {
     this.creditsOverlay.open({ onClose: () => this.reenableKeyboardNextTick() });
   }
 
-  // The DOM node the overlays attach to: the canvas's parent (the #game
-  // container) so they layer directly over the rendered scene, falling back to
-  // <body> if the canvas isn't parented for some reason.
+  // Returns the canvas parent for overlay attachment, falling back to body.
   private overlayParent(): HTMLElement {
     return this.game.canvas.parentElement ?? document.body;
   }
 
+  // Enables/disables this scene's keyboard input (no-op if there is no keyboard).
   private setKeyboardEnabled(enabled: boolean): void {
     if (this.input.keyboard) this.input.keyboard.enabled = enabled;
   }

@@ -29,6 +29,23 @@ import {
   CAMERA_ZOOM,
 } from '../constants';
 
+/**
+ * BossHud — the screen-pinned boss-fight overlay (segmented bar + name + banner).
+ *
+ * Draws a segmented health bar with the boss name across the top of the
+ * viewport plus a transient "Round N" banner. Owned by the game scene and
+ * driven from the main camera's PRE_RENDER event like the player HUD: positions
+ * are authored in screen pixels and converted to world space at the camera's
+ * zoom each frame, so they stay pinned under camera scroll and render crisply
+ * at zoom (text resolution is set to CAMERA_ZOOM). Kept separate from the player
+ * HUD because it has its own lifecycle (visible only mid-boss-fight) and the
+ * banner concern. The bar starts hidden; setVisible toggles it.
+ *
+ * Inputs:  a BossHudState + the main camera each frame (name, HP ratio, round).
+ * Outputs: the bar graphics, the name text, and the round-banner tween.
+ * @calledby the boss-fight HUD driver, each render frame while a boss is engaged.
+ * @calls    Phaser graphics/text + tween primitives for the bar and banner.
+ */
 export interface BossHudState {
   // Display name shown above the bar.
   readonly name: string;
@@ -40,26 +57,18 @@ export interface BossHudState {
   readonly sections: number;
 }
 
-// Screen-pinned boss-fight overlay: a segmented health bar with the boss name
-// across the top of the viewport, plus a transient "Round N" banner. Owned by
-// GameScene and driven from the main camera's PRE_RENDER event, exactly like
-// PlayerHud — positions are authored in screen pixels and converted to world
-// space at CAMERA_ZOOM each frame so they stay pinned under camera scroll and
-// render crisply at zoom. Kept separate from PlayerHud because it has its own
-// lifecycle (only visible mid-boss-fight) and its own banner concern.
 export class BossHud {
   private readonly scene: Phaser.Scene;
   private readonly bar: Phaser.GameObjects.Graphics;
   private readonly nameText: Phaser.GameObjects.Text;
-  // Live banner + its animation. Recreated per showRound and torn down when it
-  // finishes, when a new round supersedes it, or when the HUD hides.
+  // recreated per showRound; torn down on complete, supersede, or hide
   private banner: Phaser.GameObjects.Text | null = null;
   private bannerTween: Phaser.Tweens.TweenChain | null = null;
   private visible = false;
-  // Dedup so we only rewrite the name texture when it actually changes (a
-  // per-frame setText would re-rasterize the glyphs every tick).
+  // dedup to avoid re-rasterizing glyphs every tick
   private lastName = '';
 
+  // create bar graphics and name text hidden; banner is created on demand per round
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
 
@@ -72,14 +81,13 @@ export class BossHud {
       fontSize: `${BOSS_BAR_NAME_FONT_SIZE_PX}px`,
       color: BOSS_BAR_NAME_COLOR,
     });
-    // Top-center anchor: the name's top sits at the screen margin and it
-    // centers over the bar.
     this.nameText.setOrigin(0.5, 0);
     this.nameText.setDepth(BOSS_HUD_DEPTH);
     this.nameText.setResolution(CAMERA_ZOOM);
     this.nameText.setVisible(false);
   }
 
+  // show/hide the bar and name; hiding also clears graphics and tears down any live banner
   setVisible(visible: boolean): void {
     if (visible === this.visible) return;
     this.visible = visible;
@@ -91,10 +99,7 @@ export class BossHud {
     }
   }
 
-  // Spawns (or replaces) the "Round N" banner and runs its fade-in → hold →
-  // fade-out animation. Position is set by update() each frame so the banner
-  // stays screen-centered while the camera follows the player. The animation
-  // length matches BOSS_ROUND_BREAK_MS so it clears as the boss un-freezes.
+  // show the "Round N" banner with a fade-in→hold→fade-out tween; replaces any live banner
   showRound(round: number): void {
     this.clearBanner();
 
@@ -134,6 +139,7 @@ export class BossHud {
     });
   }
 
+  // reposition and redraw the overlay each frame, pinned to screen coords via the camera
   update(state: BossHudState, camera: Phaser.Cameras.Scene2D.Camera): void {
     if (!this.visible) return;
 
@@ -147,7 +153,6 @@ export class BossHud {
     const worldLen = (screenPx: number): number => screenPx / zoom;
     const centerScreenX = camera.width * 0.5;
 
-    // Name — top-center at the screen margin.
     if (state.name !== this.lastName) {
       this.nameText.setText(state.name);
       this.lastName = state.name;
@@ -157,9 +162,6 @@ export class BossHud {
       toWorldY(BOSS_BAR_TOP_MARGIN_PX),
     );
 
-    // Bar — centered, sitting just below the name. The name's world height
-    // scaled by zoom gives its screen footprint, so the bar trails it by a
-    // fixed screen gap regardless of zoom.
     const nameScreenHeight = this.nameText.displayHeight * zoom;
     const barTopScreen =
       BOSS_BAR_TOP_MARGIN_PX + nameScreenHeight + BOSS_BAR_NAME_GAP_PX;
@@ -173,8 +175,6 @@ export class BossHud {
 
     this.drawBar(x, y, w, h, state, zoom);
 
-    // Keep the banner centered while it animates (the tween drives alpha +
-    // scale, not position, so there's no conflict).
     if (this.banner) {
       this.banner.setPosition(
         toWorldX(centerScreenX),
@@ -183,12 +183,14 @@ export class BossHud {
     }
   }
 
+  // Tear down the banner, bar, and name text (scene shutdown / HUD teardown).
   destroy(): void {
     this.clearBanner();
     this.bar.destroy();
     this.nameText.destroy();
   }
 
+  // draw the segmented bar: grey bg, round-colored fill, dividers, outer frame
   private drawBar(
     x: number,
     y: number,
@@ -200,12 +202,9 @@ export class BossHud {
     const g = this.bar;
     g.clear();
 
-    // Background (the drained portion stays visible behind the fill).
     g.fillStyle(BOSS_BAR_BG_COLOR, BOSS_BAR_BG_ALPHA);
     g.fillRect(x, y, w, h);
 
-    // Fill — anchored left, shrinking from the right as HP drops. Color is
-    // selected by the current round so the bar visibly shifts each section.
     const ratio = state.ratio < 0 ? 0 : state.ratio > 1 ? 1 : state.ratio;
     const colors = BOSS_BAR_ROUND_COLORS;
     const colorIdx = Math.min(Math.max(state.round - 1, 0), colors.length - 1);
@@ -215,8 +214,7 @@ export class BossHud {
       g.fillRect(x, y, fillWidth, h);
     }
 
-    // Section dividers at each 1/sections mark. Stroke widths are converted
-    // from screen px to world units (÷zoom) so they render ~constant on screen.
+    // stroke widths are ÷zoom so they render at ~constant screen thickness
     if (state.sections > 1) {
       g.lineStyle(BOSS_BAR_DIVIDER_WIDTH_PX / zoom, BOSS_BAR_DIVIDER_COLOR, 1);
       for (let i = 1; i < state.sections; i += 1) {
@@ -225,11 +223,11 @@ export class BossHud {
       }
     }
 
-    // Outer frame.
     g.lineStyle(BOSS_BAR_FRAME_STROKE_PX / zoom, BOSS_BAR_FRAME_COLOR, 1);
     g.strokeRect(x, y, w, h);
   }
 
+  // Stop + destroy the live banner tween and text, if any (idempotent).
   private clearBanner(): void {
     if (this.bannerTween) {
       this.bannerTween.stop();

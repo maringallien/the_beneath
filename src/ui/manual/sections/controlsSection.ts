@@ -5,21 +5,34 @@ import {
   sectionRoot,
 } from '../manualSection';
 
-// Controls tab — the player-facing key cheat sheet. These mirror the
-// authoritative bindings in Player / InteractionManager (debug-only keys like
-// fly mode are intentionally omitted); this is presentation only. Ported
-// verbatim from the original OptionsOverlay so the controls list is unchanged.
+/**
+ * controlsSection — builds the manual's "Controls" tab (the key cheat sheet).
+ *
+ * Lays out movement / actions / mouse bindings as labelled key-chip rows grouped
+ * by category. This is presentation only: the rows mirror the authoritative
+ * bindings owned by the player and interaction systems (debug-only keys such as
+ * fly mode are intentionally omitted), so editing this table changes the cheat
+ * sheet, not the actual controls.
+ *
+ * Inputs:  the static CATEGORIES table below and the shared manual DOM helpers.
+ * Outputs: a detached ManualSection element tree (no animated previews).
+ * @calledby the in-game manual overlay, when assembling its tab pages.
+ * @calls    the shared manual DOM/section helpers and the key-chip builder.
+ */
 
+// One binding row: the keys to display as chips and the action they perform.
 interface CommandRow {
   readonly keys: ReadonlyArray<string>;
   readonly label: string;
 }
 
+// A titled group of binding rows (e.g. Movement, Actions, Mouse).
 interface CommandCategory {
   readonly title: string;
   readonly commands: ReadonlyArray<CommandRow>;
 }
 
+// The full cheat sheet: every category and its bindings, in display order.
 const CATEGORIES: ReadonlyArray<CommandCategory> = [
   {
     title: 'Movement',
@@ -48,6 +61,7 @@ const CATEGORIES: ReadonlyArray<CommandCategory> = [
   },
 ];
 
+// Builds one binding row: its key chips followed by the action label.
 function commandRow(command: CommandRow): HTMLElement {
   const row = el('div', 'options-command');
   const keys = keyChips(command.keys, 'options-command-keys');
@@ -56,6 +70,7 @@ function commandRow(command: CommandRow): HTMLElement {
   return row;
 }
 
+// builds the Controls tab: a grid of key-binding rows grouped by category
 export function buildControlsSection(): ManualSection {
   const root = sectionRoot();
   const grid = el('div', 'manual-controls');

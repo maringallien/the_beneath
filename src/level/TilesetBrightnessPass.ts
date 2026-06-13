@@ -2,25 +2,26 @@ import Phaser from 'phaser';
 import type { LdtkTilesetDef } from '../ldtk/types';
 import { tilesetTextureKey } from './TilesetRegistry';
 
-// Idempotency guard. Once a tileset is brightened, we never touch it again —
-// running the multiplier a second time would compound the lift and over-
-// brighten the texture. Module scope persists across HMR within the same Vite
-// session so successive scene reloads don't re-brighten an already-lifted
-// texture.
+/**
+ * TilesetBrightnessPass — a one-time preload pass that lifts a tileset texture's
+ * brightness in place (by key) so the whole game reads the brightened pixels.
+ *
+ * Mutates the loaded tileset texture before any consumer walks it (level render,
+ * glow baking, collision), keeping the original texture key so no reference
+ * needs rewiring. Idempotent across HMR reloads: a brightened key is recorded
+ * at module scope and never lifted twice.
+ *
+ * Inputs:  the scene's texture cache, an LDtk tileset def, a brightness factor.
+ * Outputs: replaces the keyed texture with a brightened canvas-backed one and
+ *          re-registers its spritesheet frame grid; no return.
+ * @calledby the scene boot/preload flow, once the tileset images have loaded.
+ * @calls    the scene's texture cache (read/remove/add) and the canvas 2D API.
+ */
+
+// Idempotency guard: keys already brightened are never lifted twice, even across HMR reloads.
 const brightenedKeys = new Set<string>();
 
-// Lifts every opaque pixel's RGB channels by `factor` (clamped to 255) in the
-// tileset's underlying texture, then re-registers the spritesheet frame grid
-// against the brightened canvas. Used at preload — before LevelRenderer or
-// GlowAtlasBaker walk the texture — so downstream consumers transparently see
-// the lifted pixels without any per-call adjustment.
-//
-// Phaser doesn't expose an in-place pixel mutator for image-backed textures,
-// so we replace the texture: read the source into a canvas, transform, remove
-// the original entry, then re-add as a canvas-backed texture under the same
-// key and re-register the spritesheet frames. The texture key stays the same
-// so every existing reference (LevelRenderer, GlowAtlasBaker, LevelCollision)
-// keeps working without rewiring.
+// Lifts every opaque pixel by factor, replaces the texture under the same key, and rebuilds the frame grid.
 export function brightenTilesetTexture(
   scene: Phaser.Scene,
   def: LdtkTilesetDef,
@@ -64,11 +65,7 @@ export function brightenTilesetTexture(
   brightenedKeys.add(key);
 }
 
-// Mirrors Phaser's spritesheet loader frame layout (row-major, fixed-size
-// cells, configurable margin + spacing) so each integer frame index maps to
-// the same crop the original loader produced. Without this, LevelRenderer's
-// `scene.add.image(..., t.t)` (frame index lookup) would fail after the
-// texture replacement — the canvas-backed texture has no frames by default.
+// Re-registers the spritesheet frame grid on the brightened canvas texture so frame-index lookups still work.
 function registerSpritesheetFrames(
   scene: Phaser.Scene,
   key: string,

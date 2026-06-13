@@ -22,6 +22,33 @@ import type {
   SimpleAnimation,
 } from './characterTypes';
 
+/**
+ * characterLoader — resolves the player's per-mode animation registries and
+ * builds the Phaser spritesheets/animations for both the player and JSON-authored
+ * entities.
+ *
+ * Owns the mapping from a logical action (idle / run / attack1 / …) to a concrete
+ * registry animation key per character mode (sword_master, the two gunslinger
+ * guns, plus their shared body and gun-overlay registries). Modes can borrow
+ * frames from another registry (`sourceMode`) — gun modes share the no_gun body
+ * art and overlay a separate gun sprite — and the full anim key encodes the
+ * owning registry's mode, which is how the player decides gun-overlay visibility.
+ * Animation keys are namespaced (`<mode>_<localKey>`, entities via
+ * entityAnimFullKey) so player and entity textures never collide. The same data
+ * also feeds the offline anim-resizer tool (listAnimations) and the in-game
+ * "How to Play" sprite previews (getAnimationFrameInfo), so every consumer reads
+ * one registry map and can't drift from the in-game layout.
+ *
+ * Inputs:  the per-mode character JSON registries, the JSON entity registry, and
+ *          a Phaser scene at preload/register time.
+ * Outputs: resolved anim keys, frame/anchor metadata, and (as side effects)
+ *          loaded spritesheets + created Phaser Animation objects.
+ * @calledby PreloadScene (loading/registering animations), the Player and gun
+ *           systems (resolving keys + overlay visibility), and the resizer tool.
+ * @calls    the entity-registry loader for entity definitions and Phaser's
+ *           loader / animation manager.
+ */
+
 const REGULAR_REGISTRY = swordMasterRaw as CharacterModeRegistry;
 const MAGIC_REGISTRY = swordMasterMagicRaw as CharacterModeRegistry;
 const GUN1_REGISTRY = gunslingerGun1Raw as CharacterModeRegistry;
@@ -141,14 +168,17 @@ const MAGIC_ATTACK_KEY_BY_STEP: ReadonlyArray<string | null> = [
   'attack5',
 ];
 
+// A registry's mode prefix, defaulting to 'sword_master' when unset.
 function registryPrefix(registry: CharacterModeRegistry): string {
   return registry.mode ?? 'sword_master';
 }
 
+// Namespaces a registry-local anim key as `<mode>_<localKey>`.
 function fullKeyFor(registry: CharacterModeRegistry, localKey: string): string {
   return `${registryPrefix(registry)}_${localKey}`;
 }
 
+// fullKey → animation, indexed across every player registry at module load.
 const animationByFullKey: ReadonlyMap<string, SimpleAnimation> = (() => {
   const map = new Map<string, SimpleAnimation>();
   for (const registry of REGISTRIES) {
@@ -173,10 +203,13 @@ const animationSourceMode: ReadonlyMap<string, AnyModeId> = (() => {
   return map;
 })();
 
+// The mode that owns a full anim key, or null if unknown. Player uses this to
+// decide gun-overlay visibility (gunslinger_body → show; baked-gun → hide).
 export function getAnimationSourceMode(fullAnimKey: string): AnyModeId | null {
   return animationSourceMode.get(fullAnimKey) ?? null;
 }
 
+// resolves a (mode, logical action) to its full anim key, or null if the action is disabled in that mode
 export function animKey(
   mode: CharacterModeId,
   logical: LogicalAnimationKey,
@@ -187,6 +220,7 @@ export function animKey(
   return `${sourceMode}_${resolved.registryKey}`;
 }
 
+// True when `logical` is enabled (non-null) in `mode`; Player gating uses this.
 export function isActionAvailable(
   mode: CharacterModeId,
   logical: LogicalAnimationKey,
@@ -194,6 +228,7 @@ export function isActionAvailable(
   return MODE_RESOLVERS[mode][logical] != null;
 }
 
+// returns the full anim key for a magic combo step (1-based)
 export function magicAttackAnimKey(step: number): string {
   const localKey = MAGIC_ATTACK_KEY_BY_STEP[step];
   if (!localKey) {
@@ -202,10 +237,7 @@ export function magicAttackAnimKey(step: number): string {
   return `${SWORD_MASTER_MAGIC_PREFIX}_${localKey}`;
 }
 
-// Convenience: build a Set of full anim keys for any animations matching
-// a logical key across all modes. Used in Player.ts to identify attack/dash/
-// roll/block/climb keys arriving at onAnimationComplete without per-mode
-// branching.
+// all full anim keys that a logical action maps to across every mode
 export function fullKeysForLogical(
   logical: LogicalAnimationKey,
 ): ReadonlySet<string> {
@@ -217,6 +249,7 @@ export function fullKeysForLogical(
   return keys;
 }
 
+// set of all magic-attack full anim keys, for recognizing magic-attack completions without per-step branching
 export function magicAttackKeySet(): ReadonlySet<string> {
   const keys = new Set<string>();
   for (const localKey of MAGIC_ATTACK_KEY_BY_STEP) {
@@ -227,6 +260,7 @@ export function magicAttackKeySet(): ReadonlySet<string> {
   return keys;
 }
 
+// queues a Phaser spritesheet load for every player-registry animation
 export function preloadAllCharacters(scene: Phaser.Scene): void {
   for (const [fullKey, anim] of animationByFullKey) {
     scene.load.spritesheet(fullKey, `/${anim.file}`, {
@@ -236,10 +270,13 @@ export function preloadAllCharacters(scene: Phaser.Scene): void {
   }
 }
 
+// Options for the animation-registration helpers (FPS override for created anims).
 export interface RegisterAnimationsOptions {
   defaultFps?: number;
 }
 
+// Origin + physics-body sizing/offset/scale derived for one animation frame, so
+// AnimatedEntity and Player place their sprite and hitbox identically.
 export interface SpriteAnchor {
   originX: number;
   originY: number;
@@ -257,6 +294,8 @@ export interface SpriteAnchor {
   displayScale: number;
 }
 
+// Fallback anchor (centered, zero body, scale 1) returned when an anim key has
+// no frame metadata, so callers never deal with a null anchor.
 const DEFAULT_ANCHOR: SpriteAnchor = {
   originX: 0.5,
   originY: 0.5,
@@ -267,6 +306,7 @@ const DEFAULT_ANCHOR: SpriteAnchor = {
   displayScale: 1,
 };
 
+// A named stage (frame-window marker) within an animation, or undefined if absent.
 export function getAnimationStage(
   fullAnimKey: string,
   stageName: string,
@@ -296,11 +336,7 @@ export interface AnimationListing {
   entityIdentifier?: string;
 }
 
-// Tool-side iteration over every registry's animations. Mirrors the data
-// preloadAllCharacters/registerAllCharacterAnimations walk, exposed as a
-// flat list for the resizer UI. Includes both the player registries (one
-// per CharacterModeRegistry) and the entity registry (one synthetic
-// CharacterModeRegistry per LDtk identifier).
+// flat list of every animation (player + entity), used by the offline anim-resizer tool
 export function listAnimations(): ReadonlyArray<AnimationListing> {
   const out: AnimationListing[] = [];
   for (const registry of REGISTRIES) {
@@ -316,11 +352,8 @@ export function listAnimations(): ReadonlyArray<AnimationListing> {
   }
   for (const { identifier, config } of listEntityRegistryEntries()) {
     const syntheticMode = `${ENTITY_LISTING_MODE_PREFIX}${identifier}`;
-    // Build a CharacterModeRegistry-shaped object per entity. The animations
-    // are flattened from AnimatedEntityAnimConfig (where frame fields are
-    // direct) into SimpleAnimation (where they nest under .frames) so every
-    // downstream resizer file (state, EditPanel, PreviewScene) keeps working
-    // against one shape.
+    // Flatten each entity anim (direct frame fields) into SimpleAnimation (frame
+    // fields nested under .frames) so the resizer sees one uniform shape.
     const animations: Record<string, SimpleAnimation> = {};
     for (const [animKey, entityAnim] of Object.entries(config.animations)) {
       animations[animKey] = {
@@ -369,9 +402,7 @@ export function listAnimations(): ReadonlyArray<AnimationListing> {
   return out;
 }
 
-// Returns the natural playback duration (ms) of an animation at the default
-// character FPS. Callers wanting to scale playback speed can divide this by
-// a multiplier and pass the result as Phaser's `duration` play option.
+// natural playback duration (ms) of an animation at the default character FPS; null if the key is unknown
 export function getAnimationNaturalDurationMs(
   fullAnimKey: string,
 ): number | null {
@@ -380,13 +411,11 @@ export function getAnimationNaturalDurationMs(
   return (anim.frames.frameCount * 1000) / DEFAULT_CHARACTER_FPS;
 }
 
-// Frame metadata with the optional anchor/scale fields resolved to their
-// rendering defaults (anchorX → horizontal centre, anchorY → bottom row, scale
-// → 1). The "How to Play" manual's animated sprite previews draw spritesheet
-// frames straight to a DOM canvas, so they need these raw numbers rather than
-// the physics-oriented view getSpriteAnchor returns. Reads from the same
-// registry map every other consumer uses, so the previews can never drift from
-// the in-game frame layout.
+// Frame metadata with optional anchor/scale resolved to rendering defaults
+// (anchorX → horizontal centre, anchorY → bottom row, scale → 1). The "How to
+// Play" manual's sprite previews draw frames straight to a DOM canvas, so they
+// need these raw numbers, not the physics-oriented SpriteAnchor view — read from
+// the same registry map so the previews can't drift from the in-game layout.
 export interface AnimationFrameInfo {
   readonly frameWidth: number;
   readonly frameHeight: number;
@@ -396,6 +425,7 @@ export interface AnimationFrameInfo {
   readonly displayScale: number;
 }
 
+// frame metadata for a player animation with anchor/scale resolved to defaults; used by the How-to-Play canvas previews
 export function getAnimationFrameInfo(
   fullAnimKey: string,
 ): AnimationFrameInfo | null {
@@ -424,6 +454,7 @@ interface FrameMetadata {
   readonly displayScale?: number;
 }
 
+// looks up frame metadata for a full anim key — player registry first, entity registry as fallback
 function lookupFrameMetadata(fullAnimKey: string): FrameMetadata | null {
   const playerAnim = animationByFullKey.get(fullAnimKey);
   if (playerAnim) return playerAnim.frames;
@@ -440,6 +471,7 @@ function lookupFrameMetadata(fullAnimKey: string): FrameMetadata | null {
   return null;
 }
 
+// computes origin and pre-scale body size/offset so the world-space hitbox sits at the requested size regardless of displayScale
 export function getSpriteAnchor(
   fullAnimKey: string,
   bodyWidth: number,
@@ -455,16 +487,10 @@ export function getSpriteAnchor(
   const ax = anchorX ?? frameWidth / 2;
   const ay = anchorY ?? frameHeight;
   const effectiveAx = flipX ? frameWidth - ax : ax;
-  // Body math at scale s:
-  //   body.width  = sourceWidth  * s  → sourceWidth  = PHYSICS_BODY / s
-  //   body.height = sourceHeight * s  → sourceHeight = PHYSICS_BODY / s
-  // So that body.width/height in world space stay equal to PHYSICS_BODY.
-  // Body offset (pre-scale) places body.center.x at the anchor column and
-  // body.bottom at the anchor row in world space:
-  //   offset.x = effectiveAx - bodyWidth  / (2 * s)
-  //   offset.y = ay          - bodyHeight /      s
-  // These reduce to the original (effectiveAx - bodyWidth/2, ay - bodyHeight)
-  // when s = 1, so existing JSON renders identically.
+  // Pre-scale source = body / s (so body.{width,height} = source * s stays at the
+  // requested world size); offset = anchor − half-body/(s) seats center/bottom on
+  // the anchor. Both reduce to (effectiveAx − bodyWidth/2, ay − bodyHeight) at
+  // s = 1, so existing scale-1 JSON renders identically.
   return {
     originX: effectiveAx / frameWidth,
     originY: 0.5,
@@ -476,6 +502,7 @@ export function getSpriteAnchor(
   };
 }
 
+// creates Phaser Animations for every player-registry animation (idempotent; skips already-created keys)
 export function registerAllCharacterAnimations(
   scene: Phaser.Scene,
   options: RegisterAnimationsOptions = {},
@@ -500,9 +527,12 @@ export function registerAllCharacterAnimations(
   }
 }
 
+// The two gun modes that fire projectiles.
 export type GunslingerProjectileMode = 'gunslinger_gun1' | 'gunslinger_gun2';
+// Projectile lifecycle animations: in-flight idle vs. on-impact explode.
 export type ProjectileAnimKind = 'idle' | 'explode';
 
+// Full anim key for a projectile state, e.g. `gunslinger_gun1_projectile_idle`.
 export function projectileAnimKey(
   mode: GunslingerProjectileMode,
   kind: ProjectileAnimKind,
@@ -520,14 +550,17 @@ const GUN_OVERLAY_MODE_BY_GUN: Readonly<
   gunslinger_gun2: 'gun2_overlay',
 };
 
+// The overlay registry mode that paints a given gun mode's gun sprite.
 export function gunOverlayModeFor(
   mode: GunslingerProjectileMode,
 ): OverlayModeId {
   return GUN_OVERLAY_MODE_BY_GUN[mode];
 }
 
+// Gun-overlay animations: resting idle vs. the firing attack.
 export type GunOverlayAnimKind = 'idle' | 'attack1';
 
+// Full anim key for a gun-overlay state, e.g. `gun1_overlay_attack1`.
 export function gunOverlayAnimKey(
   mode: GunslingerProjectileMode,
   kind: GunOverlayAnimKind,
@@ -535,10 +568,7 @@ export function gunOverlayAnimKey(
   return `${gunOverlayModeFor(mode)}_${kind}`;
 }
 
-// Mirrors preloadAllCharacters for the JSON-authored animated-entity
-// registry. Each (identifier, animKey) becomes one Phaser spritesheet
-// under the namespaced entityAnimFullKey so entity textures never collide
-// with player textures. Called from PreloadScene.preload().
+// queues spritesheet loads for all JSON-authored entity animations
 export function preloadAllEntities(scene: Phaser.Scene): void {
   for (const { identifier, config } of listEntityRegistryEntries()) {
     for (const [animKey, anim] of Object.entries(config.animations)) {
@@ -551,9 +581,7 @@ export function preloadAllEntities(scene: Phaser.Scene): void {
   }
 }
 
-// Mirrors registerAllCharacterAnimations for the entity registry. Creates
-// Phaser Animation objects keyed by entityAnimFullKey so AnimatedEntity.play
-// can reference them directly.
+// creates Phaser Animations for the entity registry (idempotent; must run after entity spritesheets have loaded)
 export function registerAllEntityAnimations(
   scene: Phaser.Scene,
   options: RegisterAnimationsOptions = {},

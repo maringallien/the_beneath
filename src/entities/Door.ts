@@ -27,36 +27,34 @@ const DOOR_OPEN_PASSABLE_FRAME = 8;
 
 type DoorState = 'closed' | 'opening' | 'open';
 
-// Proximity-driven door. Default state is the looping door_closed_idle
-// (1 frame). When the player enters DOOR_OPEN_RADIUS_PX the door fires
-// door_slam and plays the 14-frame door_open one-shot; on ANIMATION_COMPLETE
-// it idles on door_open_idle. When the player retreats past
-// DOOR_CLOSE_RADIUS_PX the door fires door_slam again and snaps directly
-// to door_closed_idle.
-//
-// The first update tick snaps silently to the state matching the player's
-// initial distance, so a save loaded near a door doesn't slam at scene
-// start.
-//
-// Key-locked variant: a door created with a non-null `requiredKey` is locked.
-// It ignores proximity entirely (stays closed and solid) and implements
-// Interactable so InteractionManager drives a hold-E open. On the completed
-// hold it checks the persistent run-progress store: with the matching key it
-// unlocks (plays the open swing and from then on behaves like a normal
-// proximity door); without it, it emits KEY_DOOR_LOCKED_EVENT so GameScene can
-// show the "find the key" message. canInteract() goes false once unlocked so
-// the door falls out of the interaction system.
+/**
+ * Door — a proximity-driven door, with an optional key-locked variant.
+ *
+ * A plain door opens when the player enters DOOR_OPEN_RADIUS_PX (slam + the
+ * door_open one-shot, then idles open) and slams shut when they retreat past
+ * DOOR_CLOSE_RADIUS_PX. The first update tick snaps silently to the state
+ * matching the player's start distance, so a save loaded next to a door doesn't
+ * slam at scene start. A door given a non-null `requiredKey` is instead
+ * key-locked: it ignores proximity and implements Interactable, so a completed
+ * hold-E unlocks it when the matching key is in the run-progress store (after
+ * which it behaves like a proximity door) or signals "find the key" when it isn't.
+ *
+ * Inputs:  scene, spawn x/y, optional requiredKey; per-tick player position.
+ * Outputs: drives its own animation + collider passability; plays door_slam and
+ *          emits KEY_DOOR_LOCKED_EVENT.
+ * @calledby the gameplay scene — spawned at level load, ticked each frame, and
+ *           (for key doors) driven by the hold-to-interact system.
+ * @calls    the shared audio one-shot player and the entity animation helpers.
+ */
 export class Door extends AnimatedEntity implements Interactable {
   private doorState: DoorState = 'closed';
   private initialized = false;
-  // The key this door needs, or null for a plain proximity door. Retained even
-  // after unlocking so isKeyLocked() stays a stable "this was a key door"
-  // predicate for GameScene's registration filter.
+  // null for a plain proximity door; retained after unlock so isKeyLocked() stays stable
   private readonly requiredKey: BossKeyId | null;
-  // True while the door is key-locked and not yet opened. Flipped false by
-  // unlock(); from then on the door runs the normal proximity state machine.
+  // flipped false by unlock(); thereafter the normal proximity machine runs
   private locked: boolean;
 
+  // build a door; non-null requiredKey makes it key-locked
   constructor(
     scene: Phaser.Scene,
     x: number,
@@ -66,14 +64,9 @@ export class Door extends AnimatedEntity implements Interactable {
     super(scene, x, y, DOOR_IDENTIFIER);
     this.requiredKey = requiredKey;
     this.locked = requiredKey !== null;
-    // The player↔doors collider's process callback gates on isPassable();
-    // setImmovable keeps the player from shoving the closed door out of
-    // place during contact.
+    // immovable so the player can't shove the door during contact
     this.body.setImmovable(true);
 
-    // Scoped completion listener for door_open only. door_closed_idle and
-    // door_open_idle loop and never complete, so the scope is documentation
-    // more than necessity.
     const openCompleteEvent = `${Phaser.Animations.Events.ANIMATION_COMPLETE_KEY}${entityAnimFullKey(
       DOOR_IDENTIFIER,
       'door_open',
@@ -81,17 +74,13 @@ export class Door extends AnimatedEntity implements Interactable {
     this.on(openCompleteEvent, this.onOpenAnimationComplete, this);
   }
 
-  // True when this door was authored as key-locked (regardless of current
-  // unlocked state). GameScene uses it to register only key doors with the
-  // InteractionManager.
+  // True when this door was authored as key-locked (even after it unlocks); the
+  // scene registers only key doors with the interaction system.
   isKeyLocked(): boolean {
     return this.requiredKey !== null;
   }
 
-  // True when the player↔doors collider should skip collision. A still-locked
-  // key door is always solid. Closed = no. Opening = yes once the visible door
-  // has swung past DOOR_OPEN_PASSABLE_FRAME (Phaser frame index is 1-based).
-  // Open = yes.
+  // true when the player may pass through; opening doors become passable at frame 8 of the swing
   isPassable(): boolean {
     if (this.locked) return false;
     if (this.doorState === 'open') return true;
@@ -102,9 +91,8 @@ export class Door extends AnimatedEntity implements Interactable {
     return false;
   }
 
+  // proximity state machine: opens when the player is close, slams shut when they retreat
   update(playerX: number, playerY: number): void {
-    // Locked key doors never auto-open — they stay closed and solid until the
-    // player completes a hold-E with the matching key (see onInteract/unlock).
     if (this.locked) return;
 
     const dx = playerX - this.x;
@@ -138,25 +126,22 @@ export class Door extends AnimatedEntity implements Interactable {
 
   // ── Interactable (key-locked doors only) ────────────────────────────────
 
+  // hold-E prompt icon floats centered above the door's top edge
   getInteractionAnchor(): { x: number; y: number } {
     return { x: this.x, y: this.body.top - KEY_DOOR_ICON_ANCHOR_GAP_PX };
   }
 
+  // squared distance within which the E prompt is offered
   getInteractionRangeSq(): number {
     return KEY_DOOR_INTERACTION_RANGE_SQ;
   }
 
-  // Only a still-locked key door advertises the E prompt. Plain doors and
-  // already-unlocked doors return false so they never enter the interaction
-  // system's closest-target search.
+  // only a still-locked key door advertises the E prompt
   canInteract(): boolean {
     return this.requiredKey !== null && this.locked;
   }
 
-  // Fired by InteractionManager when the player completes the hold. With the
-  // matching key the door unlocks; without it, signal the scene to show the
-  // "find the key" message. The hold itself (0.5s ring) already happened, so
-  // this reads as "tried to open it" per the spec.
+  // hold-E complete: unlock if the player has the key, else emit the "find the key" event
   onInteract(): void {
     if (this.requiredKey === null || !this.locked) return;
     if (hasKey(this.requiredKey)) {
@@ -166,11 +151,7 @@ export class Door extends AnimatedEntity implements Interactable {
     }
   }
 
-  // Transition a locked door into the open swing, after which it behaves like a
-  // normal proximity door. Sets initialized=true so the next update() tick
-  // doesn't snap-reset the state, and reuses door_open + the existing
-  // onOpenAnimationComplete handler so the unlock looks identical to a normal
-  // open (swing + slam).
+  // transition to the open swing and let the proximity machine take over from here
   private unlock(): void {
     this.locked = false;
     this.initialized = true;
@@ -179,6 +160,7 @@ export class Door extends AnimatedEntity implements Interactable {
     playOneShot(this.scene, DOOR_SLAM_SOUND_ID);
   }
 
+  // settle onto the open-idle loop once the swing animation completes
   private onOpenAnimationComplete(): void {
     if (this.doorState !== 'opening') return;
     this.doorState = 'open';

@@ -14,13 +14,25 @@ import {
   titledBlock,
 } from '../manualSection';
 
-// HUD tab — a legend for every on-screen meter, grouped by where it sits on
-// screen. Uses the real HUD glyphs (createHudIcon via glyphRow) so the icons are
-// pixel-identical to the live HUD, and pulls its numbers from the same constants
-// gameplay uses.
+/**
+ * hudSection — builds the manual's "HUD" tab (a legend for every on-screen meter).
+ *
+ * Describes each HUD readout grouped by where it sits on screen (top-left vitals,
+ * top-right resources, bottom-left weapon). Renders the real HUD glyphs so the
+ * icons are pixel-identical to the live HUD, and interpolates its numbers (health,
+ * stamina count + regen, magic cap/cost, heal cap/restore) from the same gameplay
+ * constants, so the legend can never drift from the actual values.
+ *
+ * Inputs:  gameplay tuning constants and the shared manual DOM/glyph helpers.
+ * Outputs: a detached ManualSection element tree (no animated previews).
+ * @calledby the in-game manual overlay, when assembling its tab pages.
+ * @calls    the shared section/glyph-row helpers, which draw the live HUD icons.
+ */
 
+// Stamina regen interval expressed in whole seconds for the legend copy.
 const STAMINA_REGEN_S = Math.round(STAMINA_REGEN_INTERVAL_MS / 1000);
 
+// builds the HUD tab: glyph-row legend for vitals, resources, and weapon readouts
 export function buildHudSection(): ManualSection {
   const root = sectionRoot();
 

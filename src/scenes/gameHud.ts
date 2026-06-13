@@ -7,10 +7,27 @@ import { CombatZoneWarning } from '../ui/CombatZoneWarning';
 import { DetectionCorners } from '../ui/DetectionCorners';
 import { PlayerHudOverlay } from '../ui/PlayerHudOverlay';
 
-// The live game state the HUD renders from each frame — GameScene implements
-// these structurally (the EnemyHelperScene pattern). The player reference is
-// fetched per frame because the world rebuild (death/respawn, HMR) replaces
-// the Player instance while the HUD survives.
+/**
+ * gameHud — the in-game HUD rig that owns and drives the four gameplay overlays.
+ *
+ * Bundles the player HUD (DOM), boss HUD (canvas), combat-zone escape warning
+ * (canvas), and detection corners (DOM), wiring each to the main camera's
+ * PRE_RENDER event so their screen-pinned positions track this frame's scroll,
+ * plus the scene PAUSE/RESUME handlers that hide/show the DOM overlays under a
+ * dim. One instance per game-scene instance; attach() (re)builds the overlays
+ * and re-binds the drivers, and is safe to run again after a destroy — Quit to
+ * title then START does exactly that, with the camera and scene emitter
+ * surviving the in-place world rebuild, so every subscription is detached
+ * before it is re-added to keep it single.
+ *
+ * Inputs:  the host's live game state (player, active boss, escape deadline,
+ *          alert level), read each render frame.
+ * Outputs: the four overlays and their per-frame position/value updates.
+ * @calledby the game scene — built at gameplay start, torn down on quit/shutdown.
+ * @calls    the four overlay widgets and the player's per-frame stat getters.
+ */
+
+// Live game state the HUD reads each frame; player is fetched fresh because world rebuilds swap the instance.
 export interface GameHudHost {
   getPlayer(): Player;
   getActiveBoss(): Enemy | null;
@@ -18,12 +35,6 @@ export interface GameHudHost {
   getMaxAlertLevel(): number;
 }
 
-// Owns the four gameplay overlays — player HUD (DOM), boss HUD (canvas),
-// combat-zone escape warning (canvas), and detection corners (DOM) — plus
-// the camera PRE_RENDER drivers that update them and the PAUSE/RESUME
-// visibility handlers. One instance per GameScene instance; attach() builds
-// the overlays (and is safe to run again after a destroy — Quit to title
-// then START does exactly that).
 export class GameHud {
   private readonly scene: Phaser.Scene;
   private readonly host: GameHudHost;
@@ -32,9 +43,7 @@ export class GameHud {
   private bossHud: BossHud | null = null;
   private combatWarning: CombatZoneWarning | null = null;
   private detectionCorners: DetectionCorners | null = null;
-  // Latched round shown by the boss bar. 0 = bar hidden / no active boss.
-  // Lets updateBossHud fire the Round 1 banner on first engagement and a
-  // fresh banner each time the boss's round climbs.
+  // Last boss round shown; 0 = no bar; lets us detect when to fire a new round banner.
   private bossRoundShown = 0;
 
   constructor(scene: Phaser.Scene, host: GameHudHost) {
@@ -42,34 +51,19 @@ export class GameHud {
     this.host = host;
   }
 
+  // True once the overlays exist (used as the "HUD is live" guard).
   isAttached(): boolean {
     return this.hud !== null;
   }
 
-  // Player HUD (DOM overlay) + boss HUD (canvas). The player HUD is HTML in the
-  // #game parent (same as the shop/options overlays), so it's pinned by CSS
-  // rather than per-frame world-space math; the boss HUD stays canvas-rendered.
+  // Creates the four overlays and hooks their per-frame updates to PRE_RENDER; safe to call again after destroy.
   attach(): void {
     const parent = this.scene.game.canvas.parentElement ?? document.body;
     this.hud = new PlayerHudOverlay(parent);
     this.bossHud = new BossHud(this.scene);
     this.combatWarning = new CombatZoneWarning(this.scene);
     this.detectionCorners = new DetectionCorners(parent);
-    // Drive HUD position+ratio updates from the main camera's PRE_RENDER
-    // event. That fires after Camera.preRender() rebuilds the camera matrix
-    // and refreshes midPoint, so the HUD positions are in sync with the
-    // *current* frame's camera scroll — eliminating the one-frame drift
-    // that subscribing to scene PRE_UPDATE introduces (PRE_UPDATE fires
-    // before the camera follow lerp this frame, so positions trail the
-    // visible camera by one tick). PRE_RENDER fires during the render
-    // phase, which runs regardless of any throws in the UPDATE phase. The
-    // boss HUD rides the same event for the same reason; activeBoss is
-    // resolved in updateEnemies (UPDATE phase) so it's current by render.
-    //
-    // Detach before re-attaching so the subscription stays single even when
-    // attach runs more than once per scene lifetime: Quit to the title screen
-    // destroys the HUD, then START rebuilds it, and the main camera survives the
-    // in-place world rebuild — so without this the drivers would accumulate.
+    // PRE_RENDER keeps HUD in sync with this frame's scroll; off() before on() avoids duplicate listeners.
     const cam = this.scene.cameras.main;
     cam.off(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateHud, this);
     cam.off(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateBossHud, this);
@@ -80,37 +74,29 @@ export class GameHud {
     cam.on(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateCombatWarning, this);
     cam.on(Phaser.Cameras.Scene2D.Events.PRE_RENDER, this.updateDetectionCorners, this);
 
-    // The DOM HUD renders above the canvas, so it would otherwise float over the
-    // pause/shop/options dim instead of being covered by it. Hide it whenever
-    // the scene pauses (PauseScene and the shop both pause GameScene) and
-    // restore it on resume. off() before on() keeps the subscription single
-    // across repeated attach calls — Quit→START rebuilds the HUD while the
-    // scene's event emitter persists.
+    // Hide DOM overlays on pause so they don't float over the dim; off() before on() keeps each single.
     this.scene.events.off(Phaser.Scenes.Events.PAUSE, this.hideHud, this);
     this.scene.events.off(Phaser.Scenes.Events.RESUME, this.showHud, this);
     this.scene.events.on(Phaser.Scenes.Events.PAUSE, this.hideHud, this);
     this.scene.events.on(Phaser.Scenes.Events.RESUME, this.showHud, this);
   }
 
-  // Hides only the player HUD, synchronously, while the landing page is up —
-  // beginGameplay reveals it with fadeIn as the world appears.
+  // Hides the player HUD immediately while the landing page is shown.
   hideForLanding(): void {
     this.hud?.setVisible(false);
   }
 
+  // Fades the player HUD in (the world-reveal at gameplay start).
   fadeIn(durationMs: number): void {
     this.hud?.fadeIn(durationMs);
   }
 
-  // Shows/hides the escape-warning overlay; updateBossLeash drives it from
-  // the UPDATE phase while the per-frame text refresh rides PRE_RENDER.
+  // Shows or hides the escape-warning overlay.
   setEscapeWarningVisible(visible: boolean): void {
     this.combatWarning?.setVisible(visible);
   }
 
-  // Drops the latched round counter WITHOUT touching the bar's visibility —
-  // the restartRun path; the bar (if any) dies with the world teardown that
-  // follows.
+  // Resets the round counter without touching the bar (bar dies in the world teardown that follows).
   clearBossRound(): void {
     this.bossRoundShown = 0;
   }
@@ -121,8 +107,7 @@ export class GameHud {
     this.bossHud?.setVisible(false);
   }
 
-  // Full teardown (Quit / Return-to-Title): the title screen shows no HUD, so
-  // every overlay goes; attach() recreates them when the player presses START.
+  // Full teardown — destroys all overlays; attach() recreates them on the next START.
   destroy(): void {
     this.hud?.destroy();
     this.hud = null;
@@ -134,10 +119,7 @@ export class GameHud {
     this.detectionCorners = null;
   }
 
-  // Scene-shutdown teardown: the boss HUD's banner tween + graphics and the
-  // other canvas/corner overlays must not outlive the scene, but the DOM
-  // player HUD deliberately survives scene.restart() (the respawn fallback)
-  // and re-binds to the new player through its per-frame update().
+  // Tears down the canvas/corner overlays on scene shutdown; the DOM player HUD deliberately survives restart.
   destroyForSceneShutdown(): void {
     this.bossHud?.destroy();
     this.bossHud = null;
@@ -148,16 +130,19 @@ export class GameHud {
     this.bossRoundShown = 0;
   }
 
+  // PAUSE handler: hide the DOM overlays so they don't float over the dim.
   private hideHud(): void {
     this.hud?.setVisible(false);
     this.detectionCorners?.setVisible(false);
   }
 
+  // RESUME handler: restore the DOM overlays hidden on pause.
   private showHud(): void {
     this.hud?.setVisible(true);
     this.detectionCorners?.setVisible(true);
   }
 
+  // Pushes current player stats into the DOM HUD each frame.
   private updateHud(): void {
     if (!this.hud) return;
     const player = this.host.getPlayer();
@@ -181,11 +166,7 @@ export class GameHud {
     });
   }
 
-  // Boss round-fight HUD driver, resolved each render frame off the host's
-  // active boss (set in updateEnemies). Shows the bar + "Round 1" banner when
-  // a round-fight boss is first engaged, fires a fresh banner each time its
-  // latched round climbs, refreshes the bar's fill + per-round color, and
-  // hides everything once the boss dies or there's no engaged boss.
+  // Drives the boss bar each frame — shows it on engagement, fires round banners, hides it on death.
   private updateBossHud(): void {
     if (!this.bossHud) return;
     const boss = this.host.getActiveBoss();
@@ -216,11 +197,7 @@ export class GameHud {
     );
   }
 
-  // Escape-warning driver, on the same camera PRE_RENDER event as the HUDs so
-  // its screen-pinned text stays in sync with this frame's scroll. The overlay
-  // is shown/hidden by updateBossLeash (UPDATE phase); here we just feed it the
-  // live seconds-remaining while a countdown is armed. ceil so the counter reads
-  // the grace seconds (e.g. 3 → 2 → 1) and only hits 0 at the deadline.
+  // Refreshes the escape-warning countdown text each frame (ceil so it reads 3→2→1 and hits 0 at the deadline).
   private updateCombatWarning(): void {
     const escapeDeadline = this.host.getEscapeDeadline();
     if (!this.combatWarning || escapeDeadline === null) return;
@@ -231,10 +208,7 @@ export class GameHud {
     this.combatWarning.update(secondsLeft, this.scene.cameras.main);
   }
 
-  // Recolours the detection corner brackets from the highest enemy alert level
-  // resolved this frame in updateEnemies (0 normal → faint white, 1 investigating
-  // → yellow, 2 conflict → red). On the camera PRE_RENDER event with the other
-  // HUDs; setLevel dedups so a steady state touches no DOM.
+  // Colours the corner brackets from the highest alert level this frame (clear/investigating/conflict).
   private updateDetectionCorners(): void {
     if (!this.detectionCorners) return;
     const maxAlertLevel = this.host.getMaxAlertLevel();

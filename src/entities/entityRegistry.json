@@ -1589,23 +1589,13 @@
               "frame": 12
             }
           ]
-        },
-        {
-          "type": "melee",
-          "animation": "death",
-          "frame": 8,
-          "damage": 10,
-          "range": 60,
-          "cooldownMs": 2000,
-          "aggressive": true,
-          "hitbox": {
-            "offsetX": -17,
-            "offsetY": 18,
-            "width": 36,
-            "height": 20
-          }
         }
-      ]
+      ],
+      "deathExplosion": {
+        "damage": 10,
+        "radius": 40,
+        "frame": 8
+      }
     },
     "animations": {
       "attack": {
@@ -2179,7 +2169,7 @@
         "frameWidth": 28,
         "frameHeight": 41,
         "frameCount": 9,
-        "loops": true
+        "loops": false
       }
     }
   },
@@ -3315,6 +3305,15 @@
         "chancePct": 100,
         "kinds": [
           {
+            "kind": "key_heart",
+            "weight": 1
+          }
+        ]
+      },
+      {
+        "chancePct": 100,
+        "kinds": [
+          {
             "kind": "coin",
             "weight": 1
           }
@@ -4397,6 +4396,8 @@
     "behavior": {
       "health": 22,
       "hurtAnimation": "take_hit",
+      "walkAnimation": "walk",
+      "moveSpeed": 30,
       "attack": {
         "type": "summon",
         "animation": "summon",

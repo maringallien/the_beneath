@@ -53,38 +53,50 @@ import {
   registerAllEntityAnimations,
 } from '../sprites/characterLoader';
 
+/**
+ * PreloadScene — the boot scene that loads every asset before gameplay starts.
+ *
+ * Queues all character/entity/sound assets, every level's tilesets (loaded up
+ * front because GameScene streams the whole world and partial loads would gap at
+ * level seams), and the HUD/menu/landing images during preload(); then in
+ * create() registers animations, carves tight HUD sub-frames, generates the
+ * procedural pickup textures, applies tileset brightness + glow bakes, and hands
+ * off to GAME — but only once the display font is ready (or a timeout elapses),
+ * so the title's first paint uses the real glyphs.
+ *
+ * Inputs:  the LDtk project data, the sprite/sound registries, and asset-path
+ *          constants; the browser Font Loading API.
+ * Outputs: a fully populated Phaser texture/animation/audio cache, procedurally
+ *          baked textures, and the scene transition into GAME.
+ * @calledby the Phaser scene manager at startup (and re-entered when Quit routes
+ *           back through the boot).
+ * @calls    the character/sound preloaders, the tileset/glow bake passes, and
+ *           the scene-start into the gameplay scene's landing overlay.
+ */
 export class PreloadScene extends Phaser.Scene {
-  // Captured in preload() and consumed in create() to bake foreground glow
-  // atlases once the tileset textures have finished loading. Stored on the
-  // instance rather than re-derived because parseLdtkProject is the heaviest
-  // line in preload() and we already paid for it once.
+  // Stashed from preload() so create() can bake glow atlases without re-parsing the LDtk project.
   private tilesetsForGlowBake: ReadonlyArray<LdtkTilesetDef> = [];
 
+  // Registers under the PRELOAD scene key.
   constructor() {
     super({ key: SCENE_KEYS.PRELOAD });
   }
 
+  // Queues all game assets — characters, sounds, all tilesets, HUD/menu/landing images.
   preload(): void {
     this.createLoadingBar();
     preloadAllCharacters(this);
     preloadAllEntities(this);
     preloadAllSounds(this);
 
-    // Load every level's tilesets up front: GameScene renders all levels in
-    // the same world so the player can walk between them, so partial loading
-    // would leave gaps when the player crosses a level boundary.
+    // All levels upfront — partial loading would gap at level boundaries as the player walks through.
     const project = parseLdtkProject(ldtkRaw);
     const tilesets = collectTilesetsForAllLevels(project);
     preloadTilesets(this, tilesets);
     this.tilesetsForGlowBake = tilesets;
 
-    // Player HUD assets. sliders.png is a 15×3 grid of 33×16 cells with a
-    // 1-pixel outer margin and 2-pixel inter-cell spacing; row 0 (frames
-    // 0-9) is a 10-step segmented fill animation used for the HP bar.
-    // The stamina and magic textures are single 336×272 images with the
-    // visible content packed into the top-left; we register tight custom
-    // frames against them in create() so the rest of the texture's empty
-    // space never reaches the renderer.
+    // sliders.png: 15×3 grid of 33×16 cells; row 0 is the 10-step HP fill animation.
+    // Stamina/magic textures have tight custom frames registered in create() to trim empty space.
     this.load.spritesheet(
       'hud_sliders',
       '/DarkSpriteLib/general/ui/sliders/sliders.png',
@@ -103,8 +115,7 @@ export class PreloadScene extends Phaser.Scene {
       'hud_magic',
       '/DarkSpriteLib/general/ui/borders_and_hp/ui_magic_bar.png',
     );
-    // Ammo icons: 6×3 grid of 16×16 tiles. Row 0 = pistol/rifle bullets,
-    // row 2 = shotgun shells. PlayerHud picks one frame per gun.
+    // Ammo icons: 6×3 grid of 16×16 tiles; row 0 = bullets, row 2 = shotgun shells.
     this.load.spritesheet(
       'hud_ammo',
       '/DarkSpriteLib/general/ui/ammo/ui_-_ammo.png',
@@ -113,34 +124,22 @@ export class PreloadScene extends Phaser.Scene {
         frameHeight: 16,
       },
     );
-    // Pause-menu word banners. Each is a small black-background PNG with the
-    // word ("CONTINUE", "NEW GAME", "OPTIONS", "QUIT") rendered in white.
-    // Loaded as plain images and displayed in a row by PauseScene.
+    // Pause-menu word banners (plain white-on-black PNGs displayed by PauseScene).
     this.load.image(PAUSE_CONTINUE_TEXTURE_KEY, PAUSE_CONTINUE_ASSET_PATH);
     this.load.image(PAUSE_NEW_GAME_TEXTURE_KEY, PAUSE_NEW_GAME_ASSET_PATH);
     this.load.image(PAUSE_OPTIONS_TEXTURE_KEY, PAUSE_OPTIONS_ASSET_PATH);
     this.load.image(PAUSE_QUIT_TEXTURE_KEY, PAUSE_QUIT_ASSET_PATH);
-    // Landing-screen START + CREDITS banners. Same pattern as the pause-menu
-    // words — plain PNG, LINEAR-filtered in create() so the scaled-up letters
-    // stay smooth at any viewport size. (The home-screen OPTIONS button reuses
-    // the pause menu's PAUSE_OPTIONS texture, loaded just above.)
+    // Landing START + CREDITS banners; LINEAR-filtered in create() for smooth scaling.
     this.load.image(LANDING_START_TEXTURE_KEY, LANDING_START_ASSET_PATH);
     this.load.image(LANDING_CREDITS_TEXTURE_KEY, LANDING_CREDITS_ASSET_PATH);
   }
 
+  // Registers animations, carves HUD frames, bakes procedural textures/glow, then boots GAME once the font is ready.
   create(): void {
     registerAllCharacterAnimations(this);
     registerAllEntityAnimations(this);
-    // Register tight content frames for the HUD textures whose source files
-    // have lots of empty space. PlayerHud references these frames by name.
-    // Coords were measured from the source PNGs by pixel inspection; if the
-    // assets are updated upstream, re-derive with `python -c "from PIL ..."`.
-    //
-    // STA and MAG strips are each composed of three 7×3 segments separated by
-    // 1-pixel gaps, so the full strip spans 23 px (7+1+7+1+7). We register
-    // each segment as its own frame so PlayerHud can render them as three
-    // independent image sprites and toggle their visibility based on the
-    // current value (each resource maxes at 3, so segment-index = value − 1).
+    // Tight HUD sub-frames measured by pixel inspection; re-derive if assets change.
+    // STA/MAG strips are three 7×3 segments (1px gaps); each segment is one bar pip.
     const staminaTex = this.textures.get('hud_stamina');
     staminaTex.add('seg0', 0, 18, 21, 7, 3);
     staminaTex.add('seg1', 0, 26, 21, 7, 3);
@@ -154,10 +153,7 @@ export class PreloadScene extends Phaser.Scene {
     this.generateCoinTexture();
     this.generateHealCrossTexture();
     this.generateKeyTexture();
-    // Force LINEAR sampling on the pause word banners so the scaled-up
-    // letters render smoothly. The global pixelArt:true config would
-    // otherwise nearest-sample them into jagged stair-stepped edges. Same
-    // override pattern used for magic_orb and InteractionIcon's letter.
+    // LINEAR sampling on word banners so letters stay smooth (overrides global pixelArt config).
     for (const key of [
       PAUSE_CONTINUE_TEXTURE_KEY,
       PAUSE_NEW_GAME_TEXTURE_KEY,
@@ -171,25 +167,14 @@ export class PreloadScene extends Phaser.Scene {
     }
     this.applyTilesetBrightnessLifts();
     this.bakeForegroundGlowAtlases();
-    // Gate the boot on the self-hosted display font being ready. Phaser
-    // rasterizes canvas Text to a GPU texture synchronously at creation, so if
-    // Nosifer is still downloading when LandingScene paints "THE BENEATH" the
-    // title bakes in the fallback face — and the WebGL texture cache means it
-    // often never updates even after a later re-render. Waiting here so the
-    // title's FIRST paint already has the real glyphs is the reliable fix.
+    // Wait for the display font before booting so the title's first paint already has real glyphs.
     this.bootGameWhenFontReady();
   }
 
-  // Starts the GAME scene (landing overlay) once DISPLAY_FONT_NAME has loaded,
-  // or after FONT_BOOT_TIMEOUT_MS if the Font Loading API is unavailable or the
-  // download stalls/fails — a missing font must never block startup; the title
-  // just falls back to its fallback stack in that case. The `booted` guard makes
-  // the timeout and the load-promise mutually exclusive so GAME starts once.
+  // Boots GAME once the display font loads, or after a timeout — font must never block startup.
   private bootGameWhenFontReady(): void {
     const boot = (): void => {
-      // startLanding:true triggers the landing-page overlay on first boot.
-      // PauseScene's Quit also routes back through this scene, so the
-      // landing re-shows on every fresh start of the run.
+      // startLanding:true shows the title overlay; set on every fresh run start (including post-Quit).
       this.scene.start(SCENE_KEYS.GAME, { startLanding: true });
     };
 
@@ -219,11 +204,7 @@ export class PreloadScene extends Phaser.Scene {
       });
   }
 
-  // Lifts the RGB channels of any tileset listed in TILESET_BRIGHTNESS_FACTORS
-  // so visually-darker source art reads at comparable brightness to its peers
-  // in the same level. Runs BEFORE the glow bake so the glow pass detects
-  // bright pixels on the already-lifted source — keeping the two passes in
-  // sync would otherwise require threading the factor into GlowAtlasBaker too.
+  // Brightens dark tilesets before the glow bake so the glow pass sees the lifted source.
   private applyTilesetBrightnessLifts(): void {
     for (const def of this.tilesetsForGlowBake) {
       const factor = TILESET_BRIGHTNESS_FACTORS[def.uid];
@@ -232,11 +213,7 @@ export class PreloadScene extends Phaser.Scene {
     }
   }
 
-  // Pre-bakes a sibling "glow" atlas for every tileset that backs a level, so
-  // LevelRenderer can stamp soft halos over bright pixels in Foreground*
-  // layers (see GlowAtlasBaker). Gated on FOREGROUND_GLOW_ENABLED — when off,
-  // no atlases are registered and LevelRenderer's textures.exists check makes
-  // foreground rendering a no-op for the second image-per-tile.
+  // Pre-bakes a glow atlas for each tileset so LevelRenderer can stamp halos over bright Foreground pixels.
   private bakeForegroundGlowAtlases(): void {
     if (!FOREGROUND_GLOW_ENABLED) return;
     for (const def of this.tilesetsForGlowBake) {
@@ -244,20 +221,12 @@ export class PreloadScene extends Phaser.Scene {
     }
   }
 
-  // Procedural placeholder for the magic ("mana crystal") pickup: a small
-  // faceted gem — a flat table, out to the girdle, down to a pointed culet —
-  // matching the HUD magic glyph (hudIcons.ts) and kept small so it never reads
-  // as the larger Save crystal. Authored at MAGIC_ORB_TEXTURE_SIZE_PX (12) and
-  // LINEAR-filtered so its straight edges stay smooth despite the global
-  // pixelArt:true config (which would otherwise stair-step them). Internal "orb"
-  // naming is retained — the resource is still "orbs" in code; only the shape
-  // changed. Swap for a real PNG by loading at MAGIC_ORB_TEXTURE_KEY in preload().
+  // Procedural magic-pickup gem (faceted pentagon shape); swap for a real PNG at MAGIC_ORB_TEXTURE_KEY.
   private generateMagicOrbTexture(): void {
     const size = MAGIC_ORB_TEXTURE_SIZE_PX;
     const g = this.make.graphics({ x: 0, y: 0 }, false);
     g.fillStyle(MAGIC_ORB_FILL_COLOR, 1);
-    // Gem outline as fractions of `size`, inset ~1px from the edges so the AA
-    // ring fades cleanly inside the texture bounds.
+    // Gem outline inset ~1px so AA fades cleanly inside the texture bounds.
     g.fillPoints(
       [
         { x: size * 0.29, y: size * 0.2 }, // table left
@@ -275,22 +244,15 @@ export class PreloadScene extends Phaser.Scene {
       .setFilter(Phaser.Textures.FilterMode.LINEAR);
   }
 
-  // Procedural placeholder for the gold coin pickup: a small warm-gold disc
-  // with a brighter highlight ring inset off-center to give the disc a faint
-  // 3D read at small sizes. LINEAR filter (same as the orb) keeps the edge
-  // smooth instead of pixelating at CAMERA_ZOOM. Swap for a real PNG by
-  // loading at COIN_TEXTURE_KEY in preload() and removing this call.
+  // Procedural gold coin disc with an off-center highlight; swap for a real PNG at COIN_TEXTURE_KEY.
   private generateCoinTexture(): void {
     const size = COIN_TEXTURE_SIZE_PX;
     const cx = size / 2;
     const cy = size / 2;
     const g = this.make.graphics({ x: 0, y: 0 }, false);
     g.fillStyle(COIN_FILL_COLOR, 1);
-    // 1px margin so the AA edge fades cleanly inside the texture bounds.
     g.fillCircle(cx, cy, cx - 1);
-    // Highlight: a smaller filled disc inset toward the upper-left so the
-    // coin reads as catching a light source from above. Radius and offset
-    // scale with size — at the 8px default this yields a ~2px highlight.
+    // Highlight disc inset upper-left so the coin reads as lit from above (~2px at default size).
     g.fillStyle(COIN_HIGHLIGHT_COLOR, 1);
     g.fillCircle(cx - size * 0.15, cy - size * 0.15, Math.max(1, size * 0.2));
     g.generateTexture(COIN_TEXTURE_KEY, size, size);
@@ -300,13 +262,7 @@ export class PreloadScene extends Phaser.Scene {
       .setFilter(Phaser.Textures.FilterMode.LINEAR);
   }
 
-  // Procedural heal-item pickup: a flat white "+" cross matching the player HUD's
-  // heal glyph (hudIcons.ts PLUS_D). Two overlapping bars — one vertical, one
-  // horizontal — each 1/6 of the texture thick and inset 1/6 from every edge, so
-  // the world/shop pickup reads the same as the interface counter. LINEAR-
-  // filtered (like the coin/orb) so the arms stay smooth at CAMERA_ZOOM and in
-  // the DOM shop. Swap for a real PNG by loading at HEAL_CROSS_TEXTURE_KEY in
-  // preload() and removing this call.
+  // Procedural "+" cross pickup matching the HUD heal glyph; swap for a real PNG at HEAL_CROSS_TEXTURE_KEY.
   private generateHealCrossTexture(): void {
     const size = HEAL_CROSS_TEXTURE_SIZE_PX;
     const g = this.make.graphics({ x: 0, y: 0 }, false);
@@ -324,41 +280,25 @@ export class PreloadScene extends Phaser.Scene {
       .setFilter(Phaser.Textures.FilterMode.LINEAR);
   }
 
-  // Procedural placeholder for the boss-key pickup: a small gold key built from
-  // a ring bow (outer disc with a punched-out center), a vertical shaft, and two
-  // teeth jutting off the lower shaft — plus an off-center highlight on the bow
-  // (same faux-3D idiom as the coin/heart). Shared by both boss keys; they're
-  // visually identical and matched to doors by pickup kind, not appearance.
-  // LINEAR-filtered like the orb/coin/heart so the bow's curve stays smooth at
-  // CAMERA_ZOOM. Swap for a real PNG by loading at KEY_TEXTURE_KEY in preload()
-  // and removing this call.
+  // Procedural gold key pickup (bow + shaft + two teeth); swap for a real PNG at KEY_TEXTURE_KEY.
   private generateKeyTexture(): void {
     const size = KEY_TEXTURE_SIZE_PX;
     const g = this.make.graphics({ x: 0, y: 0 }, false);
     const cx = size * 0.5;
     g.fillStyle(KEY_FILL_COLOR, 1);
-    // Bow (the round grip) at the top: outer disc with a punched-out hole so it
-    // reads as a ring rather than a lollipop. The hole is "punched" by redrawing
-    // a transparent disc — graphics fills are opaque, so instead draw the ring
-    // as the outer disc then overlay a smaller disc in the background color is
-    // not possible on a transparent texture; use an annulus via two arcs.
+    // Bow at the top: outer disc, then a highlight approximates the ring look (no blend-erase on Graphics).
     const bowCy = size * 0.3;
     const bowOuterR = size * 0.22;
     g.fillCircle(cx, bowCy, bowOuterR);
-    // Shaft: a thin vertical bar from just under the bow down to near the base.
     const shaftW = Math.max(1, size * 0.1);
     const shaftTop = bowCy + bowOuterR * 0.6;
     const shaftBottom = size * 0.92;
     g.fillRect(cx - shaftW / 2, shaftTop, shaftW, shaftBottom - shaftTop);
-    // Teeth: two short horizontal nubs off the right side of the lower shaft.
     const toothW = size * 0.2;
     const toothH = Math.max(1, size * 0.09);
     g.fillRect(cx + shaftW / 2, shaftBottom - toothH, toothW, toothH);
     g.fillRect(cx + shaftW / 2, shaftBottom - toothH * 3, toothW * 0.7, toothH);
-    // Punch the bow hole by stamping a background-transparent disc. generateTexture
-    // captures alpha, and erasing via a destination-out blend isn't exposed on
-    // Graphics, so approximate the ring look with a smaller highlight-colored
-    // disc instead — reads as a lit bevel on the bow at this size.
+    // Approximate the bow hole with a highlight disc — destination-out blend isn't exposed on Graphics.
     g.fillStyle(KEY_HIGHLIGHT_COLOR, 1);
     g.fillCircle(cx, bowCy, bowOuterR * 0.5);
     g.fillStyle(KEY_FILL_COLOR, 1);
@@ -370,9 +310,7 @@ export class PreloadScene extends Phaser.Scene {
       .setFilter(Phaser.Textures.FilterMode.LINEAR);
   }
 
-  // Small soft black puff used by the magic orb's mist particle emitter. Same
-  // LINEAR filter trick as the orb so the circle's edge stays smooth instead
-  // of pixelating at zoom.
+  // Small black puff for the magic orb's mist particle emitter.
   private generateMistParticleTexture(): void {
     const size = MIST_PARTICLE_TEXTURE_SIZE_PX;
     const cx = size / 2;
@@ -387,6 +325,7 @@ export class PreloadScene extends Phaser.Scene {
       .setFilter(Phaser.Textures.FilterMode.LINEAR);
   }
 
+  // Creates the Loading... progress bar; tears itself down when the loader finishes.
   private createLoadingBar(): void {
     const { width, height } = this.cameras.main;
 

@@ -6,12 +6,7 @@ import {
   getTilesetDefs,
 } from '../ldtk/parseLdtk';
 
-// Logic-only marker entities that are never rendered (see LevelRenderer's
-// skip set). Their LDtk def may carry a preview-tile reference to a tileset
-// that doesn't exist in this project, so they must also be excluded from
-// tileset collection — otherwise the "references tileset uid=… but no def"
-// guard below would throw on a level that only "uses" that tileset via a
-// marker preview.
+// Marker entities excluded from tileset collection; their preview tiles may reference tilesets that don't exist here.
 const NON_RENDERED_MARKER_IDENTIFIERS: ReadonlySet<string> = new Set([
   GENERAL_ENEMY_SPAWN_IDENTIFIER,
 ]);
@@ -21,22 +16,40 @@ import type {
   LdtkTilesetDef,
 } from '../ldtk/types';
 
-// Deterministic Phaser texture key per tileset. Sharing the same scheme between
-// preload and render keeps the two ends decoupled — the renderer doesn't need
-// to know how the asset was loaded, only what key it lives under.
+/**
+ * TilesetRegistry — the texture-key contract and tileset preload path for LDtk levels.
+ *
+ * Owns the deterministic uid→Phaser-key scheme that decouples preload from render,
+ * the collection of which tilesets a level (or the whole project) actually uses,
+ * and the loaders that bring those PNGs into the scene texture cache. Tilesets are
+ * loaded as spritesheets so individual tiles are addressable by frame index.
+ * Collection walks both tile layers and entity-tile decorations (whose tilesets
+ * are independent of any layer), while excluding non-rendered marker entities
+ * whose preview tile may point at a tileset that doesn't exist here — so a level
+ * never throws "references tileset uid=… but no def" over a marker preview.
+ *
+ * Inputs:  a parsed LDtk project/level, a scene, and tileset defs (uid, relPath,
+ *          grid size, padding, spacing).
+ * Outputs: stable texture keys; spritesheet loads into the scene texture cache;
+ *          throws on a level that references a tileset with no def or no relPath.
+ * @calledby the level preload and render paths, plus the HMR reload path.
+ * @calls    the LDtk parse helpers and the scene's spritesheet loader.
+ */
+
+// Deterministic Phaser texture key for a tileset uid (shared by preload + render).
 export function tilesetTextureKey(uid: number): string {
   return `ldtkTileset_${uid}`;
 }
 
-// Tileset relPaths in the LDtk file are relative to the project root (e.g.
-// "public/DarkSpriteLib/..."). Vite serves files in `public/` at the document
-// root, so the runtime URL is the path with the `public/` prefix stripped.
+// LDtk relPath (project-root-relative, e.g. "public/...") → runtime URL. Vite
+// serves public/ at the document root, so strip that prefix.
 function relPathToUrl(relPath: string): string {
   return relPath.startsWith('public/')
     ? '/' + relPath.slice('public/'.length)
     : '/' + relPath;
 }
 
+// Collects the deduplicated tileset defs used by a level's tile layers and entity decorations.
 export function collectTilesetsForLevel(
   project: LdtkProject,
   level: LdtkLevel,
@@ -46,11 +59,7 @@ export function collectTilesetsForLevel(
   for (const layer of getRenderableLayers(level)) {
     usedUids.add(layer.tilesetUid);
   }
-  // Entity-tile decorations reference tilesets via inst.__tile.tilesetUid,
-  // which is independent of the layer's __tilesetDefUid (layer is Entities-
-  // type, so its own tileset is null). Collect those too — otherwise the
-  // renderer throws "Tileset texture not loaded" the first time it walks a
-  // level whose decorations point at a tileset no tile layer happens to use.
+  // Decorations reference tilesets independently of their layer; collect them too or the renderer throws on first use.
   for (const layer of getRenderableEntityLayers(
     level,
     NON_RENDERED_MARKER_IDENTIFIERS,
@@ -77,9 +86,7 @@ export function collectTilesetsForLevel(
   return out;
 }
 
-// Aggregates tilesets used across every level in the project, deduplicated.
-// Used when the scene renders multiple levels at once so all required textures
-// are preloaded up front (no on-demand loading mid-walk between levels).
+// Aggregates deduplicated tileset defs across all project levels for a full up-front preload.
 export function collectTilesetsForAllLevels(
   project: LdtkProject,
 ): LdtkTilesetDef[] {
@@ -95,11 +102,7 @@ export function collectTilesetsForAllLevels(
   return out;
 }
 
-// Loaded as a spritesheet (not a plain image) so each tile is addressable as a
-// numeric frame index — required for Image-based rendering of off-grid and
-// stacked tiles. Phaser's Tilemap can still consume a spritesheet-loaded
-// texture if a layer ever wants tilemap rendering, so this strictly upgrades
-// what we can do with the same underlying texture.
+// Queues tilesets as spritesheets in the scene loader, skipping any already cached.
 export function preloadTilesets(
   scene: Phaser.Scene,
   tilesets: ReadonlyArray<LdtkTilesetDef>,
@@ -117,11 +120,7 @@ export function preloadTilesets(
   }
 }
 
-// Mid-game tileset loader. Used by HMR when an LDtk reload references a
-// tileset that wasn't part of the initial preload (e.g. user added a new
-// layer using a brand-new PNG). Resolves once Phaser's loader finishes, so
-// callers can safely render the new texture without "Tileset texture not
-// loaded" errors. Resolves immediately if every tileset is already in cache.
+// Loads any tilesets not already cached (HMR path); resolves when done or immediately if all cached.
 export function loadTilesetsAtRuntime(
   scene: Phaser.Scene,
   tilesets: ReadonlyArray<LdtkTilesetDef>,

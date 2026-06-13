@@ -12,9 +12,33 @@ import type {
   EntityRegistry,
 } from './entityRegistryTypes';
 
-// Anim-key namespace for animated entities. Keeps entity animation keys
-// disjoint from player keys (which use `{mode}_{anim}` like `sword_master_idle`)
-// so the Phaser anim system can't accidentally resolve one as the other.
+/**
+ * entityRegistryLoader — loads and validates entityRegistry.json into typed
+ * configs at module load, and serves the frozen result by lookup.
+ *
+ * The heart of boot-time registry validation. A nest of hand-rolled validators
+ * (over the shared validate primitives) turns the raw JSON into the typed
+ * AnimatedEntityConfig tree, and the module-scope IIFEs at the bottom run them
+ * once at import so an authoring mistake fails the boot loudly — naming the
+ * exact JSON path — instead of misbehaving at first spawn (much later in the
+ * lifecycle). The DROP_KINDS / ATTACK_TYPES allowlists and every domain rule
+ * (per-type field requirements, animation-key cross-checks, range/combo
+ * relationships) live here, next to the schema they describe; only the
+ * type/range primitives live in ../shared/validate. A recurring contract:
+ * every animation key referenced by a field must exist in that entity's own
+ * animations map, and a clip that must play to completion (wake, death, any
+ * attack wind-up/strike) must be one-shot (loops: false) — a looping clip would
+ * trap the entity in 'attack' state and never fire its recover/cleanup path.
+ *
+ * Inputs:  entityRegistry.json (imported) and the shared validate primitives.
+ * Outputs: a frozen typed registry plus lookup helpers and the entity anim-key
+ *          namespacing helpers; throws at load on any invalid entry.
+ * @calledby the entity spawn / factory and animation code, looking up a config,
+ *           behavior, trap, or anim by identifier or full key.
+ * @calls    the shared validate primitives, field by field, for each entry.
+ */
+
+// namespaces entity anim keys so they can't collide with player keys
 const ENTITY_KEY_PREFIX = 'entity';
 
 interface ParsedEntry {
@@ -22,9 +46,7 @@ interface ParsedEntry {
   readonly config: AnimatedEntityConfig;
 }
 
-// Validates one registry entry. Throws with a clear message naming the
-// offending identifier and field so authoring mistakes surface at boot
-// rather than at first spawn (much later in the lifecycle).
+// validate one registry entry into a typed config; throws at load if anything is wrong
 function validateEntry(
   identifier: string,
   raw: unknown,
@@ -81,6 +103,7 @@ function validateEntry(
   };
 }
 
+// validate the drops array into typed drop-event configs
 function validateDrops(
   identifier: string,
   raw: unknown,
@@ -96,6 +119,7 @@ function validateDrops(
   return drops;
 }
 
+// allowlist of drop kinds; a new pickup/key kind must be added here to be authorable
 const DROP_KINDS = [
   'gun1',
   'gun2',
@@ -104,8 +128,10 @@ const DROP_KINDS = [
   'heal',
   'key_storms',
   'key_widow',
+  'key_heart',
 ] as const;
 
+// validate one drop event: chancePct in [0,100] and a non-empty weighted kinds table
 function validateDropEvent(
   identifier: string,
   index: number,
@@ -135,6 +161,7 @@ function validateDropEvent(
   return { chancePct, kinds };
 }
 
+// validate a trap block: positive damage, optional snap anim, optional damage-zone rect
 function validateTrap(
   identifier: string,
   raw: unknown,
@@ -171,11 +198,7 @@ function validateTrap(
   return { damage, directContactAnimation, damageZone };
 }
 
-// Validates a behavior block: requires health, accepts optional hurtAnimation,
-// deathAnimation, and an optional attack sub-block (validated separately).
-// Errors include the identifier and the available animation list so authoring
-// mistakes surface at boot rather than at first spawn — this is the primary
-// defense against the registry/animation-key drift class of bugs.
+// validate an enemy behavior block — health required, every anim key cross-checked, all cross-field rules enforced
 function validateBehavior(
   identifier: string,
   raw: unknown,
@@ -240,8 +263,7 @@ function validateBehavior(
       );
     }
     const dormantRange = v.optionalPositive(d, 'range', `${ctx}.dormant`);
-    // Optional looping clip held while dormant. Unlike wakeAnimation it may
-    // loop (it's the resting pose, not the one-shot wake), so no loops check.
+    // looping resting pose — unlike wakeAnimation, may loop; no one-shot check
     const sleepAnimation = optionalAnimKey(
       `${ctx}.dormant`,
       'sleepAnimation',
@@ -269,9 +291,7 @@ function validateBehavior(
   );
   const stayInSpawnLevel = v.optionalBoolean(b, 'stayInSpawnLevel', ctx);
   const homeLeashRange = v.optionalPositive(b, 'homeLeashRange', ctx);
-  // Stealth/detection tuning — all optional, validated like the other
-  // positive-number knobs. Defaults are applied at runtime (see Enemy /
-  // constants), so absence just means "use the global default".
+  // stealth/detection knobs — all optional; runtime applies global defaults when absent
   const detectionRange = v.optionalPositive(b, 'detectionRange', ctx);
   let visionHalfAngleDeg: number | undefined;
   if (b.visionHalfAngleDeg !== undefined) {
@@ -295,9 +315,7 @@ function validateBehavior(
   const displayName = v.optionalString(b, 'displayName', ctx);
   const hideHealthBar = v.optionalBoolean(b, 'hideHealthBar', ctx);
   const healthBarOffsetY = v.optionalFinite(b, 'healthBarOffsetY', ctx);
-  // Patrol movement decoupled from attacks: lets an attack-less character
-  // (spirit walkers) walk its loiterPath via the shared loiter code, which
-  // falls back to these when attacks[0] supplies no walkAnimation/moveSpeed.
+  // behavior-level walk for patrol; attacks[0] overrides, but spirit walkers have no attacks
   const walkAnimation = optionalAnimKey(
     ctx,
     'walkAnimation',
@@ -361,10 +379,7 @@ function validateBehavior(
     const e = b.deathExplosion as Record<string, unknown>;
     const ectx = `${ctx}.deathExplosion`;
     const frameRaw = v.requireNonNegativeInt(e, 'frame', ectx);
-    // Frame must address a valid index of the death animation when one is
-    // registered. When the entity has no death anim the runtime falls back
-    // to firing on enterDeadState, so the frame is unused and we don't
-    // enforce a bound (still required by the schema for authoring clarity).
+    // without a death anim the runtime fires on enterDeadState; frame is still required for authoring clarity
     const deathAnimKey = deathAnimation ?? 'death';
     if (deathAnimKey in animations) {
       const frameCount = animations[deathAnimKey].frameCount;
@@ -471,6 +486,7 @@ function validateBehavior(
   };
 }
 
+// allowlist of attack types; selects per-type field requirements in the validator below
 const ATTACK_TYPES = [
   'melee',
   'ranged',
@@ -483,6 +499,7 @@ const ATTACK_TYPES = [
   'summon',
 ] as const;
 
+// validate one attack config — type-driven field requirements, anim key cross-checks, placement guards
 function validateAttack(
   identifier: string,
   raw: unknown,
@@ -498,8 +515,7 @@ function validateAttack(
 
   const type = v.requireOneOf(a, 'type', ctx, ATTACK_TYPES);
 
-  // Thin per-validator bindings over the shared primitives so the dozens of
-  // call sites below stay one-argument.
+  // thin bindings so the many call sites below stay one-argument
   const requirePositive = (field: string): number =>
     v.requirePositive(a, field, ctx);
   const requireNonNegativeInt = (field: string): number =>
@@ -523,9 +539,7 @@ function validateAttack(
     animations,
   );
 
-  // Per-type field requirements. Building the result fields conditionally
-  // keeps the runtime data lean — unused fields stay undefined rather than
-  // null-filled, so the consumer code can rely on type-driven branches.
+  // per-type fields — unused stay undefined so consumer code can rely on type-driven branches
   let animation: string | undefined;
   let frame: number | undefined;
   let damage: number | undefined;
@@ -563,19 +577,10 @@ function validateAttack(
   let summonCount: number | undefined;
   let summonMaxAlive: number | undefined;
 
-  // comboOnly is parsed up front because the melee/ranged/magic branch reads it
-  // to relax the `range` requirement (a combo-only follow-up is never selected
-  // independently, so it needs no selection range). The type restriction (combo
-  // semantics only apply to melee/ranged/magic) is enforced below alongside
-  // comboNextAnimation.
+  // parsed up front so the melee/ranged/magic branch can relax the `range` requirement for comboOnly
   comboOnly = v.optionalBoolean(a, 'comboOnly', ctx);
 
-  // Hitbox parser shared by melee and teleport (both deliver damage via a
-  // transient rect on a frame). Accepts either `hitbox` (single object) or
-  // `hitboxes` (array of objects) and normalizes to an array so strategy
-  // code can iterate uniformly. Multi-hitbox attacks let a single swing
-  // damage several disjoint regions (e.g., a slam that strikes under the
-  // body plus both sword tips) without authoring separate attack entries.
+  // hitbox parser shared by melee and teleport; accepts hitbox (single) or hitboxes (array)
   const parseSingleHitbox = (
     raw: unknown,
     label: string,
@@ -590,10 +595,7 @@ function validateAttack(
     const matchBody = v.optionalBoolean(hb, 'matchBody', hbctx);
     const hbWidth = v.requireFinite(hb, 'width', hbctx);
     const hbHeight = v.requireFinite(hb, 'height', hbctx);
-    // matchBody hitboxes stamp at the live body rect, so authored
-    // width/height are unused — allow 0 to make "ignored" intent clear.
-    // Other hitboxes still require positive dimensions (otherwise
-    // overlapRect would be a no-op).
+    // matchBody stamps the live body rect, so 0 dims are allowed; others must be positive
     if (!matchBody && (hbWidth <= 0 || hbHeight <= 0)) {
       throw new Error(
         `${hbctx}.width and height must be > 0 (got ${hbWidth}x${hbHeight})`,
@@ -630,9 +632,7 @@ function validateAttack(
         `${ctx}.hitbox or .hitboxes is required for type "${type}"`,
       );
     }
-    // Per-hitbox `frame` (used to spread multi-strike attacks across the
-    // swing) must reference a valid frame of the attack animation. Caught
-    // here so a typo doesn't silently no-op at runtime.
+    // per-hitbox frame must reference a valid frame of the attack anim (typo → boot error)
     if (animation !== undefined) {
       const frameCount = animations[animation].frameCount;
       for (let i = 0; i < parsed.length; i++) {
@@ -648,20 +648,12 @@ function validateAttack(
   };
 
   if (type === 'contact') {
-    // Contact bumps damage on body overlap. No animation, no frame, no
-    // range — the cooldown alone gates re-damage. Hitbox is implicit
-    // (the body itself); the player's invuln window does the work of
-    // preventing tick-storms from a wasp sticking to the player.
+    // no anim/frame/range — damage on body overlap, cooldown gates re-damage
     damage = requirePositive('damage');
   } else if (type === 'aoe') {
-    // AoE: wind-up animation with a damage-frame VFX spawn. Damage applies
-    // when the VFX sprite overlaps the player (once per cast). The boss
-    // animation and the VFX animation are separate clips — both must
-    // exist in this entity's animations map and both must be one-shot
-    // (looping would never fire the recover/cleanup paths).
+    // wind-up anim with a VFX spawn on the damage frame; one-shot-checked below
     animation = requireAnimKeyExists(ctx, 'animation', a.animation, animations);
-    // Either single-fire (`frame`) or multi-fire (`damageFrames`) — caught
-    // here so animation/damage configuration mistakes surface at boot.
+    // exactly one of frame (single-fire) or damageFrames (multi-fire)
     if (a.frame !== undefined && a.damageFrames !== undefined) {
       throw new Error(
         `${ctx}: set either "frame" (single-fire) or "damageFrames" (multi-fire), not both`,
@@ -706,8 +698,7 @@ function validateAttack(
         }
         seen.add(f);
       }
-      // Normalize to ascending order so onAnimUpdate's "earliest unfired" walk
-      // is simply array order.
+      // ascending order so onAnimUpdate's "earliest unfired" walk is just array order
       damageFrames = [...a.damageFrames as number[]].sort((p, q) => p - q);
     }
     if (animations[animation].loops) {
@@ -740,11 +731,7 @@ function validateAttack(
       );
     }
   } else if (type === 'dive') {
-    // Dive: animated lunge that commits a body-velocity at entry to
-    // reach the player by the end of the animation. Damage applies on
-    // body-overlap during the dive (no transient hitbox, no per-frame
-    // damage gate). minRange is optional — keeps the crow from diving
-    // when already adjacent (would look like a stutter).
+    // animated body-velocity lunge; damage on body overlap during the dive
     animation = requireAnimKeyExists(ctx, 'animation', a.animation, animations);
     if (animations[animation].loops) {
       throw new Error(
@@ -775,12 +762,7 @@ function validateAttack(
     heal = requirePositive('heal');
     healThreshold = optionalFraction('healThreshold');
   } else if (type === 'teleport') {
-    // Teleport: two- or three-phase wind-up + (appear) + strike.
-    // disappearAnimation plays at the pre-teleport position; `animation` is
-    // the strike clip played at the destination, and its `frame` is the
-    // damage frame. When `appearAnimation` is set, it plays as a visual-only
-    // reappear clip between the disappear and the strike. All clips must be
-    // one-shot — looping would trap the entity in 'attack' state.
+    // disappear → optional appear → strike; strike `frame` is the damage frame
     disappearAnimation = requireAnimKeyExists(
       ctx,
       'disappearAnimation',
@@ -834,13 +816,7 @@ function validateAttack(
       );
     }
   } else if (type === 'summon') {
-    // Summon: plays a one-shot cast animation; on `frame` it spawns minions
-    // beside the caster. Deals no damage. `range` gates selection so the caster
-    // only summons once the player is engaged. summonKinds existence in the
-    // registry is checked at runtime (respawn returns null for an unknown /
-    // behavior-less id, which fireSummonAttack skips) — same deferral the
-    // comboNextAnimation cross-reference uses, since the full registry isn't
-    // built yet at validation time.
+    // one-shot cast; spawns minions on `frame`; summonKinds existence deferred to runtime
     animation = requireAnimKeyExists(ctx, 'animation', a.animation, animations);
     frame = requireNonNegativeInt('frame');
     if (frame >= animations[animation].frameCount) {
@@ -887,9 +863,7 @@ function validateAttack(
       );
     }
     damage = requirePositive('damage');
-    // A combo-only follow-up is never selected independently, so it needs no
-    // selection range; reachability is inherited from the lead attack's range
-    // check at combo time. Every other melee/ranged/magic attack requires one.
+    // comboOnly attacks inherit range from the lead; every other attack requires one
     if (comboOnly === true) {
       range = optionalPositive('range');
     } else {
@@ -947,11 +921,7 @@ function validateAttack(
     );
   }
 
-  // requireGroundedTarget is an opt-in AoE-only modifier. Reject it on other
-  // types so a typo (e.g. set on a melee swing) fails loudly at boot rather
-  // than silently doing nothing at runtime.
-  // AoE-only modifiers. Each rejects on other types so a typo (e.g. set on a
-  // melee swing) fails loudly at boot rather than silently doing nothing.
+  // rejects AoE-only fields on other types so a typo fails at boot rather than silently no-opping
   const requireAoeOnly = (field: string): void => {
     if (a[field] !== undefined && type !== 'aoe') {
       throw new Error(
@@ -1010,20 +980,14 @@ function validateAttack(
     ] as const);
   }
 
-  // Combo chaining is only meaningful for attacks that complete via the
-  // standard animation-complete → recover path. teleport/dive/aoe/contact
-  // have non-standard completion (phase machines, overlap-driven damage, no
-  // swing) — reject the field on them so a misplaced combo fails loudly at
-  // boot rather than silently no-opping.
+  // combo chaining only valid for melee/ranged/magic (standard complete→recover path)
   if (a.comboNextAnimation !== undefined) {
     if (type !== 'melee' && type !== 'ranged' && type !== 'magic') {
       throw new Error(
         `${ctx}.comboNextAnimation is only valid on type "melee" | "ranged" | "magic" (got type "${type}")`,
       );
     }
-    // Validate the key exists in this entity's animations. Cross-checking that
-    // it names another *attack* in the same pool isn't possible here (we see
-    // one entry at a time); that lookup no-ops safely at runtime if unmatched.
+    // existence-check the anim key; cross-checking vs. the pool is deferred to runtime
     comboNextAnimation = optionalAnimKey(
       ctx,
       'comboNextAnimation',
@@ -1047,9 +1011,6 @@ function validateAttack(
     );
   }
 
-  // comboOnly shares the combo type restriction: chaining only runs on the
-  // animation-complete → recover path that melee/ranged/magic use. Reject it
-  // elsewhere so a misplaced flag fails loudly at boot.
   if (comboOnly !== undefined && type !== 'melee' && type !== 'ranged' && type !== 'magic') {
     throw new Error(
       `${ctx}.comboOnly is only valid on type "melee" | "ranged" | "magic" (got type "${type}")`,
@@ -1062,8 +1023,6 @@ function validateAttack(
     );
   }
 
-  // Summon fields are summon-only — reject on other types so a typo (e.g.
-  // summonKinds on a melee swing) fails at boot rather than silently no-opping.
   if (type !== 'summon') {
     for (const field of ['summonKinds', 'summonCount', 'summonMaxAlive'] as const) {
       if (a[field] !== undefined) {
@@ -1141,9 +1100,7 @@ function validateAttack(
   };
 }
 
-// Shared helpers for animation-key validation. Hoisted out of validateBehavior/
-// validateAttack so both can throw consistent errors that name the offending
-// field with its full ctx path and list the available keys.
+// check that an anim key string exists in this entity's animations map; throws with the available keys on miss
 function requireAnimKeyExists(
   ctx: string,
   field: string,
@@ -1163,6 +1120,7 @@ function requireAnimKeyExists(
   return animKey;
 }
 
+// undefined when absent, otherwise the same existence-checked key as requireAnimKeyExists
 function optionalAnimKey(
   ctx: string,
   field: string,
@@ -1173,6 +1131,7 @@ function optionalAnimKey(
   return requireAnimKeyExists(ctx, field, animKey, animations);
 }
 
+// validate one animation spec: file, frameWidth/Height/Count, loops (defaults true), optional anchor/scale
 function validateAnim(
   identifier: string,
   animKey: string,
@@ -1193,6 +1152,7 @@ function validateAnim(
   };
 }
 
+// runs at module load; a bad entry throws and fails the whole boot loudly
 const PARSED_ENTRIES: ReadonlyArray<ParsedEntry> = (() => {
   const raw = entityRegistryRaw as Record<string, unknown>;
   const out: ParsedEntry[] = [];
@@ -1202,34 +1162,38 @@ const PARSED_ENTRIES: ReadonlyArray<ParsedEntry> = (() => {
   return out;
 })();
 
+// frozen identifier → config lookup table
 const REGISTRY: EntityRegistry = Object.freeze(
   Object.fromEntries(PARSED_ENTRIES.map((e) => [e.identifier, e.config])),
 );
 
+// validated config for an identifier, or null if unknown
 export function getEntityRegistryEntry(
   identifier: string,
 ): AnimatedEntityConfig | null {
   return REGISTRY[identifier] ?? null;
 }
 
+// behavior block for an identifier, or null if unknown or trap/passive
 export function getEntityBehavior(
   identifier: string,
 ): AnimatedEntityBehaviorConfig | null {
   return REGISTRY[identifier]?.behavior ?? null;
 }
 
+// trap block for an identifier, or null if unknown or an enemy
 export function getEntityTrap(
   identifier: string,
 ): AnimatedEntityTrapConfig | null {
   return REGISTRY[identifier]?.trap ?? null;
 }
 
+// all validated entries in registry-JSON order
 export function listEntityRegistryEntries(): ReadonlyArray<ParsedEntry> {
   return PARSED_ENTRIES;
 }
 
-// Phaser texture and animation key for a given (identifier, animKey).
-// Namespaced under `entity_` so it cannot collide with player keys.
+// full Phaser anim key for a given (identifier, animKey), namespaced to avoid player key collisions
 export function entityAnimFullKey(
   identifier: string,
   animKey: string,
@@ -1237,8 +1201,7 @@ export function entityAnimFullKey(
   return `${ENTITY_KEY_PREFIX}_${identifier}_${animKey}`;
 }
 
-// Lookup the registry anim config behind a full key. Used by getSpriteAnchor
-// to resolve entity anims uniformly alongside player anims.
+// reverse map from full key to anim config, used by getSpriteAnchor
 const ANIM_BY_FULL_KEY: ReadonlyMap<string, AnimatedEntityAnimConfig> = (() => {
   const map = new Map<string, AnimatedEntityAnimConfig>();
   for (const { identifier, config } of PARSED_ENTRIES) {
@@ -1249,12 +1212,14 @@ const ANIM_BY_FULL_KEY: ReadonlyMap<string, AnimatedEntityAnimConfig> = (() => {
   return map;
 })();
 
+// anim config behind a full entity key, or undefined if none
 export function getEntityAnimByFullKey(
   fullKey: string,
 ): AnimatedEntityAnimConfig | undefined {
   return ANIM_BY_FULL_KEY.get(fullKey);
 }
 
+// true when the full key is in the entity namespace (vs a player key)
 export function isEntityAnimFullKey(fullKey: string): boolean {
   return fullKey.startsWith(`${ENTITY_KEY_PREFIX}_`);
 }

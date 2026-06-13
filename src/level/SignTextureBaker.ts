@@ -1,27 +1,38 @@
 import Phaser from 'phaser';
 import { tilesetTextureKey } from './TilesetRegistry';
 
+/**
+ * SignTextureBaker — splits a lit-decoration tile into a static "structure" layer
+ * and an animatable "lit" layer.
+ *
+ * For each registered decoration identifier, bakeSignTextures crops its source
+ * tile and partitions every pixel by a per-identifier color filter: lit pixels
+ * (the neon letters/window dots) into one texture, everything else into a sibling
+ * "structure" texture. LevelRenderer then draws the structure at constant alpha
+ * and the lit texture on top with a flicker/pulsate alpha, so the colored part
+ * turns on/off without disturbing the static frame. Despite the "Sign" name (the
+ * original use case), the registry covers any lit decoration — neon signs and the
+ * teal house-window dots alike. Bakes are cached and shared across all instances
+ * of an identifier.
+ *
+ * Inputs:  a scene (for its texture cache), a loaded tileset texture, a tile
+ *          source rect, and the decoration identifier (selects the lit filter).
+ * Outputs: two canvas textures registered in the scene cache; the LitConfig
+ *          (filter + animation mode) consumed by the renderer.
+ * @calledby the level renderer, when first rendering a lit decoration.
+ * @calls    the canvas 2D context for pixel read/partition and the scene texture cache.
+ */
+
 type ColorFilter = (r: number, g: number, b: number, a: number) => boolean;
 
-// Pixel-level filters identifying which pixels of each sign tile are "lit"
-// (the neon-colored letters/icons). Pixels failing the filter are considered
-// "structure" (frame, background, mounting hardware) and stay rendered at
-// constant alpha. The blue filter accepts cyan/teal as well as pure blue —
-// the city tileset's neon highlight is actually teal RGB(126,191,198), where
-// G and B are nearly equal — so requiring b > g + N would reject it. We
-// still require b >= g so green-dominant aquas don't sneak in, plus b > r + 30
-// to keep grays and warm mid-tones out of the lit set.
+// Pixel filters for lit pixels. The blue filter accepts teal (the city tileset's neon is teal, not pure blue)
+// while still excluding green-dominant aquas (b >= g) and warm mid-tones (b > r + 30).
 const BLUE_LIT_FILTER: ColorFilter = (r, g, b, a) =>
   a > 0 && b > r + 30 && b >= g && b > 80;
 const RED_LIT_FILTER: ColorFilter = (r, g, b, a) =>
   a > 0 && r > g + 30 && r > b + 30 && r > 80;
 
-// Animation style for a lit decoration's overlay. 'flicker' is the abrupt
-// burst-style on/off tween used by neon signs (see SIGN_FLICKER_* constants
-// + startSignFlicker). 'pulsate' is a smooth sine-eased yoyo between dim
-// and bright, used for the slow breathing house-window dots (see
-// SIGN_PULSATE_* constants + startSignPulsate). LevelRenderer routes on
-// this field after baking the structure/lit pair.
+// Animation style for the lit overlay: 'flicker' for neon burst-style, 'pulsate' for slow house-window breathing.
 export type LitMode = 'flicker' | 'pulsate';
 
 interface LitConfig {
@@ -29,13 +40,7 @@ interface LitConfig {
   readonly mode: LitMode;
 }
 
-// Per-identifier lit config. Despite the "SIGN" name on this file (kept
-// from the original use case), this map covers any decoration entity with
-// a lit element — neon signs flicker abruptly, the small teal window dots
-// on House2..House5 pulsate slowly. Adding a new lit decoration is one
-// entry plus, if its lit color differs, a matching filter constant above.
-// The presence of an identifier in this map is what LevelRenderer keys on
-// to enable the structure-plus-lit rendering branch — see getLitConfig.
+// Lit configs for all animated decorations; add an entry + filter here to wire up a new lit decoration.
 const LIT_CONFIGS: Readonly<Record<string, LitConfig>> = {
   Sign1: { filter: BLUE_LIT_FILTER, mode: 'flicker' },
   Sign2: { filter: BLUE_LIT_FILTER, mode: 'flicker' },
@@ -46,6 +51,7 @@ const LIT_CONFIGS: Readonly<Record<string, LitConfig>> = {
   House5: { filter: BLUE_LIT_FILTER, mode: 'pulsate' },
 };
 
+// Lit config (filter + animation mode) for an identifier, or null if it has none.
 export function getLitConfig(identifier: string): LitConfig | null {
   return LIT_CONFIGS[identifier] ?? null;
 }
@@ -55,19 +61,7 @@ export interface SignTextureKeys {
   litKey: string;
 }
 
-// Bakes two sibling textures from a sign's source tile rect: one containing
-// only "structure" pixels (transparent where the lit pixels were) and one
-// containing only "lit" pixels. LevelRenderer composes them by drawing the
-// structure at constant alpha and the lit texture on top with a flickering
-// alpha, so the colored portion can turn on/off without affecting the static
-// sign frame.
-//
-// Cached by identifier — all instances of Sign1 share one structure/lit pair,
-// so a level with N signs of the same identifier still costs a single bake.
-// Returns null if the identifier has no filter, the source texture isn't
-// loaded, or the canvas context couldn't be acquired (offscreen/headless
-// environments). Idempotent: repeat calls return the existing keys without
-// re-baking.
+// Bakes the structure/lit texture pair for one decoration; cached by identifier so all instances share one bake.
 export function bakeSignTextures(
   scene: Phaser.Scene,
   tilesetUid: number,
@@ -93,9 +87,6 @@ export function bakeSignTextures(
   const sourceKey = tilesetTextureKey(tilesetUid);
   if (!scene.textures.exists(sourceKey)) return null;
   const sourceTexture = scene.textures.get(sourceKey);
-  // getSourceImage returns whatever backed the load — <img> for PNGs through
-  // Phaser's loader, <canvas> in some HMR paths. Both are valid drawImage
-  // sources.
   const srcImg = sourceTexture.getSourceImage() as
     | HTMLImageElement
     | HTMLCanvasElement;
@@ -105,9 +96,7 @@ export function bakeSignTextures(
   readCanvas.height = srcH;
   const readCtx = readCanvas.getContext('2d');
   if (!readCtx) return null;
-  // Source-rect crop into a srcW×srcH canvas so pixel indices below align
-  // 1:1 with output canvas coordinates regardless of the tile's position
-  // within the parent tileset.
+  // Crop the source rect so pixel indices align 1:1 with the output canvases.
   readCtx.drawImage(srcImg, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
   const sourceData = readCtx.getImageData(0, 0, srcW, srcH);
   const src = sourceData.data;
@@ -127,11 +116,7 @@ export function bakeSignTextures(
   const structureData = structureCtx.createImageData(srcW, srcH);
   const litData = litCtx.createImageData(srcW, srcH);
 
-  // Partition every source pixel into exactly one of the two outputs. Pixels
-  // matching the filter land in the lit canvas; everything else (including
-  // fully-transparent source pixels) lands in the structure canvas — but
-  // createImageData's default is transparent black, so transparent source
-  // pixels stay transparent in both outputs without an explicit copy.
+  // Partition each pixel into lit or structure; transparent pixels need no explicit copy (createImageData zeroes the buffer).
   for (let i = 0; i < src.length; i += 4) {
     const r = src[i];
     const g = src[i + 1];

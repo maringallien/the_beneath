@@ -1,17 +1,3 @@
-// Platformer navigation graph built from the LDtk IntGrid collision. Nodes are
-// "standable" tile cells (an empty cell with a floor below and body headroom);
-// edges are the moves a grounded enemy can make between them — WALK (same-row or
-// a one-tile step, cross-level aware) and JUMP (ballistic arcs found by the same
-// physics probe the live enemy uses, so a planned jump is always one the body can
-// land). A* (NavPathfinder) searches this graph; the enemy then follows the node
-// path with its existing hop/leap/mount locomotion.
-//
-// Build strategy: the NODE pass is eager and cheap (a few O(1) csv lookups per
-// cell across every level). EDGES are computed lazily per node and memoized, so
-// the expensive ballistic edge probing is paid only for nodes A* actually
-// expands, and cross-level walk edges work because every node already exists
-// before any edge is computed.
-
 import { GRAVITY_Y, PLAYER_JUMP_VELOCITY, PLAYER_RUN_SPEED } from '../constants';
 import {
   type ArcContext,
@@ -20,6 +6,29 @@ import {
   TILE_PX,
   collectLeapLandings,
 } from './navProbe';
+
+/**
+ * NavGraph — platformer navigation graph built from the LDtk IntGrid collision.
+ *
+ * Nodes are "standable" tile cells (an empty cell with a floor below and body
+ * headroom); edges are the moves a grounded enemy can make between them — WALK
+ * (same-row or a one-tile step, cross-level aware) and JUMP (ballistic arcs found
+ * by the same physics probe the live enemy uses, so a planned jump is always one
+ * the body can land). A* (NavPathfinder) searches this graph; the enemy then
+ * follows the node path with its existing hop/leap/mount locomotion.
+ *
+ * Build strategy: the NODE pass is eager and cheap (a few O(1) csv lookups per
+ * cell across every level). EDGES are computed lazily per node and memoized, so
+ * the expensive ballistic edge probing is paid only for nodes A* actually
+ * expands, and cross-level walk edges work because every node already exists
+ * before any edge is computed.
+ *
+ * Inputs:  one collision grid (positioned in world space) per LDtk level.
+ * Outputs: nodes, lazily-built outgoing edges, and a world-point → node snap —
+ *          read-only data for the pathfinder; mutates only its own caches.
+ * @calledby the navigation layer at level load, then the A* search per expansion.
+ * @calls    the Phaser-free ballistic probe for jump edges; no engine access.
+ */
 
 // One LDtk level's collision grid, positioned in world space.
 export interface NavLevel {
@@ -43,32 +52,22 @@ export interface NavEdge {
   readonly kind: 'walk' | 'jump';
 }
 
-// Canonical body the graph is built for. The executing enemy re-validates every
-// jump with its OWN body via Enemy.findLeapLanding, so this only needs to be a
-// reasonable representative — a slightly-off body just means the occasional
-// waypoint the real enemy re-solves locally or falls back from.
+// Representative body for graph-edge planning; the executing enemy re-validates each jump with its own body anyway.
 const NAV_BODY_W = 14;
 const NAV_BODY_H = 26;
-// Jump edges cost more than the equivalent-distance walk, so A* prefers walking
-// and only routes a jump when it genuinely shortcuts the path.
+// Jump edges cost more than walking so A* only routes a jump when it genuinely shortcuts the path.
 const NAV_JUMP_COST_MULT = 2.5;
-// Horizontal launch speed used when probing jump arcs for edges — matches the
-// enemy's leap-speed floor (ENEMY_LEAP_HORIZONTAL_SPEED = PLAYER_RUN_SPEED).
+// Horizontal launch speed for jump-edge probing; matches the enemy's leap-speed floor.
 const NAV_LEAP_VX = PLAYER_RUN_SPEED;
-// Radius (tiles) nodeAt() searches outward when an arbitrary world point (an
-// enemy or the player mid-air / off-grid) doesn't sit exactly on a node cell.
+// Tile radius nodeAt() searches outward when the world point doesn't sit on a node cell.
 const NAV_SNAP_RADIUS_TILES = 3;
 
-// World grid coords pack into one number; ±32768 covers a ~0.5M px world / 16.
+// Packs world grid coords into one number; ±32768 offset covers a ~0.5M px world.
 function packCell(gx: number, gy: number): number {
   return (gx + 32768) * 65536 + (gy + 32768);
 }
 
-// A level-local solidity predicate straight off the IntGrid csv — O(1), no
-// per-call scan of every collision layer. Out-of-level samples read as empty,
-// which also confines ballistic arcs to their launching level (cross-level
-// travel is walk-only, matching the live enemy whose arc is clamped to its
-// current level bounds).
+// Builds a solidity predicate for one level's IntGrid csv; out-of-level samples return false so arcs stay within the level.
 function makeLevelSolid(lvl: NavLevel): SolidAt {
   const { worldX, worldY, cWid, cHei, gridSize, csv } = lvl;
   return (x: number, y: number): boolean => {
@@ -88,6 +87,7 @@ export class NavGraph {
   private readonly levelBounds: LevelBounds[] = [];
   private builtNodes = false;
 
+  // Precomputes level bounds and solidity predicates; nodes/edges build lazily on first query.
   constructor(private readonly levels: ReadonlyArray<NavLevel>) {
     for (const lvl of levels) {
       this.levelBounds.push({
@@ -100,7 +100,7 @@ export class NavGraph {
     }
   }
 
-  // Eager, cheap pass: register a node for every standable cell across all levels.
+  // Eager pass registering a node for every standable cell across all levels; idempotent.
   buildNodes(): void {
     if (this.builtNodes) return;
     this.builtNodes = true;
@@ -127,8 +127,7 @@ export class NavGraph {
     }
   }
 
-  // A cell is standable when it's empty, has a solid floor directly below, and
-  // has clear headroom for the canonical body.
+  // True if the cell is empty, has a solid floor one tile below, and has clear headroom for the body.
   private standable(solid: SolidAt, wx: number, wy: number): boolean {
     if (solid(wx, wy)) return false;
     if (!solid(wx, wy + TILE_PX)) return false;
@@ -138,21 +137,24 @@ export class NavGraph {
     return true;
   }
 
+  // Total standable node count (builds the node pass on first call).
   nodeCount(): number {
     this.buildNodes();
     return this.nodes.length;
   }
 
+  // The node with this id (assumes a valid, already-built id).
   node(id: number): NavNode {
     return this.nodes[id];
   }
 
+  // All nodes (builds the node pass on first call).
   getNodes(): ReadonlyArray<NavNode> {
     this.buildNodes();
     return this.nodes;
   }
 
-  // Lazily compute + memoize a node's outgoing edges.
+  // Returns a node's outgoing edges, computing and caching them on the first request.
   getEdges(id: number): ReadonlyArray<NavEdge> {
     const cached = this.edgeCache[id];
     if (cached) return cached;
@@ -161,6 +163,7 @@ export class NavGraph {
     return edges;
   }
 
+  // Computes walk edges to adjacent cells and jump edges to all reachable ballistic landings.
   private computeEdges(id: number): NavEdge[] {
     const node = this.nodes[id];
     const li = this.nodeLevel[id];
@@ -169,9 +172,7 @@ export class NavGraph {
     const gx = Math.floor(node.x / TILE_PX);
     const gyFoot = Math.floor((node.y - TILE_PX / 2) / TILE_PX);
 
-    // Walk edges: a neighbor node one cell left/right on the same row or a single
-    // step up/down. cellToNode spans every level, so a node at a level's edge
-    // links to the adjacent level's border node automatically.
+    // Walk edges: neighbors one cell left/right on the same row or a step up/down; cross-level automatically.
     for (const ndir of [-1, 1] as const) {
       for (const dgy of [0, -1, 1] as const) {
         const to = this.cellToNode.get(packCell(gx + ndir, gyFoot + dgy));
@@ -183,8 +184,7 @@ export class NavGraph {
       }
     }
 
-    // Jump edges: every distinct ballistic landing off each side, found with the
-    // same arc physics the live enemy executes (level-local solidity + bounds).
+    // Jump edges: all distinct ballistic landings off each side using level-local solidity.
     const ctx: ArcContext = {
       solidAt: this.levelSolid[li],
       bounds: this.levelBounds[li],
@@ -218,6 +218,7 @@ export class NavGraph {
     return edges;
   }
 
+  // Node for a landing foot point (nudges y up half a tile to find the cell), or undefined if none.
   private nodeForFoot(footX: number, footY: number): number | undefined {
     return this.cellToNode.get(
       packCell(
@@ -227,9 +228,7 @@ export class NavGraph {
     );
   }
 
-  // Snap an arbitrary world point (an enemy's or the player's foot) to the nearest
-  // standable node, searching the foot cell first then expanding ring by ring.
-  // Returns -1 when nothing standable is within NAV_SNAP_RADIUS_TILES.
+  // Snaps a world point to the nearest standable node, searching outward ring by ring; returns -1 if none found.
   nodeAt(worldX: number, worldY: number): number {
     this.buildNodes();
     const gx0 = Math.floor(worldX / TILE_PX);

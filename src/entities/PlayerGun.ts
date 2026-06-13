@@ -11,14 +11,26 @@ import {
   getSpriteAnchor,
 } from '../sprites/characterLoader';
 
-// Gun overlay sprite layered on top of the player body during gunslinger
-// modes. Holds no physics body — purely visual. Position and rotation are
-// driven by the owning Player each frame; visibility is toggled based on
-// whether the body's currently-playing animation came from the no_gun
-// registry (gun visible) or the baked-gun registry (gun hidden).
+/**
+ * PlayerGun — the gun overlay sprite layered on the player body in gunslinger modes.
+ *
+ * Purely visual: no physics body. The owning Player drives its position and
+ * rotation every frame and toggles its visibility (shown when the body plays a
+ * no_gun animation, hidden when the body plays a baked-gun animation). It owns
+ * the grip-pivot convention — rotation pivots on the gun's grip pixel, not its
+ * center, and the sprite mirrors vertically in the left aim half-plane so the
+ * trigger always points down. Renders one depth above the player body.
+ *
+ * Inputs:  scene, spawn x/y, the gunslinger mode (which spritesheet); per-frame
+ *          owner position/facing/scale and the cursor world position.
+ * Outputs: a rotated, depth-sorted overlay sprite tracking the player's hand.
+ * @calledby the player entity, when it enters a gunslinger mode and each frame after.
+ * @calls    the gun-overlay anim-key builder and the per-anim sprite-anchor resolver.
+ */
 export class PlayerGun extends Phaser.GameObjects.Sprite {
   private gunMode: GunslingerProjectileMode;
 
+  // build the overlay sprite for a gunslinger mode; throws if the idle texture is missing
   constructor(
     scene: Phaser.Scene,
     x: number,
@@ -36,12 +48,8 @@ export class PlayerGun extends Phaser.GameObjects.Sprite {
     this.gunMode = mode;
 
     scene.add.existing(this);
-    // Pivot is the grip of the gun, not its center, so rotation looks correct
-    // when tracking the cursor. The grip pixel sits at frame x≈3 within the
-    // 32px overlay; using GUN_OVERLAY_GRIP_ORIGIN_X aligns the rotation pivot
-    // with the visible grip instead of the empty left edge.
+    // pivot on the grip pixel so cursor-tracking rotation looks right
     this.setOrigin(GUN_OVERLAY_GRIP_ORIGIN_X, 0.5);
-    // One above the player so the gun renders on top of the body sprite.
     this.setDepth(ENTITY_DEPTH + 1);
     this.on(
       Phaser.Animations.Events.ANIMATION_START,
@@ -51,20 +59,18 @@ export class PlayerGun extends Phaser.GameObjects.Sprite {
     this.play(idleKey);
   }
 
+  // apply the per-anim display scale on each ANIMATION_START
   private applyOverlayScale(animation: Phaser.Animations.Animation): void {
-    // Gun overlay has no physics body — only the visual scale matters. Body
-    // dims passed to getSpriteAnchor are unused for scale, so 0/0 is fine.
     const { displayScale } = getSpriteAnchor(animation.key, 0, 0);
     this.setScale(displayScale);
   }
 
+  // The gunslinger mode (which spritesheet) this overlay is currently rendering.
   getMode(): GunslingerProjectileMode {
     return this.gunMode;
   }
 
-  // Swap to a different gun (e.g. wheeling from gun1 → gun2). Replays the
-  // current animation kind on the new spritesheet so visual continuity is
-  // preserved across the swap.
+  // swap to a different gun spritesheet; if mid-fire, replays attack1 on the new sheet
   setMode(mode: GunslingerProjectileMode): void {
     if (mode === this.gunMode) return;
     this.gunMode = mode;
@@ -77,17 +83,11 @@ export class PlayerGun extends Phaser.GameObjects.Sprite {
     this.playOverlay(wasFiring ? 'attack1' : 'idle');
   }
 
+  // play idle (ignoreIfPlaying) or attack1 (always restart); durationMs overrides the anim length
   playOverlay(kind: 'idle' | 'attack1', durationMs?: number): void {
     const key = gunOverlayAnimKey(this.gunMode, kind);
-    // Phaser re-starts the anim if `ignoreIfPlaying` is false; pass true for
-    // idle so we don't re-trigger the idle loop every frame the body changes
-    // state. Attack1 is one-shot — always restart it explicitly.
     if (durationMs !== undefined) {
-      // frameRate: null forces Phaser to honor `duration` — without it,
-      // calculateDuration falls back to the anim's stored frameRate and
-      // silently drops the duration override. The cast is required because
-      // Phaser's PlayAnimationConfig types frameRate as `number | undefined`
-      // but the runtime explicitly checks for null to disable the fallback.
+      // frameRate: null forces Phaser to honor `duration` rather than falling back to the stored rate
       const playArgs = {
         key,
         duration: durationMs,
@@ -99,10 +99,7 @@ export class PlayerGun extends Phaser.GameObjects.Sprite {
     }
   }
 
-  // Snap to the player's grip position and rotate to point at the cursor.
-  // ownerFlipX mirrors the pivot offset so the gun stays at the player's
-  // hand regardless of facing. ownerScale scales the source-pixel pivot so
-  // the grip alignment survives any displayScale on the body animation.
+  // snap the overlay to the player's grip and rotate it to aim at the cursor
   syncToOwner(
     ownerX: number,
     ownerY: number,
@@ -119,10 +116,7 @@ export class PlayerGun extends Phaser.GameObjects.Sprite {
     const dx = cursorWorldX - pivotX;
     const dy = cursorWorldY - pivotY;
     const angle = Math.atan2(dy, dx);
-    // When the cursor is on the left half (|angle| > 90°), rotating the
-    // sprite alone would render the gun upside-down (barrel up, trigger
-    // down). Mirror vertically in that case so the trigger always points
-    // toward the ground regardless of aim direction.
+    // mirror vertically when aiming left so the trigger always points toward the ground
     const flipY = Math.abs(angle) > Math.PI / 2;
     this.setFlipY(flipY);
     this.setRotation(angle);

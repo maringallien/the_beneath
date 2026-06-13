@@ -16,6 +16,28 @@ import { buildHudSection } from './manual/sections/hudSection';
 import { buildEnemiesSection } from './manual/sections/enemiesSection';
 import { buildItemsSection } from './manual/sections/itemsSection';
 
+/**
+ * ManualOverlay — the DOM "How to Play" manual shown over the pause menu.
+ *
+ * The expanded form of the old options panel: the same in-world frame as the
+ * merchant shop (.shop-overlay backdrop + .shop-window grey 9-slice panel) and
+ * the same music toggle, fronted by a tab bar (Basics / Controls / Combat / HUD
+ * / Enemies / Items). Each tab's section is built once up front; the Combat tab
+ * embeds looping sprite-master attack animations (AnimatedSpritePreview), and
+ * only the visible tab's previews animate (the rest are paused). The full-
+ * viewport backdrop intercepts mouse events so the pause buttons underneath
+ * stay unclickable, and while open PauseScene disables its own Phaser keyboard
+ * so the two layers never both react to a key — this overlay owns ESC/M plus
+ * tab navigation through a window-level capture listener.
+ *
+ * Inputs:  the parent DOM host, the Phaser scene (for building previews), the
+ *          music volume preference, and keyboard/mouse while open.
+ * Outputs: the manual DOM tree; live music-volume writes; fires the caller's
+ *          onClose when it finishes closing.
+ * @calledby the pause menu, when the player opens the manual from the pause UI.
+ * @calls    the per-tab section builders, the sprite-preview controllers, and the
+ *           shared music-volume audio controls.
+ */
 interface TabDef {
   readonly id: string;
   readonly label: string;
@@ -32,8 +54,7 @@ const TABS: ReadonlyArray<TabDef> = [
 ];
 
 interface OpenOptions {
-  // Invoked once the overlay finishes closing (ESC, backdrop click, or
-  // programmatic close). PauseScene uses this to re-enable its own keyboard.
+  // Called once the panel closes so PauseScene can re-enable its own keyboard.
   readonly onClose: () => void;
 }
 
@@ -43,17 +64,6 @@ interface BuiltTab {
   readonly button: HTMLButtonElement;
 }
 
-// DOM-based "How to Play" manual shown over the pause menu — the expanded form of
-// the old options panel. Same in-world frame as the merchant shop (.shop-overlay
-// backdrop + .shop-window grey 9-slice panel) and the same music toggle, now with
-// a tab bar: Basics / Controls / Combat / HUD / Enemies / Items. The Combat tab
-// embeds looping sprite-master attack animations (AnimatedSpritePreview); only
-// the visible tab's previews animate.
-//
-// Input: while open, PauseScene disables its Phaser keyboard so the two layers
-// never both react to a key. This overlay owns its keys via a window-level
-// capture listener (ESC/M plus tab navigation), and the full-viewport backdrop
-// intercepts mouse events so the pause buttons underneath can't be clicked.
 export class ManualOverlay extends DomOverlay {
   private readonly scene: Phaser.Scene;
 
@@ -69,6 +79,7 @@ export class ManualOverlay extends DomOverlay {
     this.scene = scene;
   }
 
+  // Opens the manual; no-op if already open.
   open(options: OpenOptions): void {
     if (this.isOpen()) return;
     this.openShell(options.onClose);
@@ -76,6 +87,7 @@ export class ManualOverlay extends DomOverlay {
     this.attachKeyboard();
   }
 
+  // Stops all tab sprite-preview rAF loops and clears element refs.
   protected onTeardown(): void {
     for (const tab of this.builtTabs) {
       for (const preview of tab.section.previews) preview.destroy();
@@ -87,6 +99,7 @@ export class ManualOverlay extends DomOverlay {
     this.activeIndex = 0;
   }
 
+  // Assembles the full window (header, tabs, content, footer), mounts it, and selects the first tab.
   private buildDom(): void {
     const { overlay, win } = this.createBackdrop('shop-window manual-window');
 
@@ -101,6 +114,7 @@ export class ManualOverlay extends DomOverlay {
     this.setActiveTab(0);
   }
 
+  // Header row: the "How to Play" title plus the music volume control on the right.
   private buildHeader(): HTMLDivElement {
     const header = document.createElement('div');
     header.className = 'options-header manual-header';
@@ -114,10 +128,7 @@ export class ManualOverlay extends DomOverlay {
     return header;
   }
 
-  // Music volume bar in the header's right slot (where the shop shows the coin
-  // balance): a speaker icon that toggles mute on click, plus a range slider
-  // bound to the music volume preference. The MusicPlayer follows the slider
-  // live; ambience and SFX are unaffected.
+  // Builds the speaker-icon mute button + range slider for music volume; MusicPlayer follows the slider live.
   private buildVolumeControl(): HTMLDivElement {
     const wrap = document.createElement('div');
     wrap.className = 'options-volume';
@@ -139,8 +150,7 @@ export class ManualOverlay extends DomOverlay {
     slider.max = '100';
     slider.step = '1';
     slider.className = 'options-volume-slider';
-    // `input` fires continuously while dragging, so the music level tracks the
-    // bar in real time.
+    // `input` fires continuously while dragging so volume tracks the bar in real time.
     slider.addEventListener('input', () => {
       setMusicVolume(slider.valueAsNumber / 100);
       this.syncVolumeUI();
@@ -154,6 +164,7 @@ export class ManualOverlay extends DomOverlay {
     return wrap;
   }
 
+  // Builds the tab bar and, in the same pass, the section body behind each tab.
   private buildTabBar(): HTMLDivElement {
     const bar = document.createElement('div');
     bar.className = 'manual-tabs';
@@ -175,6 +186,7 @@ export class ManualOverlay extends DomOverlay {
     return bar;
   }
 
+  // Scrollable content host: stacks every section hidden (setActiveTab reveals one).
   private buildContent(): HTMLDivElement {
     const host = document.createElement('div');
     host.className = 'manual-content';
@@ -188,6 +200,7 @@ export class ManualOverlay extends DomOverlay {
     return host;
   }
 
+  // Footer row of keyboard hints (Tabs / Mute / Close), each as kbd glyphs + label.
   private buildFooter(): HTMLDivElement {
     const footer = document.createElement('div');
     footer.className = 'options-footer manual-footer';
@@ -217,8 +230,7 @@ export class ManualOverlay extends DomOverlay {
     return footer;
   }
 
-  // Switches the visible tab: hides + pauses the previous section's previews and
-  // shows + starts the new one's, so only the active tab animates.
+  // Switches to the given tab: stops the previous tab's previews, starts the new one's, resets scroll.
   private setActiveTab(index: number): void {
     if (index < 0 || index >= this.builtTabs.length) return;
     const previous = this.builtTabs[this.activeIndex];
@@ -237,21 +249,19 @@ export class ManualOverlay extends DomOverlay {
     this.activeIndex = index;
   }
 
+  // Steps the active tab by delta with wrap-around (delta +1 / -1 from arrow keys).
   private cycleTab(delta: number): void {
     const count = this.builtTabs.length;
     this.setActiveTab((this.activeIndex + delta + count) % count);
   }
 
-  // Mirrors the current music volume into the slider, the speaker icon (on vs
-  // muted), the fill amount, and the accessibility labels. Called after every
-  // local change (drag, mute click, M key) so all three stay in lockstep.
+  // Syncs slider value, speaker icon, filled track, and a11y labels to the current music volume.
   private syncVolumeUI(): void {
     if (!this.volumeIconEl || !this.volumeSliderEl) return;
     const volume = getMusicVolume();
     const muted = volume <= 0;
     const pct = Math.round(volume * 100);
-    // Avoid clobbering the value the user is actively dragging (already equal).
-    if (this.volumeSliderEl.valueAsNumber !== pct) {
+    if (this.volumeSliderEl.valueAsNumber !== pct) { // avoid clobbering a value the user is actively dragging
       this.volumeSliderEl.value = String(pct);
     }
     this.volumeIconEl.src = muted
@@ -262,16 +272,12 @@ export class ManualOverlay extends DomOverlay {
     this.volumeSliderEl.setAttribute('aria-label', label);
     this.volumeSliderEl.setAttribute('aria-valuetext', muted ? 'Muted' : `${pct}%`);
     this.volumeSliderEl.classList.toggle('options-volume-slider--muted', muted);
-    // Drives the filled portion of the track left of the thumb (see options.css).
-    this.volumeSliderEl.style.setProperty('--volume-fill', `${pct}%`);
+    this.volumeSliderEl.style.setProperty('--volume-fill', `${pct}%`); // drives the filled track portion (see options.css)
   }
 
-  // stopPropagation keeps keys from also reaching Phaser. PauseScene disables
-  // its own keyboard while open, so this is the only active handler.
+  // ESC closes, M mutes, ←/→ cycle tabs, digit 1–N jumps to that tab; slider focus gets all keys except ESC.
   protected onKeydown(e: KeyboardEvent): void {
-    // When the volume slider has focus, let it own arrow / Home / End / digit
-    // keys for fine-tuning (otherwise the panel would hijack arrows for tab
-    // navigation). ESC still falls through so the panel always closes.
+    // Let the slider handle its own arrow/digit keys while focused, except ESC.
     if (e.target === this.volumeSliderEl && e.key !== 'Escape') {
       return;
     }
@@ -299,7 +305,6 @@ export class ManualOverlay extends DomOverlay {
         this.cycleTab(-1);
         break;
       default: {
-        // Number keys 1..N jump straight to a tab.
         const digit = Number.parseInt(e.key, 10);
         if (!Number.isNaN(digit) && digit >= 1 && digit <= TABS.length) {
           e.preventDefault();

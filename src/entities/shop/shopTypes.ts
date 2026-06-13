@@ -20,21 +20,28 @@ import {
 import { upgradeId, type UpgradeType } from '../../state/runProgress';
 import type { PickupKind } from '../Player';
 
-// Which merchant the buyer is interacting with. Drives both the inventory
-// selection (TECH_SHOP_ITEMS vs MUSHROOM_SHOP_ITEMS) and the title shown in
-// ShopScene.
+/**
+ * shopTypes — the shop item model and per-merchant inventory assembly.
+ *
+ * Defines the ShopItem discriminated union (a repeatable 'resource' restock vs a
+ * one-time 'upgrade') and builds the inventory a given merchant offers in a given
+ * level. The two fixed restock tables are static; capacity upgrades are appended
+ * only at the three upgrade levels — a level is matched against AMMO_/MAGIC_
+ * UPGRADE_LEVELS, and that array index doubles as the tier index into the
+ * parallel price/step constants, so the tables must stay index-aligned.
+ *
+ * Inputs:  the shop/pricing constants, runProgress upgrade-id helper, and a
+ *          merchant kind + current level id at call time.
+ * Outputs: shop item descriptors and the assembled per-merchant inventory array;
+ *          a window title string.
+ * @calledby the shop UI/scene, when opening a merchant and rendering its stock.
+ * @calls    the upgrade-id helper and the shop pricing/step constants only.
+ */
+
+// which merchant is open — drives inventory selection and the window title
 export type ShopKind = 'tech' | 'mushroom';
 
-// Shop line items come in two shapes, discriminated by `kind`:
-//  - 'resource': a repeatable restock (ammo, orbs, heal kits). `pickupKind` +
-//    `grantAmount` route through Player.addPickup so the granting logic (and
-//    the per-kind clamp at the current max) lives in one place.
-//  - 'upgrade': a one-time capacity upgrade that permanently raises a carry
-//    cap. Identified by a per-shop `id` (see upgradeId) recorded in runProgress;
-//    buying it raises Player.getMax* rather than granting a countable resource,
-//    and a shop refuses to re-sell its own upgrade once owned.
-// `iconTextureKey` + optional `iconFrame` mirror the HUD wiring so the shop
-// visually matches the player's existing UI.
+// 'resource' = repeatable restock routed through Player.addPickup; 'upgrade' = one-time capacity raise recorded in runProgress
 interface ShopItemBase {
   readonly id: string;
   readonly price: number;
@@ -52,19 +59,17 @@ export interface ResourceShopItem extends ShopItemBase {
 export interface UpgradeShopItem extends ShopItemBase {
   readonly kind: 'upgrade';
   readonly upgradeType: UpgradeType;
-  // Short line under the label describing the cap increase ("+6 pistol / +4
-  // shotgun max"). Resource items derive their detail from grantAmount instead.
+  // cap increase description shown under the label (e.g. "+6 pistol / +4 shotgun max")
   readonly detail: string;
 }
 
 export type ShopItem = ResourceShopItem | UpgradeShopItem;
 
-// hud_ammo spritesheet frame indices borrowed from PlayerHud (kept in sync
-// with PlayerHud's GUN1_ICON_FRAME / GUN2_ICON_FRAME). Hard-coded here to
-// avoid widening PlayerHud's public surface for a single-row HUD detail.
+// hud_ammo frame indices mirroring PlayerHud's; hard-coded to avoid widening that class's public surface
 const HUD_AMMO_GUN1_FRAME = 0;
 const HUD_AMMO_GUN2_FRAME = 12;
 
+// Fixed restock stock at every tech shop: pistol and shotgun ammo packs.
 const TECH_SHOP_ITEMS: ReadonlyArray<ResourceShopItem> = [
   {
     kind: 'resource',
@@ -88,6 +93,7 @@ const TECH_SHOP_ITEMS: ReadonlyArray<ResourceShopItem> = [
   },
 ];
 
+// Fixed restock stock at every mushroom merchant: a mana crystal and a med kit.
 const MUSHROOM_SHOP_ITEMS: ReadonlyArray<ResourceShopItem> = [
   {
     kind: 'resource',
@@ -109,9 +115,7 @@ const MUSHROOM_SHOP_ITEMS: ReadonlyArray<ResourceShopItem> = [
   },
 ];
 
-// The tech shop's Ammo Storage upgrade for the level at `tierIndex` (its index
-// in AMMO_UPGRADE_LEVELS, which also picks the price). One purchase widens both
-// gun caps, so the detail names both increments.
+// builds the "Ammo Storage" upgrade descriptor for the tech shop at this level/tier
 function ammoUpgradeItem(levelId: string, tierIndex: number): UpgradeShopItem {
   return {
     kind: 'upgrade',
@@ -125,7 +129,7 @@ function ammoUpgradeItem(levelId: string, tierIndex: number): UpgradeShopItem {
   };
 }
 
-// The mushroom merchant's Orb Pouch upgrade for the level at `tierIndex`.
+// builds the "Crystal Pouch" upgrade descriptor for the mushroom merchant at this level/tier
 function magicUpgradeItem(levelId: string, tierIndex: number): UpgradeShopItem {
   return {
     kind: 'upgrade',
@@ -138,8 +142,7 @@ function magicUpgradeItem(levelId: string, tierIndex: number): UpgradeShopItem {
   };
 }
 
-// The capacity upgrade this shop kind sells in `levelId`, or null when the
-// level's merchant of that kind sells no upgrade (every level but 23/21/16).
+// returns the capacity upgrade for this merchant/level, or null if none applies
 function upgradeItemFor(
   kind: ShopKind,
   levelId: string | null,
@@ -158,11 +161,7 @@ export function shopTitleFor(kind: ShopKind): string {
   return kind === 'tech' ? 'TECH SHOP' : 'MUSHROOM MERCHANT';
 }
 
-// Inventory for a shop: the kind's standard restock items, plus this level's
-// capacity upgrade if its merchant sells one. `levelId` is the LDtk identifier
-// of the level the player is standing in (GameScene.getCurrentLevelId), which
-// uniquely identifies the merchant since each upgrade level holds one tech shop
-// and one mushroom merchant.
+// assembles the merchant's full stock: fixed restocks plus the level's upgrade if one exists
 export function shopItemsFor(
   kind: ShopKind,
   levelId: string | null,

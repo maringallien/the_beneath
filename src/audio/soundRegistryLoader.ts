@@ -13,12 +13,42 @@ import type {
   WalkSoundSurface,
 } from './soundRegistryTypes';
 
+/**
+ * soundRegistryLoader — validates soundRegistry.json at module load and exposes
+ * the typed lookups the audio layer reads.
+ *
+ * Parses the raw JSON into a frozen SoundRegistry once, at import time, so a
+ * malformed entry fails the boot loudly (with a path-tagged message) instead of
+ * misbehaving at first play. The bulk here is the per-section validators that
+ * enforce the registry contracts the SoundManager relies on — chiefly that every
+ * id referenced by a binding exists in `sounds`, and that each binding shape
+ * carries the spatial / loop properties its playback path requires:
+ *   - entitySounds / movingEntitySounds — referenced sounds must be spatial.
+ *   - entityWalkSounds — spatial AND looping (registered muted, faded by state);
+ *     the JSON form is normalized (string | string[] | {always|ground|bridge})
+ *     into a flat binding array tagged by surface.
+ *   - entitySoundSequences — spatial AND non-looping (the playlist loops by
+ *     advancing on COMPLETE; a per-clip loop would never advance).
+ *   - entityPeriodicSounds — spatial, with maxIntervalMs >= minIntervalMs.
+ * Frozen output makes the registry effectively immutable for every consumer.
+ *
+ * Inputs:  soundRegistry.json (raw, untrusted) and the shared validate.* field
+ *          primitives.
+ * Outputs: the singleton frozen REGISTRY plus the getter functions below.
+ * @calledby preload-time audio setup, and any audio code resolving a sound id,
+ *           level ambience, or an entity/player binding at runtime.
+ * @calls    the shared validation primitives, throwing a path-tagged Error on
+ *           any bad field so the failure names the exact JSON location.
+ */
+
+// the three permitted category values
 const VALID_CATEGORIES: ReadonlySet<SoundCategory> = new Set([
   'ambience',
   'sfx',
   'music',
 ]);
 
+// validates a spatial block: both radii positive, maxRadius > minRadius
 function validateSpatial(ctx: string, raw: unknown): SpatialConfig {
   if (raw == null || typeof raw !== 'object') {
     throw new Error(`${ctx} must be an object with minRadius/maxRadius`);
@@ -34,6 +64,7 @@ function validateSpatial(ctx: string, raw: unknown): SpatialConfig {
   return { minRadius, maxRadius };
 }
 
+// validates one sounds-map entry into a typed SoundDefinition; rate/spatial are optional
 function validateSound(id: string, raw: unknown): SoundDefinition {
   const ctx = `soundRegistry.sounds["${id}"]`;
   const entry = v.requireObject(raw, ctx);
@@ -66,6 +97,7 @@ function validateSound(id: string, raw: unknown): SoundDefinition {
   };
 }
 
+// validates an array of sound id strings against knownIds; error lists known ids to help spot typos
 function validateIdList(
   ctx: string,
   raw: unknown,
@@ -87,6 +119,7 @@ function validateIdList(
   return raw as ReadonlyArray<string>;
 }
 
+// validates one level's ambience override — the id list replaces globalAmbience while the player is inside
 function validateLevelOverride(
   levelId: string,
   raw: unknown,
@@ -104,9 +137,7 @@ function validateLevelOverride(
   return { ambience };
 }
 
-// Slot keys recognized in soundRegistry.playerStateSounds. Kept in sync
-// (manually) with the PlayerSoundSlot union in soundRegistryTypes — adding
-// a slot means a string here AND in the union.
+// keep in sync with PlayerSoundSlot union — adding a slot needs a string here AND in the union
 const PLAYER_SOUND_SLOTS: ReadonlyArray<keyof PlayerStateSounds> = [
   'movement',
   'footstepsGround',
@@ -115,6 +146,7 @@ const PLAYER_SOUND_SLOTS: ReadonlyArray<keyof PlayerStateSounds> = [
   'falling',
 ];
 
+// validates the optional playerStateSounds map; only recognized slots are kept, unrecognized keys silently ignored
 function validatePlayerStateSounds(
   raw: unknown,
   knownIds: ReadonlySet<string>,
@@ -140,6 +172,7 @@ function validatePlayerStateSounds(
   return out;
 }
 
+// validates an entity→sound-ids map; every referenced id must be known and carry a spatial config
 function validateEntitySoundsMap(
   ctx: string,
   raw: unknown,
@@ -181,24 +214,14 @@ function validateEntitySoundsMap(
   return out;
 }
 
-// Walk-sound bindings: one or more spatial looping sound ids per entity
-// identifier, gated by Enemy state (walk/chase only). The JSON value may be:
-//   - a single string (one always-on walk loop),
-//   - an array of strings (layered always-on loops, e.g. a boss with both a
-//     footstep track and an impact track),
-//   - or an object `{ ground?, bridge? }` for surface-gated footsteps where
-//     only the binding matching the IntGrid tile under the enemy's feet fades
-//     in (the other surface stays muted). Mix is allowed: an array entry +
-//     ground/bridge entries layer always-on loops with surface gating.
-// The loader normalizes every form to a binding array. Each referenced sound
-// MUST have spatial config AND loop=true — walk sounds are registered muted
-// and fade in/out with state changes.
+// validates entityWalkSounds; normalizes string/array/object forms into flat tagged bindings; all ids must be spatial+looping
 function validateEntityWalkSounds(
   raw: unknown,
   sounds: Readonly<Record<string, SoundDefinition>>,
 ): Readonly<Record<string, ReadonlyArray<EntityWalkSoundBinding>>> {
   if (raw === undefined) return {};
   const entries = v.requireObject(raw, 'soundRegistry.entityWalkSounds');
+  // per-id check: known id, has spatial, is looping
   const validateRef = (
     entityId: string,
     soundId: string,
@@ -289,10 +312,7 @@ function validateEntityWalkSounds(
   return out;
 }
 
-// Sequence playlists: one ordered list of sound ids per entity. Each
-// referenced sound must be spatial (volume needs distance falloff while
-// playing at the sprite's position) and non-looping (the playlist loops by
-// advancing on COMPLETE; a per-clip loop would never trigger advance).
+// validates entitySoundSequences; ids must be known, spatial, and non-looping (the playlist provides the loop)
 function validateEntitySoundSequences(
   raw: unknown,
   sounds: Readonly<Record<string, SoundDefinition>>,
@@ -339,6 +359,7 @@ function validateEntitySoundSequences(
   return out;
 }
 
+// validates entityPeriodicSounds; each soundId must be spatial, minIntervalMs positive, maxIntervalMs >= minIntervalMs
 function validateEntityPeriodicSounds(
   raw: unknown,
   sounds: Readonly<Record<string, SoundDefinition>>,
@@ -398,6 +419,7 @@ function validateEntityPeriodicSounds(
   return out;
 }
 
+// assembled once at import; sounds validated first so knownIds can cross-check all binding sections; deep-frozen
 const REGISTRY: SoundRegistry = (() => {
   const raw = soundRegistryRaw as Record<string, unknown>;
 
@@ -423,8 +445,7 @@ const REGISTRY: SoundRegistry = (() => {
     levelOverrides[levelId] = validateLevelOverride(levelId, value, knownIds);
   }
 
-  // entitySounds is optional in the JSON (worlds without any entity-anchored
-  // audio can omit the key entirely); default to an empty mapping.
+  // optional sections default to {} when omitted
   const entitySounds =
     raw.entitySounds === undefined
       ? {}
@@ -468,81 +489,69 @@ const REGISTRY: SoundRegistry = (() => {
   });
 })();
 
+// every [id, definition] pair; the preloader walks this to load each audio file
 export function getAllSoundDefinitions(): ReadonlyArray<
   readonly [string, SoundDefinition]
 > {
   return Object.entries(REGISTRY.sounds);
 }
 
+// returns the definition for a sound id, or null if unregistered
 export function getSoundDefinition(id: string): SoundDefinition | null {
   return REGISTRY.sounds[id] ?? null;
 }
 
+// sound ids that play scene-wide from game start (the default ambience bed)
 export function getGlobalAmbienceIds(): ReadonlyArray<string> {
   return REGISTRY.globalAmbience;
 }
 
-// Returns the override's ambience list if `levelId` is overridden, otherwise
-// the global default. SoundManager.setLevelAmbience consumes this.
+// returns the override ambience for a level, or global default if not overridden
 export function getAmbienceForLevel(levelId: string): ReadonlyArray<string> {
   return REGISTRY.levelOverrides[levelId]?.ambience ?? REGISTRY.globalAmbience;
 }
 
-// Lookup the sound ids bound to a given LDtk entity identifier. Returns an
-// empty array if the entity has no audio binding. Multiple ids let one entity
-// emit a layered soundscape (e.g. light fixture: bulb buzz + insect wings).
+// sound ids bound to an LDtk entity identifier; empty array if none; multiple ids = layered soundscape
 export function getEntitySoundIds(
   entityIdentifier: string,
 ): ReadonlyArray<string> {
   return REGISTRY.entitySounds[entityIdentifier] ?? [];
 }
 
-// All LDtk entity identifiers that have an audio binding. GameScene uses
-// this to know which entity instances to scan during buildWorld.
+// all entity identifiers that have a static audio binding; GameScene uses this to filter the buildWorld scan
 export function getBoundEntityIdentifiers(): ReadonlyArray<string> {
   return Object.keys(REGISTRY.entitySounds);
 }
 
-// Looking-spatial sound ids bound to a moving entity. Returned as an empty
-// array if the entity is unbound. Mirrors getEntitySoundIds but for the
-// movingEntitySounds table.
+// like getEntitySoundIds but for moving entities — anchored to the live sprite position each frame
 export function getMovingEntitySoundIds(
   entityIdentifier: string,
 ): ReadonlyArray<string> {
   return REGISTRY.movingEntitySounds[entityIdentifier] ?? [];
 }
 
-// Walk-sound bindings for a moving entity (one or more). Empty array when no
-// binding exists. Each binding pairs a spatial looping sound id with a
-// surface tag (`'always'` / `'ground'` / `'bridge'`). SoundManager
-// registers an anchor per binding (all start muted); setEnemyWalkSoundEnabled
-// uses the surface tag to gate which anchor fades in during chase, given the
-// IntGrid tile under the enemy's feet.
+// walk-sound bindings for an entity; each pairs a looping sound id with a surface tag for chase-state gating
 export function getEntityWalkSoundBindings(
   entityIdentifier: string,
 ): ReadonlyArray<EntityWalkSoundBinding> {
   return REGISTRY.entityWalkSounds[entityIdentifier] ?? [];
 }
 
-// Periodic-call bindings for a moving entity (e.g. crow caw). Empty array
-// when nothing is configured.
+// periodic one-shot bindings for an entity (e.g. crow caw); empty array when none configured
 export function getEntityPeriodicSoundBindings(
   entityIdentifier: string,
 ): ReadonlyArray<PeriodicEntitySoundBinding> {
   return REGISTRY.entityPeriodicSounds[entityIdentifier] ?? [];
 }
 
-// Ordered playlist of sound ids the SoundManager loops through for an entity.
-// Empty array means no sequence is configured.
+// ordered playlist for an entity that SoundManager advances on COMPLETE; empty = no sequence
 export function getEntitySoundSequence(
   entityIdentifier: string,
 ): ReadonlyArray<string> {
   return REGISTRY.entitySoundSequences[entityIdentifier] ?? [];
 }
 
-// Sound id bound to a player-state slot, or null if the registry omits the
-// slot. Returned as nullable rather than throwing so the SoundManager toggle
-// gracefully degrades into a no-op when a slot is unconfigured.
+// sound id for a player-state slot, or null if unconfigured (so the toggle gracefully no-ops)
 export function getPlayerStateSoundId(slot: PlayerSoundSlot): string | null {
   return REGISTRY.playerStateSounds[slot] ?? null;
 }

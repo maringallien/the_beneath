@@ -7,10 +7,22 @@ import {
   titledBlock,
 } from '../manualSection';
 
-// Enemies tab — the detection/stealth system (the key mechanic) plus a curated
-// overview of enemy archetypes. Deliberately not an exhaustive bestiary; it
-// teaches how to read alerts and what broad kinds of threats exist.
+/**
+ * enemiesSection — builds the manual's "Enemies" tab (stealth/detection + bestiary).
+ *
+ * Teaches the detection system: the ? "investigating" and ! "detected" states and
+ * how the screen-edge corner brackets recolour to show exposure, then lists the
+ * broad enemy archetypes from the ENEMY_TYPES table below. Deliberately not an
+ * exhaustive bestiary — it teaches how to read alerts and what kinds of threats
+ * exist, not stats for every foe.
+ *
+ * Inputs:  the static ENEMY_TYPES copy below and the shared manual DOM helpers.
+ * Outputs: a detached ManualSection element tree (no animated previews).
+ * @calledby the in-game manual overlay, when assembling its tab pages.
+ * @calls    the shared manual DOM/section helpers, including the marker-row builder.
+ */
 
+// The enemy archetype overview: each faction's display name and one-line summary.
 const ENEMY_TYPES: ReadonlyArray<{ name: string; detail: string }> = [
   {
     name: 'City guardians',
@@ -44,6 +56,7 @@ const ENEMY_TYPES: ReadonlyArray<{ name: string; detail: string }> = [
   },
 ];
 
+// builds the Enemies tab: detection states (?/!) and a broad enemy-type overview
 export function buildEnemiesSection(): ManualSection {
   const root = sectionRoot();
 

@@ -1,17 +1,26 @@
-// Shared primitives for the hand-rolled JSON registry validators
-// (entityRegistryLoader, soundRegistryLoader, animationSoundTriggersLoader).
-//
-// Every field helper takes the parent record, the field name, and a `ctx`
-// path string used verbatim in the error message, so a failure names the
-// exact JSON path that's wrong (e.g. `entityRegistry["Crow"].attack.damage
-// must be a positive number (got -3)`). The registries validate at module
-// load, so a bad value fails the boot loudly instead of misbehaving at
-// first spawn.
-//
-// Only the primitives live here. Domain rules (cross-references between
-// fields, animation-key existence, range relationships like minRange <
-// range) stay in the loaders next to the schema they describe.
+/**
+ * validate — shared primitives for the hand-rolled JSON registry validators
+ * (entity registry, sound registry, animation-sound-triggers loaders).
+ *
+ * Every field helper takes the parent record, the field name, and a `ctx` path
+ * string used verbatim in the error message, so a failure names the exact JSON
+ * path that's wrong (e.g. `entityRegistry["Crow"].attack.damage must be a
+ * positive number (got -3)`). The `require*` forms demand the field; the
+ * `optional*` forms accept a missing field (return undefined) but still reject a
+ * present-but-wrong value. The registries validate at module load, so a bad value
+ * fails the boot loudly instead of misbehaving at first spawn.
+ *
+ * Only the primitives live here. Domain rules (cross-references between fields,
+ * animation-key existence, range relationships like minRange < range) stay in the
+ * loaders next to the schema they describe.
+ *
+ * Inputs:  a parsed-JSON record/value, a field name, and a `ctx` path string.
+ * Outputs: the narrowed, typed value — or a thrown Error naming the bad path.
+ * @calledby the registry loaders, field by field, while validating raw JSON.
+ * @calls    the local `fail` helper, which throws the path-tagged error.
+ */
 
+// throws a path-tagged error naming exactly what was expected vs. what was found
 function fail(
   ctx: string,
   field: string,
@@ -23,6 +32,7 @@ function fail(
   );
 }
 
+// asserts the value is a plain object (not null, not an array)
 export function requireObject(
   raw: unknown,
   ctx: string,
@@ -33,6 +43,7 @@ export function requireObject(
   return raw as Record<string, unknown>;
 }
 
+// asserts the value is an array (may be empty)
 export function requireArray(raw: unknown, ctx: string): unknown[] {
   if (!Array.isArray(raw)) {
     throw new Error(`${ctx} must be an array`);
@@ -40,6 +51,7 @@ export function requireArray(raw: unknown, ctx: string): unknown[] {
   return raw;
 }
 
+// asserts the value is a non-empty array
 export function requireNonEmptyArray(raw: unknown, ctx: string): unknown[] {
   if (!Array.isArray(raw) || raw.length === 0) {
     throw new Error(`${ctx} must be a non-empty array`);
@@ -47,6 +59,7 @@ export function requireNonEmptyArray(raw: unknown, ctx: string): unknown[] {
   return raw;
 }
 
+// reads a required non-empty string field
 export function requireString(
   obj: Record<string, unknown>,
   field: string,
@@ -59,6 +72,7 @@ export function requireString(
   return value;
 }
 
+// reads an optional string — undefined if absent, error if present but empty/non-string
 export function optionalString(
   obj: Record<string, unknown>,
   field: string,
@@ -72,6 +86,7 @@ export function optionalString(
   return value;
 }
 
+// reads a required boolean field (no truthy coercion)
 export function requireBoolean(
   obj: Record<string, unknown>,
   field: string,
@@ -84,6 +99,7 @@ export function requireBoolean(
   return value;
 }
 
+// reads an optional boolean — undefined if absent, error if present but not boolean
 export function optionalBoolean(
   obj: Record<string, unknown>,
   field: string,
@@ -97,6 +113,7 @@ export function optionalBoolean(
   return value;
 }
 
+// reads a required finite number (any sign including zero, no NaN/±Infinity)
 export function requireFinite(
   obj: Record<string, unknown>,
   field: string,
@@ -109,6 +126,7 @@ export function requireFinite(
   return value;
 }
 
+// reads an optional finite number — undefined if absent
 export function optionalFinite(
   obj: Record<string, unknown>,
   field: string,
@@ -122,6 +140,7 @@ export function optionalFinite(
   return value;
 }
 
+// reads a required positive number (strictly > 0; zero rejected)
 export function requirePositive(
   obj: Record<string, unknown>,
   field: string,
@@ -134,6 +153,7 @@ export function requirePositive(
   return value;
 }
 
+// reads an optional positive number — undefined if absent
 export function optionalPositive(
   obj: Record<string, unknown>,
   field: string,
@@ -147,6 +167,7 @@ export function optionalPositive(
   return value;
 }
 
+// reads a required non-negative number (≥ 0; zero allowed)
 export function requireNonNegative(
   obj: Record<string, unknown>,
   field: string,
@@ -159,6 +180,7 @@ export function requireNonNegative(
   return value;
 }
 
+// reads an optional non-negative number — undefined if absent
 export function optionalNonNegative(
   obj: Record<string, unknown>,
   field: string,
@@ -172,6 +194,7 @@ export function optionalNonNegative(
   return value;
 }
 
+// reads a required non-negative integer (whole, ≥ 0; for counts and indices)
 export function requireNonNegativeInt(
   obj: Record<string, unknown>,
   field: string,
@@ -184,6 +207,7 @@ export function requireNonNegativeInt(
   return value;
 }
 
+// reads an optional non-negative integer — undefined if absent
 export function optionalNonNegativeInt(
   obj: Record<string, unknown>,
   field: string,
@@ -197,6 +221,7 @@ export function optionalNonNegativeInt(
   return value;
 }
 
+// reads a required positive integer (whole, strictly > 0; for at-least-one counts)
 export function requirePositiveInt(
   obj: Record<string, unknown>,
   field: string,
@@ -209,6 +234,7 @@ export function requirePositiveInt(
   return value;
 }
 
+// reads an optional positive integer — undefined if absent
 export function optionalPositiveInt(
   obj: Record<string, unknown>,
   field: string,
@@ -222,9 +248,7 @@ export function optionalPositiveInt(
   return value;
 }
 
-// Open interval (0, 1) — both ends exclusive. For ratio knobs like heal
-// thresholds where 0 would mean "never" and 1 "always" (express those by
-// omitting the field, not by degenerate values).
+// reads an optional fraction strictly inside (0, 1) — omit the field to mean "never"/"always" instead of passing 0/1
 export function optionalFraction(
   obj: Record<string, unknown>,
   field: string,
@@ -243,6 +267,7 @@ export function optionalFraction(
   return value;
 }
 
+// reads a required string-enum field; the error message lists the allowed options so a typo is obvious
 export function requireOneOf<T extends string>(
   obj: Record<string, unknown>,
   field: string,

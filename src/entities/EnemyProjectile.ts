@@ -1,26 +1,36 @@
 import Phaser from 'phaser';
 import { PROJECTILE_MAX_LIFETIME_MS } from '../constants';
 
+/**
+ * EnemyProjectile — the player-targeting projectile any ranged enemy fires.
+ *
+ * Symmetric with the player's Projectile (terrain/world-bounds collider →
+ * onImpact, lifetime cap, body disabled on impact to stop multi-hit ticks) but
+ * with two per-instance fields — damage and the entity-namespaced animation
+ * keys — so any ranged enemy type spawns one without a dedicated subclass. The
+ * invariant the reader must hold: once it explodes it is inert (body disabled,
+ * timers/listeners torn down) and self-destructs when the explode anim ends.
+ *
+ * Inputs:  scene, a spawn-options bundle (position, velocity, damage, the full
+ *          idle/explode anim keys); world-bounds and lifetime-timer events.
+ * Outputs: a moving sprite that overlaps the player for `damage`, plays its
+ *          explode anim on impact, and destroys itself.
+ * @calledby a ranged enemy's attack, when it looses a shot at the player.
+ * @calls    Phaser physics/animation/timer systems and the scene's world-bounds
+ *           event bus.
+ */
 export interface EnemyProjectileSpawnOptions {
   x: number;
   y: number;
   velocityX: number;
   velocityY: number;
-  // Per-shot damage, copied off the spawning enemy's attack.damage so the
-  // projectile is self-contained and the enemy can be destroyed mid-flight
-  // without losing the data needed to apply damage to the player.
+  // copied off the enemy at fire time so the projectile is self-contained if the enemy dies mid-flight
   damage: number;
-  // Full Phaser animation keys (already prefixed via entityAnimFullKey) so
-  // multiple enemy types can share this class with their own projectile art.
+  // full keys (already prefixed) so multiple enemy types can share this class with different art
   idleAnimKey: string;
   explodeAnimKey: string;
 }
 
-// Player-targeting projectile fired by enemies. Symmetric with the player's
-// Projectile (terrain collider → onImpact, world-bounds → onImpact, lifetime
-// cap, body disabled on impact to prevent multi-hit ticks) but with two
-// per-instance fields — damage and the entity-namespaced animation keys —
-// so any ranged enemy type can spawn one without a dedicated subclass.
 export class EnemyProjectile extends Phaser.Physics.Arcade.Sprite {
   declare body: Phaser.Physics.Arcade.Body;
 
@@ -33,6 +43,7 @@ export class EnemyProjectile extends Phaser.Physics.Arcade.Sprite {
     body: Phaser.Physics.Arcade.Body,
   ) => void;
 
+  // spawns and launches the projectile; throws if the idle texture isn't loaded
   constructor(scene: Phaser.Scene, options: EnemyProjectileSpawnOptions) {
     if (!scene.textures.exists(options.idleAnimKey)) {
       throw new Error(
@@ -49,16 +60,13 @@ export class EnemyProjectile extends Phaser.Physics.Arcade.Sprite {
     scene.physics.add.existing(this);
 
     this.body.setAllowGravity(false);
-    // Bounce 0,0 + worldbounds-event so the projectile halts cleanly when it
-    // leaves the playfield and our handler swaps to explode. Matches the
-    // player Projectile's setup so behavior is symmetric.
+    // bounce 0,0 halts it cleanly at the world edge; 4th arg enables the world-bounds event
     this.body.setCollideWorldBounds(true, 0, 0, true);
 
     this.body.setVelocity(options.velocityX, options.velocityY);
     const angle = Math.atan2(options.velocityY, options.velocityX);
     this.setRotation(angle);
-    // Mirror Y when aiming into the left half-plane so the sprite never
-    // renders upside-down — same convention as the player Projectile.
+    // mirror Y in the left half-plane so the sprite never renders upside-down
     this.setFlipY(Math.abs(angle) > Math.PI / 2);
 
     this.play(this.idleAnimKey);
@@ -89,14 +97,17 @@ export class EnemyProjectile extends Phaser.Physics.Arcade.Sprite {
     });
   }
 
+  // Per-shot damage to apply to the player on overlap.
   getDamage(): number {
     return this.damage;
   }
 
+  // True once it has impacted (and is being torn down) — overlap checks skip it.
   hasExploded(): boolean {
     return this.exploded;
   }
 
+  // detonates once; disables the body so no damage ticks stack during the explode clip
   onImpact(): void {
     if (this.exploded) return;
     this.exploded = true;
@@ -107,10 +118,6 @@ export class EnemyProjectile extends Phaser.Physics.Arcade.Sprite {
     }
 
     this.setVelocity(0, 0);
-    // Disabling the body removes it from Arcade's overlap lookups so further
-    // per-frame overlap callbacks against the player stop firing — without
-    // this, the projectile keeps overlapping during the explode animation
-    // and stacks damage ticks, deleting the player in one shot.
     this.body.enable = false;
 
     this.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {

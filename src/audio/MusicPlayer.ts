@@ -2,50 +2,45 @@ import Phaser from 'phaser';
 import { getSoundDefinition } from './soundRegistryLoader';
 import { getMusicVolume, onMusicVolumeChange } from './musicSettings';
 
-// The game's single looping soundtrack. Unlike ambience/SFX (owned by
-// SoundManager and driven by level transitions or world proximity), the music
-// is one persistent track that plays for the whole session and is gated by the
-// music VOLUME preference (the OPTIONS volume bar) — ambience and SFX are never
-// affected, so muting the music leaves the rest of the mix intact.
-//
-// Like SoundManager, the BaseSound lives on Phaser's game-scoped sound manager
-// (scene.sound is one shared instance across every scene), so it survives
-// scene.restart (respawn) and the landing→gameplay handoff without restarting.
-// State is kept at module scope as the single source of truth.
+/**
+ * MusicPlayer — owns the game's single looping soundtrack.
+ *
+ * Unlike ambience/SFX (owned by SoundManager, driven by level transitions or
+ * world proximity), the music is one persistent track that plays for the whole
+ * session, gated only by the music VOLUME preference (the OPTIONS volume bar) —
+ * muting the music leaves ambience and SFX untouched. Like SoundManager, the
+ * BaseSound lives on Phaser's game-scoped sound manager (scene.sound is one
+ * shared instance across every scene), so it survives scene.restart (respawn)
+ * and the landing→gameplay handoff without restarting. All state is held at
+ * module scope as the single source of truth.
+ *
+ * Inputs:  a scene + sound id to play; the live music-volume preference; the
+ *          browser audio-unlock gesture.
+ * Outputs: drives a Phaser BaseSound (play/volume/teardown) and a volume-fade
+ *          tween; subscribes to the volume preference.
+ * @calledby the gameplay scene's startup/handoff paths, asserting the soundtrack.
+ * @calls    the sound-definition lookup, Phaser's game-global sound manager and
+ *           tween manager, and the music-volume preference store.
+ */
 
-// Swell-in length for the initial auto-start (page load). Slider adjustments do
-// NOT use this — they snap so the volume tracks the bar with no lag.
+// swell-in on page load; slider adjustments snap so the bar feels immediate
 const MUSIC_FADE_MS = 1200;
 
-// The scene whose tween manager drives the swell-in. Refreshed on every
-// playMusic call (always GameScene, alive for the whole session). scene.sound is
-// the game-global manager regardless of which scene this points at, so unlock
-// and playback are unaffected by which scene owns the fade.
+// the scene whose tweens drive the swell; refreshed each playMusic call (scene.sound is game-global regardless)
 let musicScene: Phaser.Scene | null = null;
 
-// The currently-loaded track id and its BaseSound (created lazily, reused after).
+// currently loaded track id and its BaseSound (created lazily, reused after)
 let currentTrackId: string | null = null;
 let music: Phaser.Sound.BaseSound | null = null;
 
-// Whether play() has been called on the current track. The first time it becomes
-// audible we swell it in; every later volume change snaps so the slider feels
-// responsive. Stays false while muted-from-load so we don't spin up a silent
-// loop until the player actually raises the volume.
+// false until play() is called; first activation swells in, later volume changes snap
 let started = false;
 
-// One-time guards: a single onMusicVolumeChange subscription and at most one
-// armed UNLOCKED listener (browsers block audio until the first user gesture).
+// one-shot guards for the volume subscription and the browser unlock listener
 let subscribed = false;
 let unlockArmed = false;
 
-// Starts (or re-asserts) the game soundtrack. Idempotent: calling it again with
-// the same id just refreshes the owning scene and re-applies the current volume —
-// it never restarts a track that's already playing, so respawns, the
-// landing→gameplay handoff, and New Game all keep the music seamless.
-//
-// Safe to call before the audio context is unlocked: if the sound manager is
-// still locked (no user gesture yet), playback is deferred to the UNLOCKED
-// event so the track begins at the earliest moment the browser allows.
+// asserts the soundtrack; idempotent for the same id, replaces on a different id; defers if audio context is still locked
 export function playMusic(scene: Phaser.Scene, soundId: string): void {
   musicScene = scene;
   ensureSubscribed();
@@ -58,7 +53,7 @@ export function playMusic(scene: Phaser.Scene, soundId: string): void {
       return;
     }
     currentTrackId = soundId;
-    // Created at volume 0; applyState raises it to the current preference.
+    // start at volume 0; applyState raises it to the current preference
     music = scene.sound.add(soundId, { loop: def.loop, volume: 0 });
     started = false;
   }
@@ -66,17 +61,12 @@ export function playMusic(scene: Phaser.Scene, soundId: string): void {
   applyState(true);
 }
 
-// Reconciles actual playback against the desired state (music volume + unlock
-// status). `swell` controls whether a track that STARTS in this call fades in
-// (true for the page-load auto-start) or snaps (false for live slider changes).
+// reconciles playback against volume+unlock state; arms UNLOCKED listener while locked; muted track stays alive at volume 0
 function applyState(swell: boolean): void {
   if (music === null || musicScene === null || currentTrackId === null) return;
   const volume = getMusicVolume();
 
-  // Nothing can be audible until the first user gesture unlocks Web Audio. Arm a
-  // one-shot listener (if there's anything to play) and bail; applyState re-runs
-  // with a swell on unlock. scene.sound is the shared game manager, so this works
-  // no matter which scene armed it.
+  // bail while locked; the armed UNLOCKED listener re-runs this when the browser allows
   if (musicScene.sound.locked) {
     if (volume > 0) armUnlockListener();
     return;
@@ -88,21 +78,16 @@ function applyState(swell: boolean): void {
       started = true;
       setMusicVolumeNow(volume, swell);
     } else {
-      // Already running — track the slider instantly.
+      // already running — track the slider instantly
       setMusicVolumeNow(volume, false);
     }
   } else if (started) {
-    // Muted: drop to silence but keep the single loop alive (one source at
-    // volume 0 costs the audio thread next to nothing, and an unmute resumes
-    // seamlessly). Snap so the bar feels immediate.
+    // muted: drop to silence but keep the loop alive (volume 0 costs almost nothing; unmute resumes cleanly)
     setMusicVolumeNow(0, false);
   }
 }
 
-// Sets the track volume — tweened over MUSIC_FADE_MS when `fade` is true AND the
-// owning scene's tween manager is running, otherwise snapped. Snapping covers
-// the responsive-slider path and the case where the owning scene is paused (the
-// pause menu is open, where its tweens wouldn't advance).
+// sets track volume; tweens when fade=true and scene is active, snaps otherwise (slider/pause-menu path)
 function setMusicVolumeNow(target: number, fade: boolean): void {
   if (music === null || musicScene === null) return;
   musicScene.tweens.killTweensOf(music);
@@ -113,24 +98,19 @@ function setMusicVolumeNow(target: number, fade: boolean): void {
       duration: MUSIC_FADE_MS,
     });
   } else {
-    // Phaser declares setVolume on the concrete sound subclasses, not BaseSound;
-    // all three implement it, so the cast is safe (same pattern as SoundManager).
+    // setVolume is on concrete subclasses; cast is safe for all three (same pattern as SoundManager)
     (music as Phaser.Sound.WebAudioSound).setVolume(target);
   }
 }
 
-// Subscribes once to the music volume preference so the bar (and the M-key /
-// icon mute) tracks live. The unsubscribe handle is intentionally dropped — the
-// soundtrack lives for the whole app session.
+// subscribes once to volume changes so the slider tracks live; unsubscribe intentionally dropped (lives for the session)
 function ensureSubscribed(): void {
   if (subscribed) return;
   subscribed = true;
   onMusicVolumeChange(() => applyState(false));
 }
 
-// Arms a single UNLOCKED listener that re-runs applyState (with a swell) once the
-// browser's autoplay lock lifts on the first click/keypress. Guarded so repeated
-// pre-unlock playMusic calls don't stack listeners.
+// arms a one-shot UNLOCKED listener that swells in the track on the first user gesture; guarded against stacking
 function armUnlockListener(): void {
   if (unlockArmed || musicScene === null) return;
   unlockArmed = true;
@@ -140,9 +120,7 @@ function armUnlockListener(): void {
   });
 }
 
-// Stops and destroys the active track. Only used when switching to a different
-// soundtrack id (not part of the normal single-track flow), so a new BaseSound
-// can be created cleanly without leaking the old one.
+// stops/destroys the current track when switching to a different id; prevents leaking the old BaseSound
 function teardownCurrent(): void {
   if (music === null) return;
   if (musicScene !== null) musicScene.tweens.killTweensOf(music);

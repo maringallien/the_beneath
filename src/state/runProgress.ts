@@ -1,25 +1,33 @@
 import { REQUIRED_BOSS_IDENTIFIERS } from '../constants';
 
-// Persistent per-run progress for the boss-key win condition.
-//
-// Lives at module scope (not on GameScene) so it survives the world rebuilds
-// that death/respawn and HMR perform: GameScene.respawnFromSave() tears down and
-// re-parses the LDtk project, which re-spawns every boss from scratch. Bosses
-// opt out of the auto-respawn system (Enemy.isBoss), but a respawn-from-save
-// rebuild revives them anyway — so the *fact* that the player already defeated a
-// boss (and collected its key) must live somewhere the rebuild doesn't touch.
-// Keeping it here means a player who grabs a key and then dies without saving
-// still owns the key, so a key-locked door can never become permanently
-// unopenable (which would soft-lock the run, since the boss is gone on the
-// no-death timeline and only re-spawns on a death the player is trying to avoid).
-//
-// Reset explicitly by GameScene.restartRun() (New Game / Quit / Return to Title)
-// so a fresh run starts with no progress. A brand-new boot starts clean because
-// the sets initialize empty.
+/**
+ * runProgress — the persistent per-run progress store (the win condition's memory).
+ *
+ * Four module-scope sets tracking what the player has achieved this run:
+ * collected boss keys, defeated bosses (the win gate), opened chests, and
+ * purchased capacity upgrades. It lives at module scope (not on GameScene) so it
+ * survives the world rebuilds that death/respawn and HMR perform — a
+ * respawn-from-save tears down and re-parses the LDtk project, re-spawning every
+ * boss/chest from scratch. Bosses opt out of the auto-respawn system, but a
+ * respawn-from-save rebuild revives them anyway, so the *fact* of a defeat (and
+ * its key) must live somewhere the rebuild doesn't touch. Keeping it here means a
+ * player who grabs a key then dies without saving still owns it, so a key-locked
+ * door can never become permanently unopenable (which would soft-lock the run:
+ * the boss is gone on the no-death timeline and only re-spawns on a death the
+ * player is avoiding). A fresh boot starts clean (sets initialize empty); the
+ * store is wiped only when a run is abandoned (New Game / Quit / Return to Title).
+ *
+ * Inputs:  record/query calls from the gameplay scene and entities; the required
+ *          boss roster from ../constants.
+ * Outputs: mutates the in-memory sets and answers boolean/count queries.
+ * @calledby the boss/key/chest/shop systems recording or gating on run progress,
+ *           and the run lifecycle (abandon → reset).
+ * @calls    nothing — pure in-memory Set bookkeeping.
+ */
 
 // The two boss keys, matching the PickupKind string literals in Player.ts. A
 // door declares which one it needs via LOCKED_DOOR_KEYS (constants).
-export type BossKeyId = 'key_storms' | 'key_widow';
+export type BossKeyId = 'key_storms' | 'key_widow' | 'key_heart';
 
 const collectedKeys = new Set<BossKeyId>();
 const defeatedBosses = new Set<string>();
@@ -46,26 +54,32 @@ const openedChests = new Set<string>();
 export type UpgradeType = 'ammo' | 'magic';
 const purchasedUpgrades = new Set<string>();
 
+// Records that the player picked up the given boss key this run.
 export function recordKeyCollected(key: BossKeyId): void {
   collectedKeys.add(key);
 }
 
+// True if the player currently holds the given boss key.
 export function hasKey(key: BossKeyId): boolean {
   return collectedKeys.has(key);
 }
 
+// Records a boss (by LDtk identifier) as defeated this run.
 export function recordBossDefeated(identifier: string): void {
   defeatedBosses.add(identifier);
 }
 
+// True if the named boss has been defeated this run.
 export function isBossDefeated(identifier: string): boolean {
   return defeatedBosses.has(identifier);
 }
 
+// Records a chest (by stable LDtk iid) as looted this run.
 export function recordChestOpened(iid: string): void {
   openedChests.add(iid);
 }
 
+// True if the chest with this iid has already been looted this run.
 export function isChestOpened(iid: string): boolean {
   return openedChests.has(iid);
 }
@@ -78,16 +92,17 @@ export function upgradeId(type: UpgradeType, levelId: string): string {
   return `${type}@${levelId}`;
 }
 
+// Records one shop's capacity upgrade (by upgradeId) as purchased this run.
 export function recordUpgradePurchased(id: string): void {
   purchasedUpgrades.add(id);
 }
 
+// True if this specific shop's upgrade (by upgradeId) was already bought.
 export function hasUpgrade(id: string): boolean {
   return purchasedUpgrades.has(id);
 }
 
-// How many upgrades of a line the player owns. Drives the derived cap: e.g.
-// gun1 max = BASE_MAX_GUN1_AMMO + countUpgrades('ammo') * GUN1_CAPACITY_UPGRADE_STEP.
+// counts how many upgrades of one line the player owns (drives ammo/magic cap math)
 export function countUpgrades(type: UpgradeType): number {
   const prefix = `${type}@`;
   let count = 0;
@@ -102,8 +117,7 @@ export function allBossesDefeated(): boolean {
   return REQUIRED_BOSS_IDENTIFIERS.every((id) => defeatedBosses.has(id));
 }
 
-// Wipes all progress. Called when abandoning a run (New Game / Quit / Return to
-// Title) so the next run starts fresh. Deliberately NOT called on respawn or HMR.
+// wipes all progress so the next run starts fresh; NOT called on respawn or HMR by design
 export function resetRunProgress(): void {
   collectedKeys.clear();
   defeatedBosses.clear();

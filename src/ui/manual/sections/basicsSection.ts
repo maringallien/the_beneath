@@ -6,9 +6,21 @@ import {
   titledBlock,
 } from '../manualSection';
 
-// Basics tab — the objective and the moment-to-moment loop. Kept short: enough
-// to orient a new player before they dive into Controls and Combat.
+/**
+ * basicsSection — builds the manual's "Basics" tab (objective + core gameplay loop).
+ *
+ * Assembles the intro paragraph, the descend → fight → collect → unlock → upgrade →
+ * survive loop (driven by the LOOP_STEPS table below), and a closing pointer to the
+ * other tabs. Deliberately short — just enough to orient a new player before they
+ * read Controls and Combat.
+ *
+ * Inputs:  the static LOOP_STEPS copy below and the shared manual DOM helpers.
+ * Outputs: a detached ManualSection element tree (no animated previews).
+ * @calledby the in-game manual overlay, when assembling its tab pages.
+ * @calls    the shared manual DOM/section helpers to build the element tree.
+ */
 
+// The ordered gameplay-loop steps rendered in the tab (title + one-line detail).
 const LOOP_STEPS: ReadonlyArray<{ title: string; detail: string }> = [
   {
     title: 'Descend',
@@ -47,6 +59,7 @@ const LOOP_STEPS: ReadonlyArray<{ title: string; detail: string }> = [
   },
 ];
 
+// builds the Basics tab: welcome lead, the gameplay loop list, and a pointer to other tabs
 export function buildBasicsSection(): ManualSection {
   const root = sectionRoot();
 

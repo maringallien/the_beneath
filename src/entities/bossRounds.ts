@@ -1,31 +1,26 @@
-// Pure round-math for the boss round-fight system. Kept Phaser-free and
-// import-free so the threshold logic stays simple and self-contained — the
-// rest of the feature is UI/physics glue that only makes sense inside a
-// running scene.
+/**
+ * bossRounds — pure round-math for the boss round-fight system.
+ *
+ * Maps a round-fight boss's remaining-HP fraction to a 1-based round number by
+ * splitting its HP pool into equal sections — each section the player removes
+ * advances the round. Kept Phaser-free and import-free so the threshold logic
+ * stays simple and self-contained; the rest of the feature is UI/physics glue
+ * that only makes sense inside a running scene.
+ *
+ * Inputs:  a remaining-HP ratio (0..1) and an optional section count.
+ * Outputs: a clamped 1-based round number; exports the canonical section count.
+ * @calledby the boss's per-frame round tracking, when re-deriving the current
+ *           round from the boss's live health.
+ * @calls    nothing — pure arithmetic over the passed-in ratio.
+ */
 
-// Number of equal HP sections a round-fight boss's health is split into.
-// Losing one section advances the round, so this is also the round count.
-// Lives here (the round "model") rather than in constants/index.ts so this
-// module stays import-free; the presentation-side boss constants (bar colors,
-// banner timings) live in constants/index.ts.
+// HP sections (= round count) for the round-fight system; lives here to keep this module import-free.
 export const BOSS_ROUND_COUNT = 3;
 
-// Tiny tolerance so an exact threshold (e.g. health landing precisely on
-// 2/3 of max) resolves to "advanced" rather than flickering on floating-point
-// rounding. With the in-scope bosses' HP divisible by BOSS_ROUND_COUNT the
-// boundaries land cleanly, but a future odd HP value shouldn't change which
-// side of the line the boundary falls on.
+// Tiny epsilon so an exact HP boundary resolves to "advanced" rather than flickering on float rounding.
 const BOUNDARY_EPSILON = 1e-9;
 
-// Maps a boss's remaining-HP fraction to its 1-based round number. The HP
-// pool is split into `sections` equal slices; each full slice the player
-// removes advances the round. Full HP (ratio 1) = round 1; removing 1/N of
-// the total enters round 2, removing 2/N enters round 3, etc. The result is
-// clamped to [1, sections].
-//
-// Callers latch the value upward (the round never decreases) so a boss that
-// heals back across a threshold — e.g. Shadow of Storms' self-heal — doesn't
-// rewind its round or re-fire the round banner. See Enemy.getRound().
+// Maps a remaining-HP fraction to a 1-based round number, splitting the pool into equal sections.
 export function roundForRatio(
   ratio: number,
   sections: number = BOSS_ROUND_COUNT,
