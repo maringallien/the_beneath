@@ -4,21 +4,9 @@ import {
 } from '../constants';
 
 /**
- * bossWaves — per-boss, per-round reinforcement rosters for the round-fight system.
- *
- * The *roster* model: which enemy types, and how many per site, each named boss
- * summons when it crosses into a wave round (the round model — HP thirds ->
- * round number — lives in bossRounds.ts). The scene spawns the returned roster
- * at every General_enemy_spawn marker inside the boss's arena. Bosses/rounds not
- * listed here fall back to the legacy global default, so unlisted round-fight
- * bosses keep their existing reinforcement behavior.
- *
- * Inputs:  a boss registry identifier and its 1-based latched round; the
- *          legacy default enemy id and per-site count from ../constants.
- * Outputs: a per-site roster (enemy id + count entries), possibly empty.
- * @calledby the boss encounter flow, when a boss crosses into a wave round and
- *           the scene needs the reinforcements to spawn at each arena marker.
- * @calls    nothing — a static table lookup with a constant fallback.
+ * @file entities/bossWaves.ts
+ * @description Static per-boss/per-round reinforcement rosters (which enemy types, and how many per site) a named boss summons on a wave-round crossing; spawned at every General_enemy_spawn marker in its arena. Unlisted bosses/rounds fall back to the legacy global default. The round model itself lives in bossRounds.ts.
+ * @module entities
  */
 
 // One enemy type and its per-site spawn count for a given wave.
@@ -51,7 +39,15 @@ const BOSS_ROUND_WAVES: Readonly<
   },
 };
 
-// Returns the per-site roster for (boss, round), falling back to the global default for unlisted entries.
+/**
+ * @function    reinforcementsFor
+ * @description Returns the per-site roster for (boss, round), falling back to the global default for unlisted entries.
+ * @param   bossId  Registry identifier.
+ * @param   round   1-based latched round.
+ * @returns a readonly ReinforcementSpawn array (possibly empty to suppress the fallback wave); the single-entry global default when unlisted.
+ * @calledby src/level/BossEncounterController.ts → on a wave-round crossing, spawning at each arena marker
+ * @calls    nothing — a static nested-table lookup with a constant fallback
+ */
 export function reinforcementsFor(
   bossId: string,
   round: number,

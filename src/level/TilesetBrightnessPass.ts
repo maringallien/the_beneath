@@ -3,25 +3,23 @@ import type { LdtkTilesetDef } from '../ldtk/types';
 import { tilesetTextureKey } from './TilesetRegistry';
 
 /**
- * TilesetBrightnessPass — a one-time preload pass that lifts a tileset texture's
- * brightness in place (by key) so the whole game reads the brightened pixels.
- *
- * Mutates the loaded tileset texture before any consumer walks it (level render,
- * glow baking, collision), keeping the original texture key so no reference
- * needs rewiring. Idempotent across HMR reloads: a brightened key is recorded
- * at module scope and never lifted twice.
- *
- * Inputs:  the scene's texture cache, an LDtk tileset def, a brightness factor.
- * Outputs: replaces the keyed texture with a brightened canvas-backed one and
- *          re-registers its spritesheet frame grid; no return.
- * @calledby the scene boot/preload flow, once the tileset images have loaded.
- * @calls    the scene's texture cache (read/remove/add) and the canvas 2D API.
+ * @file level/TilesetBrightnessPass.ts
+ * @description One-time preload pass that lifts a tileset texture's brightness IN PLACE (by key) so every consumer (render, glow, collision) reads brightened pixels; keeps the original key so nothing needs rewiring; idempotent across HMR (brightened keys recorded at module scope, never lifted twice).
+ * @module level
  */
 
 // Idempotency guard: keys already brightened are never lifted twice, even across HMR reloads.
 const brightenedKeys = new Set<string>();
 
-// Lifts every opaque pixel by factor, replaces the texture under the same key, and rebuilds the frame grid.
+/**
+ * @function    brightenTilesetTexture
+ * @description Lifts every opaque pixel by factor, replaces the texture under the same key, and rebuilds the frame grid; no-ops on factor 1.0, an already-brightened key, a missing or zero-sized texture, or no 2D context.
+ * @param   scene   Texture cache.
+ * @param   def     LDtk tileset def: uid, grid size, padding, spacing.
+ * @param   factor  Brightness multiplier; 1.0 is a no-op.
+ * @calledby src/scenes/PreloadScene.ts → scene boot/preload flow, once the tileset images have loaded
+ * @calls    the canvas 2D API for the pixel lift, the scene texture cache (remove/add), and the frame-grid re-registrar
+ */
 export function brightenTilesetTexture(
   scene: Phaser.Scene,
   def: LdtkTilesetDef,
@@ -65,7 +63,17 @@ export function brightenTilesetTexture(
   brightenedKeys.add(key);
 }
 
-// Re-registers the spritesheet frame grid on the brightened canvas texture so frame-index lookups still work.
+/**
+ * @function    registerSpritesheetFrames
+ * @description Re-registers the spritesheet frame grid on the brightened canvas texture so frame-index lookups still work; adds one frame per fully-fitting tile cell in row-major order.
+ * @param   scene   Texture cache.
+ * @param   key     The brightened texture.
+ * @param   width   Canvas px width.
+ * @param   height  Canvas px height.
+ * @param   def     Tileset def: grid size, padding, spacing.
+ * @calledby src/level/TilesetBrightnessPass.ts → brightenTilesetTexture, right after the brightened canvas replaces the original
+ * @calls    the texture's per-frame add API; pure grid arithmetic otherwise
+ */
 function registerSpritesheetFrames(
   scene: Phaser.Scene,
   key: string,

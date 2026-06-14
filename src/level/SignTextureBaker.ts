@@ -2,25 +2,9 @@ import Phaser from 'phaser';
 import { tilesetTextureKey } from './TilesetRegistry';
 
 /**
- * SignTextureBaker — splits a lit-decoration tile into a static "structure" layer
- * and an animatable "lit" layer.
- *
- * For each registered decoration identifier, bakeSignTextures crops its source
- * tile and partitions every pixel by a per-identifier color filter: lit pixels
- * (the neon letters/window dots) into one texture, everything else into a sibling
- * "structure" texture. LevelRenderer then draws the structure at constant alpha
- * and the lit texture on top with a flicker/pulsate alpha, so the colored part
- * turns on/off without disturbing the static frame. Despite the "Sign" name (the
- * original use case), the registry covers any lit decoration — neon signs and the
- * teal house-window dots alike. Bakes are cached and shared across all instances
- * of an identifier.
- *
- * Inputs:  a scene (for its texture cache), a loaded tileset texture, a tile
- *          source rect, and the decoration identifier (selects the lit filter).
- * Outputs: two canvas textures registered in the scene cache; the LitConfig
- *          (filter + animation mode) consumed by the renderer.
- * @calledby the level renderer, when first rendering a lit decoration.
- * @calls    the canvas 2D context for pixel read/partition and the scene texture cache.
+ * @file level/SignTextureBaker.ts
+ * @description Splits a lit-decoration tile into a static "structure" layer and an animatable "lit" layer via a per-identifier color filter (lit pixels = neon letters / window dots into one texture, the rest into a sibling); LevelRenderer draws structure at constant alpha and lit on top with flicker/pulsate alpha; covers any lit decoration (neon signs + teal house-window dots) despite the "Sign" name; bakes cached + shared across instances.
+ * @module level
  */
 
 type ColorFilter = (r: number, g: number, b: number, a: number) => boolean;
@@ -51,7 +35,7 @@ const LIT_CONFIGS: Readonly<Record<string, LitConfig>> = {
   House5: { filter: BLUE_LIT_FILTER, mode: 'pulsate' },
 };
 
-// Lit config (filter + animation mode) for an identifier, or null if it has none.
+/** Lit config (filter + animation mode) for an identifier, or null if it has none. */
 export function getLitConfig(identifier: string): LitConfig | null {
   return LIT_CONFIGS[identifier] ?? null;
 }
@@ -61,7 +45,20 @@ export interface SignTextureKeys {
   litKey: string;
 }
 
-// Bakes the structure/lit texture pair for one decoration; cached by identifier so all instances share one bake.
+/**
+ * @function    bakeSignTextures
+ * @description Bakes the structure/lit texture pair for one decoration; cached by identifier so all instances share one bake.
+ * @param   scene       Texture cache.
+ * @param   tilesetUid  Source tileset.
+ * @param   srcX        Tile source rect X.
+ * @param   srcY        Tile source rect Y.
+ * @param   srcW        Tile source rect width.
+ * @param   srcH        Tile source rect height.
+ * @param   identifier  Selects the lit color filter + mode.
+ * @returns the structure/lit texture keys, registering both canvas textures as a side effect; null when the identifier has no lit config, the source texture is missing, or no 2D context is available.
+ * @calledby src/level/LevelRenderer.ts → renderLevel, when first rendering a lit decoration
+ * @calls    the Canvas 2D context for cropping, pixel read, and per-pixel partition, and the scene texture cache to register the pair
+ */
 export function bakeSignTextures(
   scene: Phaser.Scene,
   tilesetUid: number,

@@ -3,51 +3,36 @@ import { GRAVITY_Y, PLAYER_JUMP_VELOCITY } from '../constants';
 import type { EnemyHelperScene } from './enemyHelperScene';
 
 /**
- * enemyLeapProbes — pure, read-only locomotion probes for grounded-enemy AI.
- *
- * Wall and ledge detection, wall-mount launch solving, and the swept-AABB leap
- * simulator shared by the enemy chase / wander / search / nav-following code.
- * Every function reads the enemy's body geometry and the scene's collision
- * queries through a LeapProbeContext and mutates nothing — steering
- * (velocity/facing writes) stay in the enemy. Mirrors the enemyDetection
- * precedent: free functions over enemy-owned state.
- *
- * Inputs:  a LeapProbeContext per call (body, collision-query helper, position,
- *          facing) plus jump/gravity tuning from ../constants.
- * Outputs: booleans, launch velocities, and landing points — never mutation.
- * @calledby the grounded enemy locomotion paths, when deciding whether to hop,
- *           turn back at a wall, or where a jump would land.
- * @calls    only the scene helper's read-only tile-solidity and level-bounds probes.
+ * @file entities/enemyLeapProbes.ts
+ * @description Pure, read-only wall/ledge detection, wall-mount launch solving, and the swept-AABB leap simulator shared by grounded-enemy locomotion; every function reads body geometry and scene collision through a LeapProbeContext and mutates nothing (steering stays in the enemy).
+ * @module entities
  */
 
-// world-grid tile size in pixels, matching the LDtk collision grid
+// Probe geometry (world px). TILE_PX matches the LDtk collision grid; sampling every 8px (half a
+// tile) guarantees no 16px collider slips between samples; a chaser scans UP_LEAP_SCAN_REACH_PX
+// ahead for a mountable platform; the footstep probe sits +4px below body.bottom, inside the tile.
 export const TILE_PX = 16;
-
-// 8 px (half a tile) — guarantees no 16 px collider slips between samples
 export const LEAP_PROBE_SAMPLE_PX = 8;
-
-// how far ahead a chaser looks for a mountable platform
 export const UP_LEAP_SCAN_REACH_PX = 96;
-
-// +4 px below body.bottom lands safely inside the tile beneath (body.bottom is at the tile top edge)
 export const FOOTSTEP_TILE_PROBE_OFFSET_Y = 4;
 
+// Leap simulator integration: a 60Hz Euler step, capped at 1.3s of flight; a landing must advance
+// at least LEAP_MIN_ADVANCE_PX from takeoff so the solver never "lands" back where it launched.
 const LEAP_PROBE_STEP_S = 1 / 60;
 const LEAP_PROBE_MAX_TIME_S = 1.3;
-
-// landing must have left the takeoff spot so the solver never "lands" back where it launched
 const LEAP_MIN_ADVANCE_PX = 16;
 
-// velocity ladder for the leap solver, from gentlest hop to player-grade max
+// Velocity ladder for the leap solver, gentlest hop → player-grade max.
 const LEAP_MIN_LAUNCH_VELOCITY = -160;
 const LEAP_LAUNCH_STEP = 15;
 
-// landing must clear this many px past the platform edge so the body settles on top, not the lip
+// Landing/wall-mount margins (world px): clear LEAP_LANDING_MARGIN_PX past a platform edge so the
+// body settles on top, not the lip; scan the wall column in WALL_MOUNT_SCAN_STEP_PX steps.
 const LEAP_LANDING_MARGIN_PX = 12;
-
 const WALL_MOUNT_SCAN_STEP_PX = 4;
 
-// read-only snapshot of the enemy's body, collision queries, position, and facing
+// Read-only snapshot of the enemy's body, collision queries, position, and facing — the handle
+// every probe in this module takes; functions read it and never write back.
 export interface LeapProbeContext {
   readonly body: Phaser.Physics.Arcade.Body;
   readonly helper: Pick<EnemyHelperScene, 'isTileSolidAt' | 'getLevelBoundsAt'>;
@@ -56,7 +41,13 @@ export interface LeapProbeContext {
   readonly facingDirection: 1 | -1;
 }
 
-// true when a short wall (≤2 tiles) stands ahead that the enemy should hop over
+/**
+ * @function    shouldJumpOverObstacle
+ * @description True when a short wall (≤2 tiles) stands ahead that the enemy should hop over.
+ * @returns false unless grounded with gravity and a one-tile-tall block ahead.
+ * @calledby src/entities/Enemy.ts → grounded chase/wander/search locomotion
+ * @calls    the scene helper's tile-solidity probe at two heights ahead
+ */
 export function shouldJumpOverObstacle(probe: LeapProbeContext): boolean {
   if (!probe.body.allowGravity) return false;
   if (!probe.body.blocked.down) return false;
@@ -70,7 +61,14 @@ export function shouldJumpOverObstacle(probe: LeapProbeContext): boolean {
   return true;
 }
 
-// true when an impassable wall (too tall to hop) stands ahead in dir
+/**
+ * @function    isBlockedByWall
+ * @description True when an impassable wall (too tall to hop) stands ahead in dir.
+ * @param   dir  Facing to test: 1 = right, -1 = left.
+ * @returns true only when grounded and solid at both foot and head height ahead.
+ * @calledby src/entities/Enemy.ts → grounded locomotion deciding to turn back rather than walk into a wall
+ * @calls    the scene helper's tile-solidity probe at two heights ahead
+ */
 export function isBlockedByWall(probe: LeapProbeContext, dir: 1 | -1): boolean {
   if (!probe.body.blocked.down) return false;
   const aheadX = dir === 1 ? probe.body.right + 4 : probe.body.left - 4;
@@ -81,7 +79,14 @@ export function isBlockedByWall(probe: LeapProbeContext, dir: 1 | -1): boolean {
   );
 }
 
-// true when the floor drops away one step ahead in dir (the enemy is at a ledge)
+/**
+ * @function    isLedgeAhead
+ * @description True when the floor drops away one step ahead in dir (the enemy is at a ledge).
+ * @param   dir  Facing to test: 1 = right, -1 = left.
+ * @returns true only when grounded and no floor tile sits just ahead-below.
+ * @calledby src/entities/Enemy.ts → grounded locomotion avoiding a walk off a platform edge
+ * @calls    the scene helper's tile-solidity probe below the foot ahead
+ */
 export function isLedgeAhead(probe: LeapProbeContext, dir: 1 | -1): boolean {
   if (!probe.body.blocked.down) return false;
   const aheadX = dir === 1 ? probe.body.right + 2 : probe.body.left - 2;
@@ -89,7 +94,14 @@ export function isLedgeAhead(probe: LeapProbeContext, dir: 1 | -1): boolean {
   return !probe.helper.isTileSolidAt(aheadX, probeY);
 }
 
-// find the launch velocity to hop onto a flush wall ahead; null if unreachable or no standing clearance
+/**
+ * @function    findWallMountLaunch
+ * @description Launch velocity to hop onto a flush wall ahead; null when there is no wall, no standing clearance on top, or the lift exceeds a player-grade jump.
+ * @param   dir  Facing to test: 1 = right, -1 = left.
+ * @returns negative launch vy (px/s, capped at player jump), or null.
+ * @calledby src/entities/Enemy.ts → a chaser mounting the ledge above a flush wall
+ * @calls    the scene helper's tile-solidity probe up the wall column
+ */
 export function findWallMountLaunch(
   probe: LeapProbeContext,
   dir: 1 | -1,
@@ -125,7 +137,14 @@ export function findWallMountLaunch(
   );
 }
 
-// true when a solid tile sits within the forward-up jump box (cheap gate before the full probe)
+/**
+ * @function    hasReachablePlatformAhead
+ * @description True when a solid tile sits within the forward-up jump box — a cheap tile-grid gate before the full leap probe (no arc simulation).
+ * @param   dir  Facing to test: 1 = right, -1 = left.
+ * @returns true if any solid tile lies in the forward-up scan region.
+ * @calledby src/entities/Enemy.ts → grounded locomotion, a cheap pre-check before the full leap solver
+ * @calls    the scene helper's tile-solidity probe across the forward-up region
+ */
 export function hasReachablePlatformAhead(
   probe: LeapProbeContext,
   dir: 1 | -1,
@@ -142,7 +161,13 @@ export function hasReachablePlatformAhead(
   return false;
 }
 
-// direction toward the nearer edge of the platform above, so the enemy can walk out and jump up
+/**
+ * @function    overheadEscapeDir
+ * @description Direction toward the nearer edge of the platform overhead, so a trapped enemy can side-step out and jump up.
+ * @returns -1 / 1 toward the nearer open edge, or 0 if nothing is overhead or no edge is reachable.
+ * @calledby src/entities/Enemy.ts → a chaser stuck under a platform that needs a clear column
+ * @calls    the scene helper's tile-solidity probe overhead and outward both ways
+ */
 export function overheadEscapeDir(probe: LeapProbeContext): 1 | -1 | 0 {
   const maxRise =
     (PLAYER_JUMP_VELOCITY * PLAYER_JUMP_VELOCITY) / (2 * GRAVITY_Y);
@@ -169,7 +194,16 @@ export function overheadEscapeDir(probe: LeapProbeContext): 1 | -1 | 0 {
   return 1;
 }
 
-// true if any solid tile lies on the vertical segment at xEdge — the body's leading side hitting a wall
+/**
+ * @function    columnSolid
+ * @description True if any solid tile lies on the vertical segment at xEdge — the body's leading side hitting a wall.
+ * @param   xEdge    World-px column to sample.
+ * @param   yTop     Top of the world-px vertical span.
+ * @param   yBottom  Bottom of the world-px vertical span.
+ * @returns true if any sample (every LEAP_PROBE_SAMPLE_PX, plus the exact bottom) is solid.
+ * @calledby src/entities/enemyLeapProbes.ts → simulateLeapArc, testing the leading edge each step
+ * @calls    the scene helper's tile-solidity probe down the column
+ */
 function columnSolid(
   probe: LeapProbeContext,
   xEdge: number,
@@ -182,7 +216,16 @@ function columnSolid(
   return probe.helper.isTileSolidAt(xEdge, yBottom);
 }
 
-// true if any solid tile lies on the horizontal segment at yEdge — floors to land on and ceilings to bonk
+/**
+ * @function    rowSolid
+ * @description True if any solid tile lies on the horizontal segment at yEdge — floors to land on and ceilings to bonk.
+ * @param   yEdge   World-px row to sample.
+ * @param   xLeft   Left of the world-px horizontal span.
+ * @param   xRight  Right of the world-px horizontal span.
+ * @returns true if any sample (every LEAP_PROBE_SAMPLE_PX, plus the exact right edge) is solid.
+ * @calledby src/entities/enemyLeapProbes.ts → simulateLeapArc, testing for a landing floor or ceiling each step
+ * @calls    the scene helper's tile-solidity probe across the row
+ */
 function rowSolid(
   probe: LeapProbeContext,
   yEdge: number,
@@ -195,7 +238,16 @@ function rowSolid(
   return probe.helper.isTileSolidAt(xRight, yEdge);
 }
 
-// simulate one jump arc (Euler, walls/ceilings/floors) and return the landing point, or null
+/**
+ * @function    simulateLeapArc
+ * @description Simulate one jump arc (Euler step; tests walls, ceilings, floors) and return the landing foot point, or null.
+ * @param   dir       Horizontal direction of travel: 1 = right, -1 = left.
+ * @param   launchVx  Horizontal launch speed (px/s, magnitude).
+ * @param   launchVy  Vertical launch speed (px/s; negative = up).
+ * @returns the landing foot point {x, y} (world px), or null if it leaves bounds, never lands with headroom, or barely advances from takeoff.
+ * @calledby src/entities/enemyLeapProbes.ts → findLeapLanding, evaluating one candidate launch velocity
+ * @calls    the column/row solidity helpers and the scene helper's level-bounds query
+ */
 export function simulateLeapArc(
   probe: LeapProbeContext,
   dir: 1 | -1,
@@ -251,7 +303,17 @@ export function simulateLeapArc(
   return null;
 }
 
-// try launch velocities up to maxLaunchVelocity and return the one whose landing best advances toward target
+/**
+ * @function    findLeapLanding
+ * @description Try launch velocities up to maxLaunchVelocity and return the one whose landing best advances toward target.
+ * @param   dir                Horizontal direction: 1 = right, -1 = left.
+ * @param   launchVx           Horizontal launch speed (px/s, magnitude).
+ * @param   target             World-px goal to minimize landing distance to.
+ * @param   maxLaunchVelocity  Most-negative vy allowed; defaults to a player-grade jump.
+ * @returns the best {x, y, vy} landing solidly atop a platform nearest target, or null.
+ * @calledby src/entities/Enemy.ts → a chaser/searcher choosing whether and how hard to jump
+ * @calls    the arc simulator per velocity and the scene helper's tile-solidity lip check
+ */
 export function findLeapLanding(
   probe: LeapProbeContext,
   dir: 1 | -1,

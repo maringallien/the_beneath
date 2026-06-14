@@ -26,28 +26,22 @@ interface OpenCredits {
 }
 
 /**
- * CreditsOverlay — DOM credits panel shown over the home screen.
- *
- * Opened from the landing page's CREDITS button. Mirrors OptionsOverlay's
- * architecture (styled HTML over the Phaser canvas inside the same #game parent)
- * and reuses the merchant shop's frame (the .shop-overlay backdrop + .shop-window
- * grey panel) so it reads as the same in-world UI. Content is intentionally
- * minimal — the game title plus a single author line (layout in credits.css).
- * While open it owns ESC via a window-level capture listener and its full-viewport
- * backdrop intercepts mouse events, so the menu buttons underneath can't fire (the
- * landing scene also disables its own Phaser keyboard for the duration).
- *
- * Inputs:  the #game parent element; the caller's onClose callback; CREDIT_ENTRIES.
- * Outputs: an appended DOM subtree (backdrop + window) and an ESC key listener.
- * @calledby the landing screen, when the player opens the credits panel.
- * @calls    the shared DOM-overlay shell (backdrop/mount/keyboard) and the DOM API.
+ * @file ui/CreditsOverlay.ts
+ * @description DOM credits panel over the home screen (opened from the landing CREDITS button) reusing the merchant shop's frame so it reads as the same in-world UI; owns ESC via a window-level capture listener and its full-viewport backdrop blocks the menu buttons underneath.
+ * @module ui
  */
 export class CreditsOverlay extends DomOverlay {
   constructor(parent: HTMLElement) {
     super(parent);
   }
 
-  // Opens the panel; no-op if already open so a double-click can't stack two.
+  /**
+   * @function    open
+   * @description Open the panel; no-op if already open so a double-click can't stack two.
+   * @param   options  Carries the onClose callback fired when the panel closes.
+   * @calledby src/scenes/LandingScene.ts → the CREDITS button handler
+   * @calls    src/ui/DomOverlay.ts → openShell, src/ui/CreditsOverlay.ts → buildDom, and src/ui/DomOverlay.ts → attachKeyboard
+   */
   open(options: OpenCredits): void {
     if (this.isOpen()) return;
     this.openShell(options.onClose);
@@ -55,7 +49,12 @@ export class CreditsOverlay extends DomOverlay {
     this.attachKeyboard();
   }
 
-  // Builds the shop-framed window (title, credit entries, ESC footer) and mounts it.
+  /**
+   * @function    buildDom
+   * @description Build the shop-framed window (title, credit entries, ESC footer) from the static CREDIT_ENTRIES list and mount it.
+   * @calledby src/ui/CreditsOverlay.ts → open
+   * @calls    src/ui/DomOverlay.ts → createBackdrop, src/ui/CreditsOverlay.ts → buildEntry, and src/ui/DomOverlay.ts → mount
+   */
   private buildDom(): void {
     const { overlay, win } = this.createBackdrop('shop-window credits-window');
 
@@ -86,8 +85,14 @@ export class CreditsOverlay extends DomOverlay {
     this.mount(overlay);
   }
 
-  // Renders one credit line: label (small, dimmed), credited name, and an
-  // optional detail line beneath it.
+  /**
+   * @function    buildEntry
+   * @description Render one credit line: label (small, dimmed), credited name, and an optional detail line beneath it.
+   * @param   entry  Label, name, and optional detail.
+   * @returns a detached credit-entry div.
+   * @calledby src/ui/CreditsOverlay.ts → buildDom, once per entry
+   * @calls    the DOM element-create/append API only
+   */
   private buildEntry(entry: CreditEntry): HTMLDivElement {
     const block = document.createElement('div');
     block.className = 'credits-entry';
@@ -112,7 +117,13 @@ export class CreditsOverlay extends DomOverlay {
     return block;
   }
 
-  // Closes on ESC; other keys fall through untouched.
+  /**
+   * @function    onKeydown
+   * @description Close on ESC (swallowing the event); other keys fall through untouched.
+   * @param   e  Keyboard event from the window-level capture listener.
+   * @calledby src/ui/DomOverlay.ts → the capture-phase keydown listener, on any keypress while open
+   * @calls    src/ui/DomOverlay.ts → close
+   */
   protected onKeydown(e: KeyboardEvent): void {
     if (e.key === 'Escape') {
       e.preventDefault();

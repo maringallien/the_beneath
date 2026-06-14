@@ -20,20 +20,9 @@ import {
 } from '../constants';
 
 /**
- * CombatZoneWarning — screen-pinned "leaving combat zone" warning + countdown.
- *
- * Shown while the player strays outside an active boss arena. Three stacked
- * lines — headline, large seconds counter, hint — are authored in screen pixels
- * and converted to world space at CAMERA_ZOOM each frame, so they stay pinned
- * under camera scroll and render crisply at zoom (the same trick BossHud uses).
- * Visible only during an escape countdown; toggled and ticked by its owner.
- *
- * Inputs:  scene (for text objects + tweens); per-frame the integer seconds left
- *          and the active camera.
- * Outputs: three managed Phaser.Text lines and their fade-in tweens.
- * @calledby the gameplay scene's boss-leash logic, while the player is outside
- *           an active arena with the escape timer running.
- * @calls    the scene's text factory and tween manager.
+ * @file ui/CombatZoneWarning.ts
+ * @description Screen-pinned "leaving combat zone" warning + countdown shown while the player strays outside an active boss arena — three stacked lines authored in screen px and converted to world space at CAMERA_ZOOM each frame so they stay pinned under camera scroll and render crisply at zoom.
+ * @module ui
  */
 export class CombatZoneWarning {
   private readonly warningText: Phaser.GameObjects.Text;
@@ -44,7 +33,13 @@ export class CombatZoneWarning {
   // Dedup so the counter texture is only re-rasterized when the digit changes.
   private lastSeconds = -1;
 
-  // Creates the three text lines (headline, counter, hint) hidden at the origin; update() positions them.
+  /**
+   * @function    constructor
+   * @description Create the three text lines (headline, counter, hint) centred, depth-set, and zoom-resolution, hidden at the origin until update positions them.
+   * @param   scene  Owning scene; provides the text factory and is stored for later tween/positioning use.
+   * @calledby src/scenes/gameHud.ts → the GameHud rig building its HUD for an arena
+   * @calls    the scene's text factory and per-line origin/depth/resolution setup
+   */
   constructor(private readonly scene: Phaser.Scene) {
     this.warningText = scene.add.text(0, 0, BOSS_ESCAPE_WARNING_TEXT, {
       fontFamily: BOSS_ESCAPE_WARNING_FONT_FAMILY,
@@ -74,7 +69,13 @@ export class CombatZoneWarning {
     }
   }
 
-  // Shows or hides the overlay; on show fades in from alpha 0 and resets the digit dedup.
+  /**
+   * @function    setVisible
+   * @description Show or hide the overlay; on show, fade in from alpha 0 and reset the digit dedup. No-op if unchanged.
+   * @param   visible  True to reveal, false to hide.
+   * @calledby src/scenes/gameHud.ts → setEscapeWarningVisible, as the player enters/leaves the escape countdown
+   * @calls    the scene's tween manager to cancel old tweens and fade the lines in
+   */
   setVisible(visible: boolean): void {
     if (visible === this.visible) return;
     this.visible = visible;
@@ -95,7 +96,14 @@ export class CombatZoneWarning {
     }
   }
 
-  // Repositions the stacked lines in world space and refreshes the counter digit; no-op while hidden.
+  /**
+   * @function    update
+   * @description Reposition the stacked lines in world space and re-rasterize the counter only when the digit changes; no-op while hidden.
+   * @param   secondsLeft  Integer seconds remaining (clamped at 0).
+   * @param   camera       Active camera, for the screen-to-world mapping.
+   * @calledby src/scenes/gameHud.ts → updateCombatWarning, each frame while the countdown is visible
+   * @calls    the lines' position/text setters; no further delegation
+   */
   update(secondsLeft: number, camera: Phaser.Cameras.Scene2D.Camera): void {
     if (!this.visible) return;
 
@@ -125,7 +133,12 @@ export class CombatZoneWarning {
     this.subText.setPosition(cx, cy + countH * 0.5 + gap + subH * 0.5);
   }
 
-  // Tears down: cancels each line's tweens and destroys its text object.
+  /**
+   * @function    destroy
+   * @description Tear down — cancel each line's tweens and destroy its text object.
+   * @calledby src/scenes/gameHud.ts → destroy / destroyForSceneShutdown
+   * @calls    the scene's tween manager and each text object's destroy
+   */
   destroy(): void {
     for (const line of this.lines) {
       this.scene.tweens.killTweensOf(line);

@@ -23,30 +23,9 @@ import type {
 } from './characterTypes';
 
 /**
- * characterLoader — resolves the player's per-mode animation registries and
- * builds the Phaser spritesheets/animations for both the player and JSON-authored
- * entities.
- *
- * Owns the mapping from a logical action (idle / run / attack1 / …) to a concrete
- * registry animation key per character mode (sword_master, the two gunslinger
- * guns, plus their shared body and gun-overlay registries). Modes can borrow
- * frames from another registry (`sourceMode`) — gun modes share the no_gun body
- * art and overlay a separate gun sprite — and the full anim key encodes the
- * owning registry's mode, which is how the player decides gun-overlay visibility.
- * Animation keys are namespaced (`<mode>_<localKey>`, entities via
- * entityAnimFullKey) so player and entity textures never collide. The same data
- * also feeds the offline anim-resizer tool (listAnimations) and the in-game
- * "How to Play" sprite previews (getAnimationFrameInfo), so every consumer reads
- * one registry map and can't drift from the in-game layout.
- *
- * Inputs:  the per-mode character JSON registries, the JSON entity registry, and
- *          a Phaser scene at preload/register time.
- * Outputs: resolved anim keys, frame/anchor metadata, and (as side effects)
- *          loaded spritesheets + created Phaser Animation objects.
- * @calledby PreloadScene (loading/registering animations), the Player and gun
- *           systems (resolving keys + overlay visibility), and the resizer tool.
- * @calls    the entity-registry loader for entity definitions and Phaser's
- *           loader / animation manager.
+ * @file sprites/characterLoader.ts
+ * @description Resolves the player's per-mode animation registries and builds Phaser spritesheets/animations for both player and JSON-authored entities — owns the mapping from a logical action (idle/run/attack1/…) to a concrete registry key per mode (sword_master, the two gunslinger guns, plus shared body and gun-overlay registries); modes can borrow frames via sourceMode (gun modes share the no-gun body art and overlay a separate gun sprite), the full anim key encodes the owning registry's mode (how the player decides gun-overlay visibility), and keys are namespaced (mode + localKey, entities via entityAnimFullKey) so player and entity textures never collide; the same registry map feeds the in-game "How to Play" previews so they can't drift from the in-game layout.
+ * @module sprites
  */
 
 const REGULAR_REGISTRY = swordMasterRaw as CharacterModeRegistry;
@@ -168,12 +147,12 @@ const MAGIC_ATTACK_KEY_BY_STEP: ReadonlyArray<string | null> = [
   'attack5',
 ];
 
-// A registry's mode prefix, defaulting to 'sword_master' when unset.
+/** A registry's mode prefix, defaulting to 'sword_master' when unset. */
 function registryPrefix(registry: CharacterModeRegistry): string {
   return registry.mode ?? 'sword_master';
 }
 
-// Namespaces a registry-local anim key as `<mode>_<localKey>`.
+/** Namespaces a registry-local anim key as `<mode>_<localKey>`. */
 function fullKeyFor(registry: CharacterModeRegistry, localKey: string): string {
   return `${registryPrefix(registry)}_${localKey}`;
 }
@@ -203,13 +182,20 @@ const animationSourceMode: ReadonlyMap<string, AnyModeId> = (() => {
   return map;
 })();
 
-// The mode that owns a full anim key, or null if unknown. Player uses this to
-// decide gun-overlay visibility (gunslinger_body → show; baked-gun → hide).
+/** The mode that owns a full anim key, or null if unknown; Player uses it for gun-overlay visibility (gunslinger_body → show; baked-gun → hide). */
 export function getAnimationSourceMode(fullAnimKey: string): AnyModeId | null {
   return animationSourceMode.get(fullAnimKey) ?? null;
 }
 
-// resolves a (mode, logical action) to its full anim key, or null if the action is disabled in that mode
+/**
+ * @function    animKey
+ * @description Resolves a (mode, logical action) to its full anim key, routing through sourceMode when one mode borrows another's spritesheet.
+ * @param   mode     The wheel-selectable character mode.
+ * @param   logical  The abstract action key Player speaks in.
+ * @returns the namespaced full anim key, or null if the action is disabled in that mode.
+ * @calledby src/entities/Player.ts, src/entities/Enemy.ts, src/entities/AnimatedEntity.ts, … → picking which clip to play
+ * @calls    the per-mode resolver table only
+ */
 export function animKey(
   mode: CharacterModeId,
   logical: LogicalAnimationKey,
@@ -220,7 +206,7 @@ export function animKey(
   return `${sourceMode}_${resolved.registryKey}`;
 }
 
-// True when `logical` is enabled (non-null) in `mode`; Player gating uses this.
+/** True when `logical` is enabled (non-null) in `mode`; Player gating uses this. */
 export function isActionAvailable(
   mode: CharacterModeId,
   logical: LogicalAnimationKey,
@@ -228,7 +214,14 @@ export function isActionAvailable(
   return MODE_RESOLVERS[mode][logical] != null;
 }
 
-// returns the full anim key for a magic combo step (1-based)
+/**
+ * @function    magicAttackAnimKey
+ * @description Returns the full anim key for a magic combo step, mapping the 1-based step onto its sword_master_magic registry key.
+ * @param   step  1-based combo index into the magic-attack chain.
+ * @returns the namespaced full anim key; throws if no magic attack is defined for that step.
+ * @calledby src/entities/Player.ts, src/ui/manual/combatClips.ts → advancing the magic combo chain
+ * @calls    the magic-attack-by-step table only
+ */
 export function magicAttackAnimKey(step: number): string {
   const localKey = MAGIC_ATTACK_KEY_BY_STEP[step];
   if (!localKey) {
@@ -237,7 +230,14 @@ export function magicAttackAnimKey(step: number): string {
   return `${SWORD_MASTER_MAGIC_PREFIX}_${localKey}`;
 }
 
-// all full anim keys that a logical action maps to across every mode
+/**
+ * @function    fullKeysForLogical
+ * @description Collects every full anim key a logical action maps to across all wheel-selectable modes (deduplicated).
+ * @param   logical  The abstract action key.
+ * @returns a set of full anim keys (empty if disabled everywhere).
+ * @calledby src/entities/Player.ts → recognizing a logical action regardless of active mode (e.g. cross-mode animation-completion handling)
+ * @calls    the per-mode key resolver for each mode
+ */
 export function fullKeysForLogical(
   logical: LogicalAnimationKey,
 ): ReadonlySet<string> {
@@ -249,7 +249,13 @@ export function fullKeysForLogical(
   return keys;
 }
 
-// set of all magic-attack full anim keys, for recognizing magic-attack completions without per-step branching
+/**
+ * @function    magicAttackKeySet
+ * @description Builds the set of all magic-attack full anim keys, so callers can recognize a magic-attack completion without per-step branching.
+ * @returns a set of every magic-attack full anim key.
+ * @calledby src/entities/Player.ts → animation-completion handling, telling magic attacks apart from other clips
+ * @calls    walks the magic-attack-by-step table
+ */
 export function magicAttackKeySet(): ReadonlySet<string> {
   const keys = new Set<string>();
   for (const localKey of MAGIC_ATTACK_KEY_BY_STEP) {
@@ -260,7 +266,13 @@ export function magicAttackKeySet(): ReadonlySet<string> {
   return keys;
 }
 
-// queues a Phaser spritesheet load for every player-registry animation
+/**
+ * @function    preloadAllCharacters
+ * @description Queues a Phaser spritesheet load for every player-registry animation, each at its declared frame geometry.
+ * @param   scene  A Phaser scene in its preload phase.
+ * @calledby src/scenes/PreloadScene.ts → loading player art at game start
+ * @calls    Phaser's spritesheet loader for each indexed animation
+ */
 export function preloadAllCharacters(scene: Phaser.Scene): void {
   for (const [fullKey, anim] of animationByFullKey) {
     scene.load.spritesheet(fullKey, `/${anim.file}`, {
@@ -270,7 +282,7 @@ export function preloadAllCharacters(scene: Phaser.Scene): void {
   }
 }
 
-// Options for the animation-registration helpers (FPS override for created anims).
+/** Options for the animation-registration helpers (FPS override for created anims). */
 export interface RegisterAnimationsOptions {
   defaultFps?: number;
 }
@@ -306,7 +318,7 @@ const DEFAULT_ANCHOR: SpriteAnchor = {
   displayScale: 1,
 };
 
-// A named stage (frame-window marker) within an animation, or undefined if absent.
+/** A named stage (frame-window marker) within an animation, or undefined if absent. */
 export function getAnimationStage(
   fullAnimKey: string,
   stageName: string,
@@ -314,95 +326,14 @@ export function getAnimationStage(
   return animationByFullKey.get(fullAnimKey)?.stages?.[stageName];
 }
 
-// Prefix used on the synthetic `mode` field for animated-entity listings.
-// The resizer routes saves by looking at this prefix on listing.mode; see
-// tools/anim-resizer/persist.ts. Must match entityRegistryLoader's
-// ENTITY_KEY_PREFIX so fullKey resolution stays consistent.
-export const ENTITY_LISTING_MODE_PREFIX = 'entity_';
-
-export interface AnimationListing {
-  fullKey: string;
-  // Widened from AnyModeId so synthetic per-entity modes (e.g.
-  // `entity_Caged_spider_spawn`) fit alongside the fixed player modes.
-  // Consumers only treat this as an opaque string for routing.
-  mode: string;
-  registry: CharacterModeRegistry;
-  anim: SimpleAnimation;
-  // True when this listing was synthesized from the JSON entity registry
-  // (one per LDtk identifier). Player listings have this undefined/false.
-  isEntity?: boolean;
-  // The LDtk identifier this entity was synthesized from; absent on
-  // player listings.
-  entityIdentifier?: string;
-}
-
-// flat list of every animation (player + entity), used by the offline anim-resizer tool
-export function listAnimations(): ReadonlyArray<AnimationListing> {
-  const out: AnimationListing[] = [];
-  for (const registry of REGISTRIES) {
-    const mode = registryPrefix(registry) as AnyModeId;
-    for (const anim of Object.values(registry.animations)) {
-      out.push({
-        fullKey: fullKeyFor(registry, anim.key),
-        mode,
-        registry,
-        anim,
-      });
-    }
-  }
-  for (const { identifier, config } of listEntityRegistryEntries()) {
-    const syntheticMode = `${ENTITY_LISTING_MODE_PREFIX}${identifier}`;
-    // Flatten each entity anim (direct frame fields) into SimpleAnimation (frame
-    // fields nested under .frames) so the resizer sees one uniform shape.
-    const animations: Record<string, SimpleAnimation> = {};
-    for (const [animKey, entityAnim] of Object.entries(config.animations)) {
-      animations[animKey] = {
-        type: 'simple',
-        key: animKey,
-        file: entityAnim.file,
-        category: 'state',
-        loops: entityAnim.loops !== false,
-        frames: {
-          sheetWidth: entityAnim.frameWidth * entityAnim.frameCount,
-          sheetHeight: entityAnim.frameHeight,
-          frameWidth: entityAnim.frameWidth,
-          frameHeight: entityAnim.frameHeight,
-          frameCount: entityAnim.frameCount,
-          ...(entityAnim.anchorX !== undefined
-            ? { anchorX: entityAnim.anchorX }
-            : {}),
-          ...(entityAnim.anchorY !== undefined
-            ? { anchorY: entityAnim.anchorY }
-            : {}),
-          ...(entityAnim.displayScale !== undefined
-            ? { displayScale: entityAnim.displayScale }
-            : {}),
-        },
-        originalName: animKey,
-      };
-    }
-    const syntheticRegistry: CharacterModeRegistry = {
-      type: 'standard',
-      id: syntheticMode,
-      path: `entityRegistry/${identifier}`,
-      mode: syntheticMode,
-      animations,
-    };
-    for (const anim of Object.values(animations)) {
-      out.push({
-        fullKey: entityAnimFullKey(identifier, anim.key),
-        mode: syntheticMode,
-        registry: syntheticRegistry,
-        anim,
-        isEntity: true,
-        entityIdentifier: identifier,
-      });
-    }
-  }
-  return out;
-}
-
-// natural playback duration (ms) of an animation at the default character FPS; null if the key is unknown
+/**
+ * @function    getAnimationNaturalDurationMs
+ * @description Computes an animation's natural playback duration in ms at the default character FPS (frameCount / fps).
+ * @param   fullAnimKey  The namespaced player-animation key.
+ * @returns the duration in ms, or null if the key is unknown.
+ * @calledby src/entities/playerProjectileConfig.ts → timing against a clip's length (e.g. locking an action for its animation's duration)
+ * @calls    the player-animation lookup map only
+ */
 export function getAnimationNaturalDurationMs(
   fullAnimKey: string,
 ): number | null {
@@ -425,7 +356,14 @@ export interface AnimationFrameInfo {
   readonly displayScale: number;
 }
 
-// frame metadata for a player animation with anchor/scale resolved to defaults; used by the How-to-Play canvas previews
+/**
+ * @function    getAnimationFrameInfo
+ * @description Returns frame metadata for a player animation with anchor/scale resolved to rendering defaults (anchorX → centre, anchorY → bottom row, scale → 1) — the raw numbers the canvas previews need, not the physics-oriented SpriteAnchor view.
+ * @param   fullAnimKey  The namespaced player-animation key.
+ * @returns the resolved AnimationFrameInfo, or null if the key is unknown.
+ * @calledby src/ui/manual/combatClips.ts, src/ui/animatedSpritePreview.ts → the "How to Play" canvas previews drawing frames to a DOM canvas
+ * @calls    the player-animation lookup map only
+ */
 export function getAnimationFrameInfo(
   fullAnimKey: string,
 ): AnimationFrameInfo | null {
@@ -454,7 +392,7 @@ interface FrameMetadata {
   readonly displayScale?: number;
 }
 
-// looks up frame metadata for a full anim key — player registry first, entity registry as fallback
+/** Looks up frame metadata for a full anim key — player registry first, entity registry as fallback. */
 function lookupFrameMetadata(fullAnimKey: string): FrameMetadata | null {
   const playerAnim = animationByFullKey.get(fullAnimKey);
   if (playerAnim) return playerAnim.frames;
@@ -471,7 +409,17 @@ function lookupFrameMetadata(fullAnimKey: string): FrameMetadata | null {
   return null;
 }
 
-// computes origin and pre-scale body size/offset so the world-space hitbox sits at the requested size regardless of displayScale
+/**
+ * @function    getSpriteAnchor
+ * @description Computes the sprite origin and pre-scale physics-body size/offset from a frame's anchor metadata, so the world-space hitbox stays at the requested size regardless of displayScale; flips horizontally when flipX is set, and falls back to a centered, zero-body default when the key has no metadata.
+ * @param   fullAnimKey  Player or entity anim key.
+ * @param   bodyWidth    Desired world-space hitbox width in px.
+ * @param   bodyHeight   Desired world-space hitbox height in px.
+ * @param   flipX        Mirror the anchor horizontally; default false.
+ * @returns a SpriteAnchor (origin, source-pixel body size/offset, display scale).
+ * @calledby src/entities/Player.ts, src/entities/AnimatedEntity.ts, src/entities/PlayerGun.ts, src/entities/entityRegistryLoader.ts → placing sprite and hitbox identically when the active animation changes
+ * @calls    the frame-metadata lookup (player registry first, entity registry fallback)
+ */
 export function getSpriteAnchor(
   fullAnimKey: string,
   bodyWidth: number,
@@ -502,7 +450,14 @@ export function getSpriteAnchor(
   };
 }
 
-// creates Phaser Animations for every player-registry animation (idempotent; skips already-created keys)
+/**
+ * @function    registerAllCharacterAnimations
+ * @description Creates Phaser Animations for every player-registry animation, honoring poseFrame (a single static pinned frame) and the loop flag; idempotent, skipping keys that already exist.
+ * @param   scene    A Phaser scene, after spritesheets have loaded.
+ * @param   options  Optional defaultFps override; falls back to the character default.
+ * @calledby src/scenes/PreloadScene.ts → once player spritesheets are loaded
+ * @calls    Phaser's animation manager (exists / generateFrameNumbers / create)
+ */
 export function registerAllCharacterAnimations(
   scene: Phaser.Scene,
   options: RegisterAnimationsOptions = {},
@@ -532,7 +487,7 @@ export type GunslingerProjectileMode = 'gunslinger_gun1' | 'gunslinger_gun2';
 // Projectile lifecycle animations: in-flight idle vs. on-impact explode.
 export type ProjectileAnimKind = 'idle' | 'explode';
 
-// Full anim key for a projectile state, e.g. `gunslinger_gun1_projectile_idle`.
+/** Full anim key for a projectile state, e.g. `gunslinger_gun1_projectile_idle`. */
 export function projectileAnimKey(
   mode: GunslingerProjectileMode,
   kind: ProjectileAnimKind,
@@ -550,7 +505,7 @@ const GUN_OVERLAY_MODE_BY_GUN: Readonly<
   gunslinger_gun2: 'gun2_overlay',
 };
 
-// The overlay registry mode that paints a given gun mode's gun sprite.
+/** The overlay registry mode that paints a given gun mode's gun sprite (called internally by gunOverlayAnimKey). */
 export function gunOverlayModeFor(
   mode: GunslingerProjectileMode,
 ): OverlayModeId {
@@ -560,7 +515,7 @@ export function gunOverlayModeFor(
 // Gun-overlay animations: resting idle vs. the firing attack.
 export type GunOverlayAnimKind = 'idle' | 'attack1';
 
-// Full anim key for a gun-overlay state, e.g. `gun1_overlay_attack1`.
+/** Full anim key for a gun-overlay state, e.g. `gun1_overlay_attack1`. */
 export function gunOverlayAnimKey(
   mode: GunslingerProjectileMode,
   kind: GunOverlayAnimKind,
@@ -568,7 +523,13 @@ export function gunOverlayAnimKey(
   return `${gunOverlayModeFor(mode)}_${kind}`;
 }
 
-// queues spritesheet loads for all JSON-authored entity animations
+/**
+ * @function    preloadAllEntities
+ * @description Queues spritesheet loads for every JSON-authored entity animation, under its iid-namespaced full key.
+ * @param   scene  A Phaser scene in its preload phase.
+ * @calledby src/scenes/PreloadScene.ts, src/entities/AnimatedEntity.ts → loading entity art at game start
+ * @calls    the entity-registry enumerator, the full-key namespacing helper, and Phaser's spritesheet loader
+ */
 export function preloadAllEntities(scene: Phaser.Scene): void {
   for (const { identifier, config } of listEntityRegistryEntries()) {
     for (const [animKey, anim] of Object.entries(config.animations)) {
@@ -581,7 +542,14 @@ export function preloadAllEntities(scene: Phaser.Scene): void {
   }
 }
 
-// creates Phaser Animations for the entity registry (idempotent; must run after entity spritesheets have loaded)
+/**
+ * @function    registerAllEntityAnimations
+ * @description Creates Phaser Animations for every entity-registry animation, honoring each anim's loop flag (loops default true; one-shots like 'death' set loops:false in JSON); idempotent and must run after the entity spritesheets have loaded.
+ * @param   scene    A Phaser scene, after entity spritesheets have loaded.
+ * @param   options  Optional defaultFps override.
+ * @calledby src/scenes/PreloadScene.ts → once entity spritesheets are loaded
+ * @calls    the entity-registry enumerator, the full-key namespacing helper, and Phaser's animation manager (exists / generateFrameNumbers / create)
+ */
 export function registerAllEntityAnimations(
   scene: Phaser.Scene,
   options: RegisterAnimationsOptions = {},

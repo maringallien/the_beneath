@@ -10,25 +10,9 @@ import type { EnemyHelperScene } from './enemyHelperScene';
 import { TILE_PX } from './enemyLeapProbes';
 
 /**
- * EnemyNavFollower — A* route bookkeeping for a chasing/searching enemy.
- *
- * One instance per Enemy. When aggro but blind to the target, the enemy follows
- * an A* route (via NavGraph / NavPathfinder) toward the target's standable cell
- * instead of grinding straight into a wall. This class owns ONLY the route
- * state — the held path's world-px waypoints, the current waypoint index, the
- * replan throttle, the moved-goal-cell tracking, and the stall watchdog.
- * Steering toward the returned waypoint (velocity/facing writes) stays in Enemy.
- * Shared by the chase and last-seen-search code (only one runs per frame), and
- * grounded-only — airborne enemies never path. Mirrors the small state-owning
- * helper-class precedent (TeleportCoordinator / EnemyRespawnManager).
- *
- * Inputs:  per-frame foot points (follower + goal), the wall-clock now, and the
- *          scene's A* pathfinding helper.
- * Outputs: the next waypoint to steer toward (or null → caller uses reactive
- *          steering); plus path-state predicates for the chase/return logic and
- *          the debug overlay.
- * @calledby the grounded chase and last-seen-search locomotion, each frame.
- * @calls    the scene's A* path query; otherwise pure self-state bookkeeping.
+ * @file entities/EnemyNavFollower.ts
+ * @description A* route bookkeeping for a chasing/searching enemy, one instance per Enemy. When aggro but blind to the target, the enemy follows an A* route (via NavGraph / NavPathfinder) toward the target's standable cell instead of grinding into a wall. Owns ONLY the route state — the held path's world-px waypoints, the current waypoint index, the replan throttle, the moved-goal-cell tracking, and the stall watchdog; steering toward the returned waypoint (velocity/facing writes) stays in Enemy. Shared by the chase and last-seen-search code (only one runs per frame), and grounded-only — airborne enemies never path. Mirrors the small state-owning helper-class precedent (TeleportCoordinator / EnemyRespawnManager).
+ * @module entities
  */
 export class EnemyNavFollower {
   private navPath: ReadonlyArray<{ x: number; y: number }> | null = null;
@@ -41,7 +25,17 @@ export class EnemyNavFollower {
   // Path-following suppressed until this time after a stall-abandon (anti-bounce).
   private navSuppressUntil = 0;
 
-  // Advances the A* route each frame, replanning when stale, and returns the next waypoint (or null to fall back to reactive steering).
+  /**
+   * @function    follow
+   * @description Advances the A* route each frame, replanning when stale, and returns the next waypoint.
+   * @param   startX, startY  Follower foot (world px).
+   * @param   goalX, goalY    Target foot (world px).
+   * @param   now             Wall-clock ms.
+   * @param   helper          Scene's findEnemyPath A* query.
+   * @returns the next waypoint {x, y} to steer toward, or null — fall back to reactive steering (during stall cooldown, no route, or goal reached).
+   * @calledby src/entities/Enemy.ts → the grounded chase and last-seen-search locomotion, each frame
+   * @calls    the scene's A* path query on a replan; the stall watchdog abandons + cools down
+   */
   follow(
     startX: number,
     startY: number,
@@ -103,7 +97,12 @@ export class EnemyNavFollower {
     return path[this.navPathIdx];
   }
 
-  // Drops the held route so the next pursuit replans clean.
+  /**
+   * @function    clear
+   * @description Drops the held route so the next pursuit replans clean; no-ops when no route is held.
+   * @calledby src/entities/Enemy.ts → on losing/regaining sight, and internally on a stall-abandon
+   * @calls    —
+   */
   clear(): void {
     if (this.navPath === null) return;
     this.navPath = null;
@@ -112,12 +111,12 @@ export class EnemyNavFollower {
     this.navGoalCellY = Number.NaN;
   }
 
-  // True while a route is held.
+  /** True while a route is held. */
   hasPath(): boolean {
     return this.navPath !== null;
   }
 
-  // True while the post-stall cooldown is active.
+  /** True while the post-stall cooldown is active. */
   isSuppressed(now: number): boolean {
     return now < this.navSuppressUntil;
   }

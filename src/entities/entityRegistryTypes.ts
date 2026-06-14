@@ -1,21 +1,7 @@
 /**
- * entityRegistryTypes — the type model for the JSON-authored animated-entity registry.
- *
- * Each LDtk identifier (e.g. "Caged_spider_spawn") maps to one AnimatedEntityConfig
- * describing where its sprites live, how to slice the sheets into frames, and the
- * optional behavior/trap/drop blocks that decide what the entity becomes. The
- * registry is the single source of truth that turns "this LDtk identifier should
- * animate" into a runnable Phaser sprite — a new entity type is one JSON entry, not
- * a factory function. The companion validator (entityRegistryLoader) enforces every
- * constraint noted on these members at boot — chiefly that all animation-key fields
- * reference keys within the same entry's `animations` map — so authoring mistakes
- * surface at load time rather than at first spawn; the EntityFactory keys off block
- * presence (behavior → Enemy, trap → Trap, neither → plain AnimatedEntity).
- *
- * Inputs:  none — pure compile-time type/interface/union declarations.
- * Outputs: the registry config shapes below, consumed by the loader and the entities.
- * @calledby the registry loader/validator and the entity classes that read configs.
- * @calls    nothing — a leaf types module.
+ * @file entities/entityRegistryTypes.ts
+ * @description Type model for the JSON-authored animated-entity registry — each LDtk identifier maps to one AnimatedEntityConfig (sprite sheets, frame-slicing, optional behavior/trap/drop blocks); validated at boot by entityRegistryLoader so authoring mistakes surface at load, not first spawn. EntityFactory keys off block presence (behavior→Enemy, trap→Trap, neither→AnimatedEntity).
+ * @module entities
  */
 
 export interface AnimatedEntityAnimConfig {
@@ -204,7 +190,7 @@ export interface AnimatedEntityBehaviorConfig {
   readonly hideHealthBar?: boolean;
   // Vertical nudge (source px) for the floating HP bar; positive = higher.
   readonly healthBarOffsetY?: number;
-  // ── Stealth / detection tuning (optional; defaults live in constants) ──────
+  // ── Stealth / detection tuning (optional; defaults live in constants) ────
   // Sight range override; defaults to chaseRange or ENEMY_DETECTION_RANGE_PX.
   readonly detectionRange?: number;
   // Vision cone half-angle (degrees); defaults to ENEMY_VISION_HALF_ANGLE_DEG.

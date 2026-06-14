@@ -1,22 +1,22 @@
 import Phaser from 'phaser';
 
 /**
- * textureCanvas — embeds Phaser texture frames into the DOM as <canvas>.
- *
- * Shared helper letting the merchant shop and the player HUD render pixel-art
- * (and procedural) game textures inside HTML by drawing a single frame onto an
- * HTMLCanvasElement the browser scales via CSS. Kept here so the two overlays
- * share one implementation rather than each carrying a private copy.
- *
- * Inputs:  a Phaser scene (for its texture cache), a texture key, and an
- *          optional frame index/name.
- * Outputs: draws onto a canvas (or returns a freshly allocated one).
- * @calledby the DOM overlays that show game textures as HTML — shop icons and
- *           the HUD's icons/sliders.
- * @calls    the scene's texture cache and the canvas 2D drawing API.
+ * @file ui/textureCanvas.ts
+ * @description Shared helper embedding a Phaser texture frame into the DOM as a <canvas> the browser scales via CSS, so overlays can render pixel-art (and procedural) game textures inside HTML.
+ * @module ui
  */
 
-// Draws a texture frame onto a canvas at native pixel size with smoothing off; resizes the canvas to match the frame.
+/**
+ * @function    drawTextureFrame
+ * @description Draw a texture frame onto a canvas at native pixel size with smoothing off, resizing the canvas to match the frame.
+ * @param   canvas      Target canvas to paint into.
+ * @param   scene       Scene providing the texture cache.
+ * @param   key         Texture key.
+ * @param   frameIndex  Optional frame index/name; defaults to __BASE.
+ * @returns true once painted, or false when the frame or 2D context is missing.
+ * @calledby src/ui/textureCanvas.ts → frameCanvas (the only caller; itself widely used by the shop)
+ * @calls    the scene's texture-frame lookup and the canvas 2D blit primitives
+ */
 export function drawTextureFrame(
   canvas: HTMLCanvasElement,
   scene: Phaser.Scene,
@@ -49,7 +49,16 @@ export function drawTextureFrame(
   return true;
 }
 
-// Allocates a fresh canvas and draws the given frame into it; use for static one-off icons.
+/**
+ * @function    frameCanvas
+ * @description Allocate a fresh canvas and draw the given frame into it; use for static one-off icons.
+ * @param   scene       Scene providing the texture cache.
+ * @param   key         Texture key.
+ * @param   frameIndex  Optional frame index/name.
+ * @returns a new canvas with the frame drawn (blank if the draw failed).
+ * @calledby src/ui/ShopOverlay.ts → buildItemIcon and buildCoinIcon
+ * @calls    src/ui/textureCanvas.ts → drawTextureFrame
+ */
 export function frameCanvas(
   scene: Phaser.Scene,
   key: string,

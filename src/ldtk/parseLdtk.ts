@@ -12,27 +12,19 @@ import type {
 } from './types';
 
 /**
- * parseLdtk — turns a raw LDtk project into the game's level model.
- *
- * Stateless query functions over a parsed LdtkProject: validate/parse the JSON,
- * look up a level by name, index the tileset/entity definitions, and project
- * each level's layers into render-ready view structs (tile layers, decoration-
- * entity layers, IntGrid) plus its spawnable entity list. Three load-bearing
- * conventions live here: LDtk stores layers front-most-first so render order is
- * the *reversed* array with a back-to-front depth computed over the original
- * indices; decoration alpha is the entity-def tileOpacity composited onto the
- * layer __opacity; and getEntities enriches each instance in place with a
- * world-px loiterPath and its source __levelId (neither native to LDtk).
- *
- * Inputs:  a raw LDtk JSON string, then the parsed LdtkProject / LdtkLevel; an
- *          optional skip-set and entity-def map for the decoration pass.
- * Outputs: the parsed project, lookup maps, render-view arrays, and the
- *          per-level entity list (mutated with loiterPath / __levelId).
- * @calledby the level-loading and rendering pipeline, when a level is built.
- * @calls    only JSON.parse and the LDtk type accessors — no engine or I/O.
+ * @file ldtk/parseLdtk.ts
+ * @description Stateless query layer turning a parsed LdtkProject into the game's level model (parse/validate JSON, look up a level by name, index tileset/entity defs, project layers into render-ready tile/decoration/IntGrid structs plus a spawnable-entity list); three load-bearing conventions live here — LDtk stores layers front-most-first so render order is the reversed array with back-to-front depth over the original indices; decoration alpha composites the entity-def tileOpacity onto the layer __opacity; getEntities enriches each instance in place with a world-px loiterPath and its source __levelId (neither native to LDtk).
+ * @module ldtk
  */
 
-// parses the raw LDtk JSON and sanity-checks that a levels array is present
+/**
+ * @function    parseLdtkProject
+ * @description Parses the raw LDtk JSON and sanity-checks that a levels array is present, so a malformed or wrong-shaped file fails loudly here rather than crashing deep in the renderer.
+ * @param   rawJson  The LDtk project file as a string.
+ * @returns the parsed LdtkProject; throws a tagged Error on bad JSON or a missing "levels" array.
+ * @calledby src/scenes/PreloadScene.ts, src/scenes/GameScene.ts → level load at startup and dev-server .ldtk hot-reload
+ * @calls    JSON.parse, then a structural guard that rejects a missing levels array
+ */
 export function parseLdtkProject(rawJson: string): LdtkProject {
   let parsed: unknown;
   try {
@@ -47,7 +39,15 @@ export function parseLdtkProject(rawJson: string): LdtkProject {
   return parsed as LdtkProject;
 }
 
-// finds a level by name, throwing with the full available list if it's missing
+/**
+ * @function    getLevel
+ * @description Finds a level by its LDtk identifier; throws with the available names on a miss so a level-id typo is obvious.
+ * @param   project     Parsed LdtkProject.
+ * @param   identifier  Level name, e.g. "Level_5".
+ * @returns the matching LdtkLevel; throws an Error naming the available levels on a miss.
+ * @calledby src/scenes/GameScene.ts → world build / tileset preload resolving the level to render
+ * @calls    a linear search over project.levels; builds the available-names list on failure
+ */
 export function getLevel(project: LdtkProject, identifier: string): LdtkLevel {
   const level = project.levels.find((candidate) => candidate.identifier === identifier);
   if (!level) {
@@ -57,7 +57,7 @@ export function getLevel(project: LdtkProject, identifier: string): LdtkLevel {
   return level;
 }
 
-// Tileset definitions keyed by uid (matches a layer's __tilesetDefUid).
+/** Tileset definitions keyed by uid (matches a layer's __tilesetDefUid). */
 export function getTilesetDefs(project: LdtkProject): Map<number, LdtkTilesetDef> {
   const map = new Map<number, LdtkTilesetDef>();
   for (const ts of project.defs.tilesets) {
@@ -66,9 +66,7 @@ export function getTilesetDefs(project: LdtkProject): Map<number, LdtkTilesetDef
   return map;
 }
 
-// Entity definitions keyed by uid (matches an instance's defUid). Used to
-// resolve per-entity render properties — currently tileOpacity — that live on
-// the definition rather than the instance.
+/** Entity definitions keyed by uid (matches an instance's defUid); resolves per-entity render props (e.g. tileOpacity) that live on the def, not the instance. */
 export function getEntityDefs(project: LdtkProject): Map<number, LdtkEntityDef> {
   const map = new Map<number, LdtkEntityDef>();
   for (const def of project.defs.entities) {
@@ -92,7 +90,14 @@ export interface RenderableTileLayer {
   depth: number;
 }
 
-// projects a level's tile layers into back-to-front render structs, skipping empty/tileset-less layers
+/**
+ * @function    getRenderableLayers
+ * @description Projects a level's tile layers into back-to-front render structs, skipping Entities layers and any empty or tileset-less layer; depth is computed over the ORIGINAL layer index (LDtk stores front-most-first), then the result is reversed so the renderer draws back-to-front.
+ * @param   level  The LdtkLevel whose layers to project.
+ * @returns an array of RenderableTileLayer in back-to-front draw order.
+ * @calledby src/level/LevelRenderer.ts, src/level/TilesetRegistry.ts → building a level's tile-layer draw lists
+ * @calls    walks the layer instances pulling autoLayer/grid tiles and computing a back-to-front depth, then reverses the collected layers
+ */
 export function getRenderableLayers(level: LdtkLevel): RenderableTileLayer[] {
   const total = level.layerInstances.length;
   const layers: RenderableTileLayer[] = [];
@@ -163,7 +168,16 @@ export interface RenderableEntityLayer {
   depth: number;
 }
 
-// projects Entities-type layers into decoration draw lists (back-to-front); composites tileOpacity onto layer opacity
+/**
+ * @function    getRenderableEntityLayers
+ * @description Projects Entities-type layers into back-to-front decoration draw lists, keeping only instances that carry an embedded __tile and aren't in the skip-set; each decoration's alpha composites its entity-def tileOpacity onto the layer __opacity (mirroring LDtk), and depth follows the same original-index reversed convention as the tile layers.
+ * @param   level            The LdtkLevel.
+ * @param   skipIdentifiers  Optional set of entity ids to omit — e.g. ones spawned as live entities instead of decorations.
+ * @param   entityDefs       Optional uid→def map; when absent, tileOpacity defaults to 1 and out-of-bounds to false (the tileset-collection pass).
+ * @returns an array of RenderableEntityLayer in back-to-front draw order.
+ * @calledby src/level/LevelRenderer.ts, src/level/TilesetRegistry.ts → building decoration draw lists and the tileset-collection pass
+ * @calls    walks each Entities layer's instances, resolving the entity def for the opacity composite and out-of-bounds flag, then reverses the layers
+ */
 export function getRenderableEntityLayers(
   level: LdtkLevel,
   skipIdentifiers?: ReadonlySet<string>,
@@ -222,8 +236,14 @@ export interface IntGridData {
   csv: ReadonlyArray<number>;
 }
 
-// The level's first IntGrid layer as a flat CSV grid (collision/metadata
-// source), or null if the level has none.
+/**
+ * @function    getIntGrid
+ * @description Returns the level's first IntGrid layer as a flat CSV grid — the collision/metadata source the physics and nav layers read — or null when the level has no IntGrid layer (or it carries no CSV).
+ * @param   level  The LdtkLevel to scan.
+ * @returns an IntGridData (cell dims, grid size, row-major CSV), or null.
+ * @calledby src/scenes/GameScene.ts → collision/navigation build deriving the solid grid for a level
+ * @calls    finds the first IntGrid layer instance; no further delegation
+ */
 export function getIntGrid(level: LdtkLevel): IntGridData | null {
   const li = level.layerInstances.find((l) => l.__type === 'IntGrid');
   if (!li || !li.intGridCsv) return null;
@@ -235,7 +255,14 @@ export function getIntGrid(level: LdtkLevel): IntGridData | null {
   };
 }
 
-// flattens all entity instances across a level's layers, stamping each with world-px loiterPath and __levelId
+/**
+ * @function    getEntities
+ * @description Flattens all entity instances across a level's layers into one list, enriching each in place with a world-px loiterPath (resolved from its "loiterPath" field) and its source __levelId — neither native to LDtk — so downstream spawning code needn't re-derive level offsets or track which level a flattened instance came from.
+ * @param   level  The LdtkLevel whose entities to gather.
+ * @returns the array of LdtkEntityInstance, each mutated with loiterPath and __levelId.
+ * @calledby src/scenes/GameScene.ts → entity factory/spawner populating a built level with entities
+ * @calls    resolves each instance's loiter path via the local path resolver and stamps the level identifier
+ */
 export function getEntities(level: LdtkLevel): LdtkEntityInstance[] {
   const out: LdtkEntityInstance[] = [];
   for (const li of level.layerInstances) {
@@ -256,7 +283,16 @@ export function getEntities(level: LdtkLevel): LdtkEntityInstance[] {
   return out;
 }
 
-// converts the "loiterPath" Point-Array field to world-px waypoints; returns null when absent or empty
+/**
+ * @function    resolveLoiterPath
+ * @description Converts an entity's optional "loiterPath" Point-Array field into world-px patrol waypoints, anchoring each at the clicked cell's center (matching LDtk's editor) and shifting by the level's worldX/Y; bails to null on any non-array shape so a misconfigured field disables the patrol rather than crashing.
+ * @param   instance  The LdtkEntityInstance.
+ * @param   level     Its owning LdtkLevel, for the world offset.
+ * @param   gridSize  The layer's cell size in px (the divisor).
+ * @returns a world-px LoiterPathPoint array, or null when the field is absent, wrong-typed, or empty.
+ * @calledby src/ldtk/parseLdtk.ts → getEntities, while enriching each instance with its path
+ * @calls    finds and type-checks the loiterPath field, then maps cell coords to world px
+ */
 function resolveLoiterPath(
   instance: LdtkEntityInstance,
   level: LdtkLevel,

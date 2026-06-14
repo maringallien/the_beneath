@@ -6,23 +6,9 @@ import {
 } from '../sprites/characterLoader';
 
 /**
- * Projectile — a gun-fired bullet/energy shot sprite with one-shot impact.
- *
- * An Arcade sprite (gravity off) that flies along its launch velocity, rotates
- * to face it (mirrored Y in the left half-plane so it never renders upside-down),
- * and detonates exactly once — on the first overlap-driven impact, a world-bounds
- * hit, or a lifetime-timeout fallback. The single-detonation guard plus disabling
- * the body on impact is load-bearing: it stops the body re-overlapping its target
- * for every frame of the explode clip (which would stack damage and one-shot any
- * enemy). Tidies its world-bounds listener and lifetime timer on destroy.
- *
- * Inputs:  scene + spawn options (position, mode, velocity, damage); registry-
- *          loaded projectile animations; physics overlap/world-bounds events.
- * Outputs: a moving sprite that deals `damage` on overlap, plays its explode clip,
- *          and self-destroys.
- * @calledby the player's gun-firing code, when a shot is loosed.
- * @calls    the projectile animation-key helper, Arcade physics (velocity, world-
- *           bounds), and the scene timer for the lifetime cap.
+ * @file entities/Projectile.ts
+ * @description Gun-fired Arcade projectile (gravity off) that flies along its launch velocity, rotates to face it (mirrored Y in the left half-plane so it never renders upside-down), and detonates exactly once — on the first overlap-driven impact, a world-bounds hit, or a lifetime-timeout fallback. The single-detonation guard plus disabling the body on impact is load-bearing: it stops the body re-overlapping its target every frame of the explode clip (which would stack damage and one-shot any enemy). Tidies its world-bounds listener and lifetime timer on destroy.
+ * @module entities
  */
 export interface ProjectileSpawnOptions {
   x: number;
@@ -44,7 +30,14 @@ export class Projectile extends Phaser.Physics.Arcade.Sprite {
     body: Phaser.Physics.Arcade.Body,
   ) => void;
 
-  // spawns and launches the projectile; throws if the idle texture isn't loaded
+  /**
+   * @function    constructor
+   * @description Spawns and launches the projectile along its velocity, rotates it to face travel, and wires the world-bounds collider, lifetime cap, and destroy cleanup; throws if the idle texture isn't loaded.
+   * @param   scene    Owning Phaser scene.
+   * @param   options  Position, gun mode, velocity, and damage.
+   * @calledby src/scenes/GameScene.ts → spawnProjectile, when the player's gun looses a shot
+   * @calls    src/sprites/characterLoader.ts → projectileAnimKey, Arcade physics setup, the scene lifetime timer, and the world-bounds/destroy hooks
+   */
   constructor(scene: Phaser.Scene, options: ProjectileSpawnOptions) {
     const idleKey = projectileAnimKey(options.mode, 'idle');
     if (!scene.textures.exists(idleKey)) {
@@ -98,17 +91,22 @@ export class Projectile extends Phaser.Physics.Arcade.Sprite {
     });
   }
 
-  // True once the projectile has detonated (overlap callers gate on this).
+  /** True once the projectile has detonated (overlap callers gate on this). */
   hasExploded(): boolean {
     return this.exploded;
   }
 
-  // Damage this projectile deals on a hit (set at spawn, per gun mode).
+  /** Damage this projectile deals on a hit (set at spawn, per gun mode). */
   getDamage(): number {
     return this.damage;
   }
 
-  // detonates once; disables the body immediately so no damage ticks stack during the explode clip
+  /**
+   * @function    onImpact
+   * @description Detonates exactly once: clears the lifetime timer, halts and disables the body immediately so no damage ticks stack during the explode clip, then plays the explode clip and self-destroys on its completion.
+   * @calledby Phaser physics overlap on an enemy (registered in world build), a world-bounds hit, or the lifetime cap
+   * @calls    src/sprites/characterLoader.ts → projectileAnimKey and the Arcade body, then tears itself down
+   */
   onImpact(): void {
     if (this.exploded) return;
     this.exploded = true;

@@ -1,16 +1,7 @@
 /**
- * characterTypes — the shared vocabulary for the character-animation registry.
- *
- * Pure type/interface declarations (no logic) describing how a character mode's
- * spritesheets are parsed into animations, how the player's cross-mode action
- * keys map onto concrete registry entries, and which modes are wheel-selectable
- * vs. overlay/source-only. The registry pipeline (preload, register, key
- * resolution) and Player.ts both speak in these shapes.
- *
- * Inputs:  none — type declarations only.
- * Outputs: the named types/interfaces below.
- * @calledby the character-mode registry loader/resolver and the player entity.
- * @calls    nothing — a leaf type module.
+ * @file sprites/characterTypes.ts
+ * @description Shared vocabulary (pure type/interface declarations, no logic) for the character-animation registry — how a mode's spritesheets parse into animations, how the player's cross-mode action keys map onto concrete registry entries, and which modes are wheel-selectable vs. overlay/source-only; the registry pipeline (preload, register, key resolution) and Player.ts both speak in these shapes.
+ * @module sprites
  */
 
 // Broad bucket an animation falls into, used by the registry to group/classify.

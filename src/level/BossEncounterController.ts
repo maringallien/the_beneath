@@ -21,28 +21,9 @@ import { TeleportCoordinator } from '../entities/teleportCoordinator';
 import type { GameHud } from '../scenes/gameHud';
 
 /**
- * BossEncounterController — orchestrates a round-fight boss encounter.
- *
- * Owns everything that turns a plain boss into an arena fight: forcing every
- * other enemy in the boss's level to converge on the player once conflict is
- * truly joined, spawning per-round reinforcement waves and boss self-copy splits
- * at the level's General_enemy_spawn markers, backing 'summon' minions, and
- * running the flee-the-arena escape countdown that breaks off pursuit and resets
- * the fight if the player stays out past the grace window. The active boss is
- * resolved scene-side each frame; this controller only consumes it. One instance
- * per GameScene; teardown() resets per-world state but the iid counter survives
- * rebuilds so synthesized iids never collide across respawns.
- *
- * Inputs:  the BossEncounterHost (player, active boss, enemy iteration, level
- *          bounds, tile solidity, world attach), the GameHud, spawn markers, and
- *          boss-wave / self-copy / reinforcement tuning + rosters.
- * Outputs: spawned reinforcement/copy/minion Enemies wired into the world, forced
- *          convergence/pursuit drops on arena enemies, HUD escape-warning + round
- *          state, and a full boss-fight reset.
- * @calledby the scene's per-frame update (convergence + escape leash), world
- *           build (spawn sites), 'summon' attacks, and world teardown.
- * @calls    the enemy rebuild primitive, entity-sound registration, the host's
- *           world-attach/iteration hooks, and the HUD.
+ * @file level/BossEncounterController.ts
+ * @description Turns a plain boss into an arena fight — forces every other enemy in the boss's level to converge on the player once conflict is truly joined (isInConflict, not merely spotted), spawns per-round reinforcement waves and boss self-copy splits at the level's General_enemy_spawn markers, backs 'summon' minions, and runs the flee-the-arena escape countdown that breaks off pursuit and resets the fight if the player stays out past the grace window; the active boss is resolved scene-side each frame (this controller only consumes it); one instance per GameScene; teardown resets per-world state but the iid counter survives rebuilds so synthesized iids never collide.
+ * @module level
  */
 type LevelBounds = {
   worldX: number;
@@ -51,7 +32,16 @@ type LevelBounds = {
   pxHei: number;
 };
 
-// True when (x, y) lies inside the level rect b (right/bottom edges exclusive).
+/**
+ * @function    isWithinBounds
+ * @description True when (x, y) lies inside the level rect b (right/bottom edges exclusive).
+ * @param   x  World-px x to test.
+ * @param   y  World-px y to test.
+ * @param   b  Level rect: worldX/worldY origin plus pxWid/pxHei extent.
+ * @returns whether the point lies inside the rect.
+ * @calledby arena-bounds checks throughout BossEncounterController (player/boss/enemy inside the fight arena)
+ * @calls    pure arithmetic comparisons only; no delegation
+ */
 export function isWithinBounds(
   x: number,
   y: number,
@@ -94,23 +84,29 @@ export class BossEncounterController {
   // Summoned minions from 'summon' attacks — tracked separately so escape resets don't despawn them.
   private summonedMinions: Enemy[] = [];
 
+  /** Wires the scene, host services, and HUD. */
   constructor(scene: Phaser.Scene, host: BossEncounterHost, hud: GameHud) {
     this.scene = scene;
     this.host = host;
     this.hud = hud;
   }
 
-  // Scene-time of the active escape countdown, or null when none is running.
+  /** Scene-time of the active escape countdown, or null when none is running. */
   getEscapeDeadline(): number | null {
     return this.escapeDeadline;
   }
 
-  // Store the General_enemy_spawn marker positions from the freshly built world.
+  /** Store the General_enemy_spawn marker positions from the freshly built world. */
   setSpawnSites(sites: ReadonlyArray<{ x: number; y: number }>): void {
     this.enemySpawnSites = sites;
   }
 
-  // Per-frame convergence + wave driver: forces arena enemies to chase while in conflict, spawns reinforcement waves and self-copy splits as the boss's round climbs.
+  /**
+   * @function    update
+   * @description Per-frame convergence + wave driver: forces arena enemies to chase while in conflict, spawns reinforcement waves and self-copy splits as the boss's round climbs; resets the round tracker when no boss is alive.
+   * @calledby src/scenes/GameScene.ts → per-frame update tick (while a boss is active)
+   * @calls    spawnRoundReinforcements, spawnBossSelfCopies, selfCopiesFor (src/entities/bossSelfCopies.ts), and forceConverge on each in-arena enemy
+   */
   update(): void {
     const boss = this.host.getActiveBoss();
     if (!boss || !boss.active || boss.isDead()) {
@@ -148,7 +144,12 @@ export class BossEncounterController {
     }
   }
 
-  // Per-frame escape guard: arms the countdown when the player leaves the arena, breaks off pursuit every frame they're out, and resets the fight if they stay gone.
+  /**
+   * @function    updateLeash
+   * @description Per-frame escape guard: arms the countdown when the player leaves the arena, breaks off pursuit every frame they're out, and resets the fight if they stay gone.
+   * @calledby src/scenes/GameScene.ts → per-frame update tick, alongside the convergence driver
+   * @calls    the arena pursuit break-off, escape-countdown clearing, and the full boss-fight reset on timeout
+   */
   updateLeash(): void {
     const boss = this.host.getActiveBoss();
     if (!boss || !boss.active || boss.isDead()) {
@@ -172,7 +173,14 @@ export class BossEncounterController {
     }
   }
 
-  // Drops pursuit on the boss, all reinforcements, and any arena enemy so none follow the player out.
+  /**
+   * @function    breakOffArena
+   * @description Drops pursuit on the boss, all reinforcements, and any arena enemy so none follow the player out.
+   * @param   boss   The active boss.
+   * @param   arena  The level rect to confine the break-off to.
+   * @calledby src/level/BossEncounterController.ts → updateLeash, resetBossFight
+   * @calls    each enemy's drop-pursuit, gated by the in-bounds test
+   */
   private breakOffArena(boss: Enemy, arena: LevelBounds): void {
     boss.dropPursuit();
     for (const enemy of this.reinforcements) {
@@ -186,14 +194,25 @@ export class BossEncounterController {
     });
   }
 
-  // Cancels any in-progress escape countdown and hides the HUD warning. Idempotent.
+  /**
+   * @function    clearEscape
+   * @description Cancels any in-progress escape countdown and hides the HUD warning. Idempotent — no-op when no countdown is armed.
+   * @calledby src/level/BossEncounterController.ts → updateLeash, resetBossFight
+   * @calls    hiding the HUD escape-warning banner
+   */
   clearEscape(): void {
     if (this.escapeDeadline === null) return;
     this.escapeDeadline = null;
     this.hud.setEscapeWarningVisible(false);
   }
 
-  // Full boss-fight reset when the player escapes: breaks pursuit, despawns reinforcements, and restores the boss to its pre-encounter state.
+  /**
+   * @function    resetBossFight
+   * @description Full boss-fight reset when the player escapes: breaks pursuit, despawns reinforcements, and restores the boss to its pre-encounter state.
+   * @param   boss  The active boss being reset.
+   * @calledby src/level/BossEncounterController.ts → updateLeash, once the grace window expires with the player still gone
+   * @calls    breakOffArena, each reinforcement's destroy, the boss's encounter reset, the host's active-boss clear, and HUD round reset
+   */
   private resetBossFight(boss: Enemy): void {
     const arena = this.host.getLevelBoundsAt(boss.getSpawnX(), boss.getSpawnY());
     if (arena) this.breakOffArena(boss, arena);
@@ -209,7 +228,15 @@ export class BossEncounterController {
     this.clearEscape();
   }
 
-  // Spawns one reinforcement wave for the given round: one group per spawn marker inside the boss's level, staggered between sites.
+  /**
+   * @function    spawnRoundReinforcements
+   * @description Spawns one reinforcement wave for the given round: one group per spawn marker inside the boss's level, staggered between sites; no-op when the roster yields no units.
+   * @param   bounds  The boss's level rect, or null to allow any site.
+   * @param   bossId  Roster key for the boss.
+   * @param   round   The round number to draw the wave for.
+   * @calledby src/level/BossEncounterController.ts → update, once for each newly-reached round at or past the first reinforced round
+   * @calls    reinforcementsFor (src/entities/bossWaves.ts), then spawnSiteWave per marker on a stagger
+   */
   private spawnRoundReinforcements(
     bounds: LevelBounds | null,
     bossId: string,
@@ -232,7 +259,15 @@ export class BossEncounterController {
     });
   }
 
-  // Spawns the whole unit group at one site, spread symmetrically around the marker so they don't stack.
+  /**
+   * @function    spawnSiteWave
+   * @description Spawns the whole unit group at one site, spread symmetrically around the marker so they don't stack.
+   * @param   units  One identifier per unit to spawn.
+   * @param   siteX  Marker x (world px).
+   * @param   siteY  Marker y (world px).
+   * @calledby src/level/BossEncounterController.ts → spawnRoundReinforcements, immediately for the first site and after a stagger delay for the rest
+   * @calls    spawnReinforcement per unit
+   */
   private spawnSiteWave(units: string[], siteX: number, siteY: number): void {
     for (let i = 0; i < units.length; i += 1) {
       const offsetX =
@@ -241,7 +276,15 @@ export class BossEncounterController {
     }
   }
 
-  // Spawns one reinforcement at the floor below the marker, wires it in without respawn tracking, and immediately forces pursuit.
+  /**
+   * @function    spawnReinforcement
+   * @description Spawns one reinforcement at the floor below the marker, wires it in without respawn tracking, and immediately forces convergence; no-op if the rebuild fails.
+   * @param   identifier  Enemy roster key.
+   * @param   x           World-px column to spawn at.
+   * @param   markerY     World-px y the floor is probed below.
+   * @calledby src/level/BossEncounterController.ts → spawnSiteWave, once per unit in the group
+   * @calls    groundYBelow, respawnEnemyAt (src/entities/EntityFactory.ts), registerEntitySound (src/audio), the host's attachEnemyToWorld, and forceConverge
+   */
   private spawnReinforcement(identifier: string, x: number, markerY: number): void {
     const groundY = this.groundYBelow(x, markerY);
     const spawnY = groundY - REINFORCEMENT_SPAWN_LIFT_PX;
@@ -267,7 +310,16 @@ export class BossEncounterController {
     enemy.forceConverge();
   }
 
-  // Spawns a summoned minion at the floor below (x, y), wired in without respawn tracking and forced into pursuit.
+  /**
+   * @function    summonEnemyAt
+   * @description Spawns a summoned minion at the floor below (x, y), wired in without respawn tracking and forced into pursuit; tracked separately so escape resets don't despawn it.
+   * @param   identifier  Enemy roster key.
+   * @param   x           World-px column to spawn at.
+   * @param   y           World-px y the floor is probed below.
+   * @returns the spawned Enemy, or null if the rebuild fails.
+   * @calledby src/scenes/GameScene.ts → summonEnemyAt (a boss 'summon' attack resolving its minions, via Enemy.ts)
+   * @calls    groundYBelow, respawnEnemyAt (src/entities/EntityFactory.ts), registerEntitySound (src/audio), the host's attachEnemyToWorld, and forcePursue
+   */
   summonEnemyAt(identifier: string, x: number, y: number): Enemy | null {
     const groundY = this.groundYBelow(x, y);
     const spawnY = groundY - REINFORCEMENT_SPAWN_LIFT_PX;
@@ -286,7 +338,15 @@ export class BossEncounterController {
     return enemy;
   }
 
-  // Spawns harmless boss self-copies flanking the boss's position, sharing a teleport coordinator to avoid stacking.
+  /**
+   * @function    spawnBossSelfCopies
+   * @description Spawns harmless boss self-copies flanking the boss's position, sharing a teleport coordinator to avoid stacking; alternates copies left/right and forces each to converge.
+   * @param   boss    The original being cloned.
+   * @param   spec    Copy count, max health, and the harmless-copy config.
+   * @param   bounds  Level rect to clamp spawn x into, or null.
+   * @calledby src/level/BossEncounterController.ts → update, for bosses whose round triggers a self-copy split
+   * @calls    the TeleportCoordinator and respawnEnemyAt with harmless-copy options, registerEntitySound (src/audio), the host's attachEnemyToWorld, and forceConverge
+   */
   private spawnBossSelfCopies(
     boss: Enemy,
     spec: BossSelfCopySpec,
@@ -334,7 +394,15 @@ export class BossEncounterController {
     }
   }
 
-  // Probes down from startY to find the first solid floor tile and returns its top edge.
+  /**
+   * @function    groundYBelow
+   * @description Probes down from startY to find the first solid floor tile and returns its top edge.
+   * @param   x       World-px column to probe.
+   * @param   startY  World-px y to begin the downward scan.
+   * @returns world-px y of the first solid tile's top edge, or startY if none is found within the probe budget.
+   * @calledby src/level/BossEncounterController.ts → spawnReinforcement, summonEnemyAt
+   * @calls    the host's isTileSolidAt, stepping downward tile by tile
+   */
   private groundYBelow(x: number, startY: number): number {
     const TILE_SIZE = 16;
     const startTileY = Math.floor(startY / TILE_SIZE);
@@ -348,7 +416,12 @@ export class BossEncounterController {
     return startY;
   }
 
-  // Destroys any lingering reinforcements/minions and resets all round-fight state so a rebuilt world starts fresh.
+  /**
+   * @function    teardown
+   * @description Destroys any lingering reinforcements/minions and resets all round-fight state so a rebuilt world starts fresh — clears spawn sites, round tracker, and escape state, and hides the HUD warning; the iid counter deliberately survives.
+   * @calledby src/scenes/GameScene.ts → world teardown, before the scene rebuilds its levels
+   * @calls    each tracked enemy's destroy and hiding the HUD escape warning
+   */
   teardown(): void {
     for (const enemy of [...this.reinforcements]) {
       if (enemy.active) enemy.destroy();

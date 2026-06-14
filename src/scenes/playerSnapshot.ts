@@ -3,20 +3,9 @@ import type { Player } from '../entities/Player';
 import type { CharacterModeId } from '../sprites/characterTypes';
 
 /**
- * playerSnapshot — captures and restores player state across world rebuilds.
- *
- * A plain data snapshot plus its capture/apply pair, used to carry the player
- * through an LDtk hot-reload AND a save→death→respawn. Only persistent state
- * (position, velocity, mode, facing, resources) is preserved; transient action
- * state (locked attacks, combo counter, dash duration) is intentionally dropped,
- * since restoring mid-attack into a freshly-built world reads worse than dropping
- * to idle for one frame. Restore is skipped when the snapshot position no longer
- * lands inside any level, leaving the fresh spawn to stand.
- *
- * Inputs:  a live (or null) Player to snapshot; a snapshot + camera to restore.
- * Outputs: a PlayerSnapshot, or mutations to the rebuilt player + camera.
- * @calledby the world-rebuild path (HMR reload and respawn), around the teardown.
- * @calls    the player's resource/position/mode/facing setters and the camera.
+ * @file scenes/playerSnapshot.ts
+ * @description Captures and restores player state across world rebuilds — a plain data snapshot plus its capture/apply pair, used to carry the player through an LDtk hot-reload AND a save/death/respawn. Only persistent state (position, velocity, mode, facing, resources) is preserved; transient action state (locked attacks, combo counter, dash duration) is intentionally dropped, since restoring mid-attack into a freshly-built world reads worse than dropping to idle for one frame. Restore is skipped when the snapshot position no longer lands inside any level, leaving the fresh spawn to stand.
+ * @module scenes
  */
 
 // Persistent player state carried across a world rebuild; add fields here + in both fns to extend.
@@ -36,7 +25,14 @@ export interface PlayerSnapshot {
   healItems: number;
 }
 
-// Captures the current player into a snapshot; returns null if the player or its body isn't ready.
+/**
+ * @function    snapshotPlayer
+ * @description Captures the current player into a snapshot of persistent state.
+ * @param   player  A live Player, or null/undefined when none exists yet.
+ * @returns a PlayerSnapshot, or null if the player or its physics body isn't ready.
+ * @calledby src/scenes/GameScene.ts → the world-rebuild path just before teardown (HMR reload and respawn) and the save crystal
+ * @calls    the player's position/velocity/mode/facing and resource getters
+ */
 export function snapshotPlayer(
   player: Player | null | undefined,
 ): PlayerSnapshot | null {
@@ -58,7 +54,16 @@ export function snapshotPlayer(
   };
 }
 
-// Applies a snapshot to the freshly rebuilt player; skipped if the position no longer lands in a level.
+/**
+ * @function    restorePlayer
+ * @description Applies a snapshot to the freshly rebuilt player and recentres the camera; a no-op when the position falls outside every level (the fresh LDtk spawn stands). Facing and resources are set after the mode switch so caps and the idle anchor read correctly.
+ * @param   player          The rebuilt Player.
+ * @param   camera          Camera to recentre on the restored position.
+ * @param   snapshot        The captured state to apply.
+ * @param   insideAnyLevel  false when the saved position no longer fits the world — keeps the LDtk spawn.
+ * @calledby src/scenes/GameScene.ts → restorePlayerSnapshot on the world-rebuild path, after the fresh world is built (HMR reload and respawn)
+ * @calls    the player's position/velocity/mode/facing setters, the restored-state applier, and the camera
+ */
 export function restorePlayer(
   player: Player,
   camera: Phaser.Cameras.Scene2D.Camera,

@@ -1,21 +1,9 @@
 import { HEART_HOARDER_COPY_HEALTH } from '../constants';
 
 /**
- * bossSelfCopies — per-boss, per-round "self-copy" specs for the round-fight system.
- *
- * The "boss splits into copies" mechanic: when a round-fight boss crosses into a
- * configured round, the scene spawns `count` harmless copies of the boss itself,
- * each built from the boss's own registry entry (inheriting every animation,
- * attack, and AI behavior) but dealing no damage and using `maxHealth` in place
- * of the boss's full HP. Distinct from the per-site reinforcement rosters in
- * bossWaves.ts (which spawn *other* enemy types); a boss may use either, both,
- * or neither on a given round.
- *
- * Inputs:  a boss registry identifier and its 1-based latched round.
- * Outputs: a self-copy spec (count + per-copy max HP), or null.
- * @calledby the boss encounter flow, when a boss crosses a round threshold and
- *           the scene decides whether to split it into copies.
- * @calls    nothing — a static table lookup.
+ * @file entities/bossSelfCopies.ts
+ * @description Static per-boss/per-round "self-copy" split specs — when a round-fight boss crosses a configured round it spawns harmless copies of itself (its own registry entry, dealing no damage, with an overridden maxHealth); distinct from the other-enemy rosters in bossWaves.ts, and a boss may use either, both, or neither.
+ * @module entities
  */
 
 // How a boss splits on a given round.
@@ -35,7 +23,15 @@ const BOSS_SELF_COPIES: Readonly<
   },
 };
 
-// Returns the self-copy spec for (boss, round), or null if this boss doesn't split on this round.
+/**
+ * @function    selfCopiesFor
+ * @description Returns the self-copy spec for (boss, round), or null if this boss doesn't split on this round.
+ * @param   bossId  Registry identifier.
+ * @param   round   1-based latched round.
+ * @returns a BossSelfCopySpec (count + per-copy max HP), or null when unconfigured.
+ * @calledby src/level/BossEncounterController.ts → on a round-threshold crossing, deciding a split
+ * @calls    nothing — a static nested-table lookup
+ */
 export function selfCopiesFor(
   bossId: string,
   round: number,

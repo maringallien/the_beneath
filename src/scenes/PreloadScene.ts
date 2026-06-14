@@ -54,35 +54,25 @@ import {
 } from '../sprites/characterLoader';
 
 /**
- * PreloadScene — the boot scene that loads every asset before gameplay starts.
- *
- * Queues all character/entity/sound assets, every level's tilesets (loaded up
- * front because GameScene streams the whole world and partial loads would gap at
- * level seams), and the HUD/menu/landing images during preload(); then in
- * create() registers animations, carves tight HUD sub-frames, generates the
- * procedural pickup textures, applies tileset brightness + glow bakes, and hands
- * off to GAME — but only once the display font is ready (or a timeout elapses),
- * so the title's first paint uses the real glyphs.
- *
- * Inputs:  the LDtk project data, the sprite/sound registries, and asset-path
- *          constants; the browser Font Loading API.
- * Outputs: a fully populated Phaser texture/animation/audio cache, procedurally
- *          baked textures, and the scene transition into GAME.
- * @calledby the Phaser scene manager at startup (and re-entered when Quit routes
- *           back through the boot).
- * @calls    the character/sound preloaders, the tileset/glow bake passes, and
- *           the scene-start into the gameplay scene's landing overlay.
+ * @file scenes/PreloadScene.ts
+ * @description Boot scene that loads every asset before gameplay starts. preload queues all character/entity/sound assets, every level's tilesets (up front, because GameScene streams the whole world and partial loads would gap at level seams), and the HUD/menu/landing images; create then registers animations, carves tight HUD sub-frames, generates the procedural pickup textures, applies tileset brightness and glow bakes, and hands off to GAME — but only once the display font is ready (or a timeout elapses), so the title's first paint uses the real glyphs.
+ * @module scenes
  */
 export class PreloadScene extends Phaser.Scene {
   // Stashed from preload() so create() can bake glow atlases without re-parsing the LDtk project.
   private tilesetsForGlowBake: ReadonlyArray<LdtkTilesetDef> = [];
 
-  // Registers under the PRELOAD scene key.
+  /** Registers under the PRELOAD scene key. */
   constructor() {
     super({ key: SCENE_KEYS.PRELOAD });
   }
 
-  // Queues all game assets — characters, sounds, all tilesets, HUD/menu/landing images.
+  /**
+   * @function    preload
+   * @description Queues all game assets — characters, sounds, all tilesets, HUD/menu/landing images — and stashes the tileset list for the glow bake; partial loads are avoided so adjacent levels never gap at a seam mid-walk.
+   * @calledby Phaser scene lifecycle at preload, after the boot scene hands off (via src/scenes/BootScene.ts)
+   * @calls    the character/entity/sound preloaders and src/level/TilesetRegistry; src/scenes/PreloadScene.ts → createLoadingBar
+   */
   preload(): void {
     this.createLoadingBar();
     preloadAllCharacters(this);
@@ -134,7 +124,12 @@ export class PreloadScene extends Phaser.Scene {
     this.load.image(LANDING_CREDITS_TEXTURE_KEY, LANDING_CREDITS_ASSET_PATH);
   }
 
-  // Registers animations, carves HUD frames, bakes procedural textures/glow, then boots GAME once the font is ready.
+  /**
+   * @function    create
+   * @description Registers animations, carves tight HUD sub-frames, generates the procedural pickup textures, LINEAR-filters the word banners, applies the brightness/glow bakes, then defers the scene-start into GAME until the font is ready.
+   * @calledby Phaser scene lifecycle at create, once the loader finishes
+   * @calls    the animation registrars, src/scenes/PreloadScene.ts → the procedural-texture generators, the brightness/glow bake passes, and bootGameWhenFontReady
+   */
   create(): void {
     registerAllCharacterAnimations(this);
     registerAllEntityAnimations(this);
@@ -171,7 +166,12 @@ export class PreloadScene extends Phaser.Scene {
     this.bootGameWhenFontReady();
   }
 
-  // Boots GAME once the display font loads, or after a timeout — font must never block startup.
+  /**
+   * @function    bootGameWhenFontReady
+   * @description Starts the GAME scene with startLanding:true exactly once — when the display font loads or after a timeout, so the font never blocks startup.
+   * @calledby src/scenes/PreloadScene.ts → create's end, to gate the first paint on the real glyphs
+   * @calls    the browser Font Loading API and a delayed-call fallback timer; whichever fires first triggers the one-time scene-start into gameplay's landing overlay
+   */
   private bootGameWhenFontReady(): void {
     const boot = (): void => {
       // startLanding:true shows the title overlay; set on every fresh run start (including post-Quit).
@@ -204,7 +204,12 @@ export class PreloadScene extends Phaser.Scene {
       });
   }
 
-  // Brightens dark tilesets before the glow bake so the glow pass sees the lifted source.
+  /**
+   * @function    applyTilesetBrightnessLifts
+   * @description Brightens dark tilesets in place before the glow bake so the glow pass sees the lifted source; skips tilesets with no factor.
+   * @calledby src/scenes/PreloadScene.ts → create, immediately before the glow bake
+   * @calls    src/level/TilesetBrightnessPass → brightenTilesetTexture per configured tileset
+   */
   private applyTilesetBrightnessLifts(): void {
     for (const def of this.tilesetsForGlowBake) {
       const factor = TILESET_BRIGHTNESS_FACTORS[def.uid];
@@ -213,7 +218,12 @@ export class PreloadScene extends Phaser.Scene {
     }
   }
 
-  // Pre-bakes a glow atlas for each tileset so LevelRenderer can stamp halos over bright Foreground pixels.
+  /**
+   * @function    bakeForegroundGlowAtlases
+   * @description Pre-bakes a glow atlas per tileset so the level renderer can stamp halos over bright Foreground pixels; gated by FOREGROUND_GLOW_ENABLED (a no-op when glow is disabled).
+   * @calledby src/scenes/PreloadScene.ts → create, after the brightness lifts so the bake sees the lifted source
+   * @calls    src/level/GlowAtlasBaker → bakeGlowAtlasForTileset per tileset
+   */
   private bakeForegroundGlowAtlases(): void {
     if (!FOREGROUND_GLOW_ENABLED) return;
     for (const def of this.tilesetsForGlowBake) {
@@ -221,7 +231,12 @@ export class PreloadScene extends Phaser.Scene {
     }
   }
 
-  // Procedural magic-pickup gem (faceted pentagon shape); swap for a real PNG at MAGIC_ORB_TEXTURE_KEY.
+  /**
+   * @function    generateMagicOrbTexture
+   * @description Procedural magic-pickup gem (faceted pentagon shape) registered LINEAR-filtered under MAGIC_ORB_TEXTURE_KEY; swap for a real PNG at that key.
+   * @calledby src/scenes/PreloadScene.ts → create, while baking the procedural pickup textures
+   * @calls    a throwaway Graphics object to draw and generate the texture, then discards it
+   */
   private generateMagicOrbTexture(): void {
     const size = MAGIC_ORB_TEXTURE_SIZE_PX;
     const g = this.make.graphics({ x: 0, y: 0 }, false);
@@ -244,7 +259,12 @@ export class PreloadScene extends Phaser.Scene {
       .setFilter(Phaser.Textures.FilterMode.LINEAR);
   }
 
-  // Procedural gold coin disc with an off-center highlight; swap for a real PNG at COIN_TEXTURE_KEY.
+  /**
+   * @function    generateCoinTexture
+   * @description Procedural gold coin disc with an off-center highlight, registered LINEAR-filtered under COIN_TEXTURE_KEY; swap for a real PNG at that key.
+   * @calledby src/scenes/PreloadScene.ts → create, while baking the procedural pickup textures
+   * @calls    a throwaway Graphics object to draw and generate the texture, then discards it
+   */
   private generateCoinTexture(): void {
     const size = COIN_TEXTURE_SIZE_PX;
     const cx = size / 2;
@@ -262,7 +282,12 @@ export class PreloadScene extends Phaser.Scene {
       .setFilter(Phaser.Textures.FilterMode.LINEAR);
   }
 
-  // Procedural "+" cross pickup matching the HUD heal glyph; swap for a real PNG at HEAL_CROSS_TEXTURE_KEY.
+  /**
+   * @function    generateHealCrossTexture
+   * @description Procedural "+" cross pickup matching the HUD heal glyph, registered LINEAR-filtered under HEAL_CROSS_TEXTURE_KEY; swap for a real PNG at that key.
+   * @calledby src/scenes/PreloadScene.ts → create, while baking the procedural pickup textures
+   * @calls    a throwaway Graphics object to draw and generate the texture, then discards it
+   */
   private generateHealCrossTexture(): void {
     const size = HEAL_CROSS_TEXTURE_SIZE_PX;
     const g = this.make.graphics({ x: 0, y: 0 }, false);
@@ -280,7 +305,12 @@ export class PreloadScene extends Phaser.Scene {
       .setFilter(Phaser.Textures.FilterMode.LINEAR);
   }
 
-  // Procedural gold key pickup (bow + shaft + two teeth); swap for a real PNG at KEY_TEXTURE_KEY.
+  /**
+   * @function    generateKeyTexture
+   * @description Procedural gold key pickup (bow + shaft + two teeth) registered under KEY_TEXTURE_KEY; the bow hole is faked with a highlight disc since destination-out blend isn't exposed on Graphics. Swap for a real PNG at that key.
+   * @calledby src/scenes/PreloadScene.ts → create, while baking the procedural pickup textures
+   * @calls    a throwaway Graphics object to draw and generate the texture, then discards it
+   */
   private generateKeyTexture(): void {
     const size = KEY_TEXTURE_SIZE_PX;
     const g = this.make.graphics({ x: 0, y: 0 }, false);
@@ -310,7 +340,12 @@ export class PreloadScene extends Phaser.Scene {
       .setFilter(Phaser.Textures.FilterMode.LINEAR);
   }
 
-  // Small black puff for the magic orb's mist particle emitter.
+  /**
+   * @function    generateMistParticleTexture
+   * @description Small black puff for the magic orb's mist particle emitter, registered LINEAR-filtered under MIST_PARTICLE_TEXTURE_KEY.
+   * @calledby src/scenes/PreloadScene.ts → create, while baking the procedural pickup textures
+   * @calls    a throwaway Graphics object to draw and generate the texture, then discards it
+   */
   private generateMistParticleTexture(): void {
     const size = MIST_PARTICLE_TEXTURE_SIZE_PX;
     const cx = size / 2;
@@ -325,7 +360,12 @@ export class PreloadScene extends Phaser.Scene {
       .setFilter(Phaser.Textures.FilterMode.LINEAR);
   }
 
-  // Creates the Loading... progress bar; tears itself down when the loader finishes.
+  /**
+   * @function    createLoadingBar
+   * @description Creates the Loading... progress bar (box, fill bar, label); the bar tracks loader progress and all three are destroyed on complete.
+   * @calledby src/scenes/PreloadScene.ts → preload's start, before any assets are queued
+   * @calls    the loader's progress and complete events to redraw the fill and self-destruct
+   */
   private createLoadingBar(): void {
     const { width, height } = this.cameras.main;
 

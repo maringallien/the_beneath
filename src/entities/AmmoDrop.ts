@@ -46,25 +46,9 @@ import type { AnimatedEntityDropConfig } from './entityRegistryTypes';
 import type { PickupKind } from './Player';
 
 /**
- * AmmoDrop — a world-spawned auto-pickup (ammo, magic orb, heal cross, boss key,
- * or coin) plus the shared drop-roll helpers.
- *
- * One sprite class covers every loot kind: a per-kind texture/scale lookup and a
- * per-kind physics branch select between the three motion styles — magic orbs
- * hover (gravity off, sinusoidal loiter + a mist emitter), coins burst in a wide
- * scatter, and everything else falls-and-pops like ammo. Picked up by an Arcade
- * overlap with the player (automatic, no prompt). The module also owns the
- * weighted drop-roll (pickDropKind / rollDrop) so chests and enemies share one
- * loot path. Construction throws if the kind's texture wasn't preloaded.
- *
- * Inputs:  scene, spawn x/y, a PickupKind; drop configs + RNG for the roll
- *          helpers; tuning constants and PreloadScene-loaded textures.
- * Outputs: a physics sprite (self-registered, depth/scale/body set), a mist
- *          emitter for orbs, a lifetime self-destruct timer; PickupKind | null
- *          from the roll helpers.
- * @calledby chest open and enemy death, spawning whatever the drop roll selected.
- * @calls    Phaser sprite/physics/particle/timer construction and the scene
- *           update event (orb loiter); the roll helpers call only the RNG.
+ * @file entities/AmmoDrop.ts
+ * @description World-spawned auto-pickup drop plus the weighted drop-roll helpers. One sprite class covers every loot kind (ammo, magic orb, heal cross, boss key, coin): a per-kind texture/scale lookup and a per-kind physics branch pick one of three motion styles — magic orbs hover (gravity off, sinusoidal loiter plus a mist emitter), coins burst in a wide scatter, everything else falls-and-pops like ammo. Picked up by an Arcade overlap with the player (automatic, no prompt). Also owns the weighted drop-roll (pickDropKind / rollDrop) so chests and enemies share one loot path. Construction throws if the kind's texture wasn't preloaded.
+ * @module entities
  */
 // hud_ammo 6×3 grid: gun1=row0col0, gun2=row2col0; shared with the HUD so drop visuals match inventory icons
 const HUD_AMMO_TEXTURE_KEY = 'hud_ammo';
@@ -77,7 +61,14 @@ interface TextureChoice {
   readonly scale: number;
 }
 
-// texture, frame, and display scale for a pickup kind
+/**
+ * @function    textureForKind
+ * @description Maps a pickup kind to its texture key, sprite-sheet frame, and display scale; all boss keys share one texture since door-matching is by kind, not visual.
+ * @param   kind  The PickupKind to render.
+ * @returns a TextureChoice (key, frame, scale).
+ * @calledby src/entities/AmmoDrop.ts → the AmmoDrop constructor, choosing what to render
+ * @calls    —
+ */
 function textureForKind(kind: PickupKind): TextureChoice {
   if (kind === 'gun1') {
     return { key: HUD_AMMO_TEXTURE_KEY, frame: GUN1_FRAME, scale: AMMO_DROP_DISPLAY_SCALE };
@@ -102,7 +93,14 @@ function textureForKind(kind: PickupKind): TextureChoice {
   return { key: COIN_TEXTURE_KEY, frame: undefined, scale: COIN_DROP_DISPLAY_SCALE };
 }
 
-// inventory amount this drop adds on pickup
+/**
+ * @function    amountForKind
+ * @description Maps a pickup kind to the inventory amount it adds on pickup.
+ * @param   kind  The PickupKind picked up.
+ * @returns the integer count to add for that kind.
+ * @calledby src/entities/AmmoDrop.ts → the AmmoDrop constructor, caching the grant amount
+ * @calls    —
+ */
 function amountForKind(kind: PickupKind): number {
   if (kind === 'gun1') return AMMO_PICKUP_GUN1_AMOUNT;
   if (kind === 'gun2') return AMMO_PICKUP_GUN2_AMOUNT;
@@ -113,7 +111,15 @@ function amountForKind(kind: PickupKind): number {
   return COIN_PICKUP_AMOUNT;
 }
 
-// weighted pick from a non-empty kinds table; zero-total collapses to first entry rather than throwing
+/**
+ * @function    pickDropKind
+ * @description Weighted random pick from a non-empty kinds table; a zero-or-less total collapses to the first entry rather than throwing, and negative weights are clamped to zero.
+ * @param   kinds   Non-empty {kind, weight} table.
+ * @param   random  RNG; defaults to Math.random, injectable for tests.
+ * @returns the selected PickupKind.
+ * @calledby src/entities/AmmoDrop.ts → rollDrop, and any caller picking a loot kind by weight
+ * @calls    the supplied RNG only
+ */
 export function pickDropKind(
   kinds: ReadonlyArray<{ readonly kind: PickupKind; readonly weight: number }>,
   random: () => number = Math.random,
@@ -130,7 +136,15 @@ export function pickDropKind(
   return kinds[kinds.length - 1].kind;
 }
 
-// chancePct gate then a weighted kind pick; null when nothing drops
+/**
+ * @function    rollDrop
+ * @description Roll a single drop: a chancePct gate, then a weighted kind pick; null when the roll fails and nothing drops.
+ * @param   config  chancePct (0-100) plus the weighted kinds table.
+ * @param   random  RNG; defaults to Math.random, injectable for tests.
+ * @returns the dropped PickupKind, or null when nothing drops.
+ * @calledby src/entities/Chest.ts → chest open, and src/entities/Enemy.ts → enemy death, deciding what (if anything) to spawn
+ * @calls    the supplied RNG and src/entities/AmmoDrop.ts → pickDropKind
+ */
 export function rollDrop(
   config: AnimatedEntityDropConfig,
   random: () => number = Math.random,
@@ -153,7 +167,15 @@ export class AmmoDrop extends Phaser.Physics.Arcade.Sprite {
   private loiterStartTime = 0;
   private loiterUpdateBound: ((time: number) => void) | null = null;
 
-  // build the drop: magic orbs hover, coins scatter, everything else falls-and-pops
+  /**
+   * @function    constructor
+   * @description Builds the drop and selects its motion style by kind — magic orbs hover (gravity off, sinusoidal loiter plus a mist emitter), coins scatter, everything else falls-and-pops — then arms a lifetime self-destruct and a destroy cleanup (the mist emitter isn't auto-freed when its follow target dies). Throws if the kind's texture wasn't preloaded.
+   * @param   scene  Owning Phaser scene.
+   * @param   x, y   Spawn position (world px).
+   * @param   kind   The PickupKind to spawn.
+   * @calledby src/scenes/GameScene.ts → spawnAmmoDrop, on chest open or enemy death
+   * @calls    the texture/amount lookups, Phaser sprite/physics/particle/timer construction, and the scene update event for orb loiter
+   */
   constructor(scene: Phaser.Scene, x: number, y: number, kind: PickupKind) {
     const choice = textureForKind(kind);
     if (!scene.textures.exists(choice.key)) {
@@ -254,17 +276,23 @@ export class AmmoDrop extends Phaser.Physics.Arcade.Sprite {
     });
   }
 
-  // Which pickup this drop grants (gun1/gun2/magic/heal/key_*/coin).
+  /** Which pickup this drop grants (gun1, gun2, magic, heal, a key, or coin). */
   getKind(): PickupKind {
     return this.kind;
   }
 
-  // Inventory count this drop adds on pickup.
+  /** Inventory count this drop adds on pickup. */
   getAmount(): number {
     return this.amount;
   }
 
-  // sinusoidal Lissajous hover; the per-orb phase decorrelates co-located orbs
+  /**
+   * @function    loiterUpdate
+   * @description Sinusoidal Lissajous hover around the orb's anchor; the per-orb random phase decorrelates co-located orbs so they don't bob in lockstep.
+   * @param   time  The scene clock time (ms).
+   * @calledby Phaser per-frame update loop (the scene UPDATE event registered in the constructor), for magic orbs only
+   * @calls    the sprite position setter only
+   */
   private loiterUpdate(time: number): void {
     const elapsedSec = (time - this.loiterStartTime) / 1000;
     const xOmega = (2 * Math.PI) / (MAGIC_ORB_LOITER_X_PERIOD_MS / 1000);

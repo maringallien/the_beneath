@@ -11,22 +11,9 @@ import {
 } from '../constants';
 
 /**
- * EnemyHealthBar — a floating combat health bar painted above an Enemy.
- *
- * One Graphics object that draws a small bar in WORLD space (no scroll-factor
- * override) at the owning enemy's anchor, so the camera scrolls past it like any
- * sprite. A leaf module the enemy AI calls into: it follows a per-tick body
- * anchor and de-dups redraws (skipping draws when neither position nor HP
- * fraction changed), and never reads private Enemy state — kept out of the ~2k-
- * line Enemy.ts on purpose. The owner feeds the anchor (body.center.x +
- * body.top) each tick so the bar tracks the offsets a frame swap re-applies, and
- * disposes it via the owner's DESTROY listener so HMR teardown reclaims it.
- *
- * Inputs:  the scene (to create the Graphics), an optional per-entity vertical
- *          nudge, and per-tick anchor / HP-fraction / visibility from the owner.
- * Outputs: Graphics draw calls; owns nothing of the enemy's state.
- * @calledby an Enemy's per-frame update and damage/visibility transitions.
- * @calls    the scene's Graphics object and the shared bar tuning constants.
+ * @file entities/EnemyHealthBar.ts
+ * @description Floating combat health bar painted above an Enemy. One Graphics object drawing a small bar in WORLD space (no scroll-factor override) at the owner's anchor, so the camera scrolls past it like any sprite. A leaf the enemy AI calls into: it follows a per-tick body anchor, de-dups redraws (skips when neither position nor HP fraction changed), and never reads private Enemy state — kept out of the ~2k-line Enemy.ts on purpose. The owner feeds the anchor (body.center.x + body.top) each tick so the bar tracks the offsets a frame swap re-applies, and disposes it via the owner's DESTROY listener so HMR teardown reclaims it.
+ * @module entities
  */
 export class EnemyHealthBar {
   private readonly graphics: Phaser.GameObjects.Graphics;
@@ -39,7 +26,14 @@ export class EnemyHealthBar {
   // positive raises the bar for sprites whose visible top sits above the physics body top
   private readonly extraOffsetY: number;
 
-  // creates the hidden bar Graphics; explicit destroy() matters for HMR teardown
+  /**
+   * @function    constructor
+   * @description Creates the hidden bar Graphics; explicit destroy matters for HMR teardown.
+   * @param   scene         Creates the Graphics.
+   * @param   extraOffsetY  Px to raise the bar for sprites whose visible top sits above the body top; default 0.
+   * @calledby src/entities/Enemy.ts → when an enemy spawns and wants a floating HP bar
+   * @calls    the scene's graphics factory
+   */
   constructor(scene: Phaser.Scene, extraOffsetY = 0) {
     this.extraOffsetY = extraOffsetY;
     this.graphics = scene.add.graphics();
@@ -47,7 +41,14 @@ export class EnemyHealthBar {
     this.graphics.setVisible(false);
   }
 
-  // records the enemy's current position; redraws if visible, skips if unchanged
+  /**
+   * @function    setAnchor
+   * @description Records the enemy's current position; redraws if visible, skips if unchanged.
+   * @param   centerX  World-px body center.
+   * @param   bodyTop  World-px body top edge.
+   * @calledby src/entities/Enemy.ts → the owning enemy's per-frame update, feeding the body anchor
+   * @calls    the private redraw when visible; no-ops if the anchor is unchanged
+   */
   setAnchor(centerX: number, bodyTop: number): void {
     if (centerX === this.centerX && bodyTop === this.bodyTop) return;
     this.centerX = centerX;
@@ -55,7 +56,13 @@ export class EnemyHealthBar {
     if (this.visible) this.redraw();
   }
 
-  // Shows / hides the bar (redrawing on show); no-ops when already in that state.
+  /**
+   * @function    setVisible
+   * @description Shows / hides the bar (redrawing on show); no-ops when already in that state.
+   * @param   visible  Target visibility.
+   * @calledby src/entities/Enemy.ts → on aggro/damage start and when the bar should hide
+   * @calls    the private redraw on show
+   */
   setVisible(visible: boolean): void {
     if (visible === this.visible) return;
     this.visible = visible;
@@ -63,7 +70,14 @@ export class EnemyHealthBar {
     if (visible) this.redraw();
   }
 
-  // records the HP fraction, redrawing if visible; skips if unchanged; max ≤ 0 yields ratio 0
+  /**
+   * @function    setHealth
+   * @description Records the HP fraction, redrawing if visible; skips if unchanged.
+   * @param   current  Current HP.
+   * @param   max      Max HP; <= 0 yields a clamped ratio of 0.
+   * @calledby src/entities/Enemy.ts → on every damage/heal transition
+   * @calls    Phaser's clamp, then the private redraw when visible
+   */
   setHealth(current: number, max: number): void {
     const ratio = max > 0 ? Phaser.Math.Clamp(current / max, 0, 1) : 0;
     if (ratio === this.lastRenderedRatio) return;
@@ -71,12 +85,17 @@ export class EnemyHealthBar {
     if (this.visible) this.redraw();
   }
 
-  // Destroys the backing Graphics (explicit so HMR teardown reclaims it).
+  /** Destroys the backing Graphics (explicit so HMR teardown reclaims it). */
   destroy(): void {
     this.graphics.destroy();
   }
 
-  // repaints background, foreground fill, and outline at the cached world position
+  /**
+   * @function    redraw
+   * @description Repaints background, foreground fill, and outline at the cached world position.
+   * @calledby src/entities/EnemyHealthBar.ts → the setters above, whenever a visible bar's anchor or HP changed
+   * @calls    Phaser Graphics fill/line/stroke primitives only
+   */
   private redraw(): void {
     const g = this.graphics;
     g.clear();

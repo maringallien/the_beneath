@@ -14,20 +14,9 @@ import {
 } from '../constants';
 
 /**
- * InteractionIcon — the world-anchored "press E" hold prompt.
- *
- * A filled white box with a smooth black "E", ringed by a clockwise square
- * progress outline (just outside the box) that fills as the player holds E.
- * Pure drawing: InteractionManager owns it and drives position, fade, and
- * progress; this class only renders. The box and letter are drawn once at
- * construction; setProgress redraws only the outline, dedupe-skipping tiny
- * deltas so an idle prompt doesn't repaint the Graphics every frame.
- *
- * Inputs:  scene (for the container + Graphics + text); per-frame world
- *          position, alpha, visibility, and hold ratio from the manager.
- * Outputs: a depth-sorted container holding the box, "E", and progress outline.
- * @calledby the interaction manager, once per registered hold-E prompt.
- * @calls    Phaser container / graphics / text drawing only.
+ * @file entities/InteractionIcon.ts
+ * @description World-anchored "press E" hold prompt: a filled white box with a smooth black "E", ringed by a clockwise square progress outline (just outside the box) that fills as the player holds E. Pure drawing — InteractionManager owns it and drives position, fade, and progress; this class only renders. The box and letter are drawn once at construction; setProgress redraws only the outline, dedupe-skipping tiny deltas so an idle prompt doesn't repaint the Graphics every frame.
+ * @module entities
  */
 
 // skip redraws smaller than this so an idle-at-0 prompt doesn't repaint every frame
@@ -39,7 +28,13 @@ export class InteractionIcon {
   // -1 sentinel so the first setProgress(0) still redraws rather than being deduped
   private lastDrawnProgress = -1;
 
-  // builds the box + "E" + progress ring container; "E" is oversized+scaled for LINEAR anti-aliasing
+  /**
+   * @function    constructor
+   * @description Build the box + "E" + progress-ring container, starting hidden and transparent; the "E" is oversized and scaled down with a LINEAR filter for crisp anti-aliasing at the camera zoom.
+   * @param   scene  Owning Phaser scene (for the container, Graphics, and text objects).
+   * @calledby src/entities/InteractionManager.ts → constructor, once per scene
+   * @calls    Phaser container/graphics/text construction only
+   */
   constructor(scene: Phaser.Scene) {
     this.container = scene.add.container(0, 0);
     this.container.setDepth(INTERACTION_ICON_DEPTH);
@@ -72,22 +67,28 @@ export class InteractionIcon {
     this.container.setAlpha(0);
   }
 
-  // Moves the icon's world-space center (the container origin).
+  /** Moves the icon's world-space center (the container origin). */
   setWorldPosition(x: number, y: number): void {
     this.container.setPosition(x, y);
   }
 
-  // Sets the whole icon's opacity (the manager eases this for the fade).
+  /** Sets the whole icon's opacity (the manager eases this for the fade). */
   setAlpha(a: number): void {
     this.container.setAlpha(a);
   }
 
-  // Shows/hides the whole icon.
+  /** Shows/hides the whole icon. */
   setVisible(v: boolean): void {
     this.container.setVisible(v);
   }
 
-  // redraws the clockwise square outline to the given hold fraction; skips sub-epsilon deltas
+  /**
+   * @function    setProgress
+   * @description Redraw the clockwise square outline to the given hold fraction, walking the perimeter segments (the top edge split at top-center) until the fill length is consumed; skips sub-epsilon deltas but always redraws cleanly at empty (0) and full (1).
+   * @param   ratio  Hold fraction, clamped to 0-1.
+   * @calledby src/entities/InteractionManager.ts → update each frame, with the current hold ratio
+   * @calls    the Phaser Graphics drawing API and Phaser.Math.Clamp
+   */
   setProgress(ratio: number): void {
     const clamped = Phaser.Math.Clamp(ratio, 0, 1);
     // always redraw at 0 and 1 so the outline lands cleanly on empty/full
@@ -154,7 +155,7 @@ export class InteractionIcon {
     this.progressGraphics.strokePath();
   }
 
-  // Destroys the container, which recursively frees the box, text, and Graphics.
+  /** Destroys the container, which recursively frees the box, text, and Graphics. */
   destroy(): void {
     this.container.destroy();
   }

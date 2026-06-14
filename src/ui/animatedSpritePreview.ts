@@ -2,25 +2,9 @@ import Phaser from 'phaser';
 import { getAnimationFrameInfo } from '../sprites/characterLoader';
 
 /**
- * animatedSpritePreview — a self-driving spritesheet preview on a DOM <canvas>.
- *
- * Loops the player's sword / magic / gun attack frames in the "How to Play"
- * manual's Combat tab. It exists instead of a Phaser sprite because the pause
- * menu calls anims.pauseAll(), freezing every Phaser animation while the manual
- * is open: this widget owns its own requestAnimationFrame loop and blits frames
- * straight from the already-loaded spritesheet textures, so it keeps animating
- * regardless of the global AnimationManager state, and never touches the Phaser
- * display list (it is a plain DOM element the overlay positions with CSS). Frame
- * layout (size, count, anchor, displayScale) is read from the sprite registry via
- * getAnimationFrameInfo, so a preview can never drift from the in-game drawing.
- *
- * Inputs:  clip specs (texture keys, frame orders, optional gun-overlay attach)
- *          plus a fit box in CSS px; the registry's per-animation frame info.
- * Outputs: an <canvas> element that the widget animates on its own rAF loop.
- * @calledby the manual overlay, when showing the combat preview while the rest of
- *           the game (and its animations) is paused.
- * @calls    the sprite registry's frame-info lookup and the loaded textures'
- *           frame cut-rects, then 2D-canvas drawImage on each tick.
+ * @file ui/animatedSpritePreview.ts
+ * @description Self-driving spritesheet preview on a DOM canvas looping the player's sword/magic/gun attack frames in the manual's Combat tab — owns its own rAF loop and blits straight from the loaded textures so it keeps animating while the pause menu's anims.pauseAll() freezes Phaser; frame layout is read from the sprite registry so it can't drift from the in-game drawing.
+ * @module ui
  */
 
 // Gun overlay attach: positions a layer on the base sprite at a fixed grip offset (mirrors PlayerGun.syncToOwner).
@@ -113,7 +97,13 @@ export class AnimatedSpritePreview {
   private lastTimeMs = 0;
   private stepIndex = 0;
 
-  // Resolves clips into a render sequence, sizes the canvas to the union bounds, and draws the first frame.
+  /**
+   * @function    constructor
+   * @description Resolve clips into a render sequence, size the canvas to the union bounds, and draw the first frame; sets available=false if any texture is missing.
+   * @param   options  Scene, clip specs, optional fps, and the CSS-px fit box.
+   * @calledby src/ui/manual/sections/combatSection.ts → buildCombatSection, per weapon-demo row
+   * @calls    src/ui/animatedSpritePreview.ts → buildDescriptors and renderStep
+   */
   constructor(options: AnimatedSpritePreviewOptions) {
     this.fps = options.fps ?? DEFAULT_FPS;
 
@@ -147,12 +137,17 @@ export class AnimatedSpritePreview {
     this.renderStep(0);
   }
 
-  // True when every referenced texture loaded; false means the canvas is blank and the caller should show a fallback.
+  /** True when every referenced texture loaded; false means the canvas is blank and the caller should show a fallback. */
   isAvailable(): boolean {
     return this.available;
   }
 
-  // Starts the rAF loop; no-op if already running, textures missing, or single static frame.
+  /**
+   * @function    start
+   * @description Start the rAF loop and reset the frame accumulator; no-op if already running, textures missing, or single static frame.
+   * @calledby src/ui/ManualOverlay.ts → setActiveTab, when its Combat tab becomes visible
+   * @calls    the browser's requestAnimationFrame to begin driving the animation
+   */
   start(): void {
     if (this.rafId !== null || !this.available || this.sequence.length <= 1) {
       return;
@@ -162,7 +157,12 @@ export class AnimatedSpritePreview {
     this.rafId = requestAnimationFrame(this.tick);
   }
 
-  // Halts the rAF loop if running; leaves the last frame on the canvas.
+  /**
+   * @function    stop
+   * @description Halt the rAF loop if running, leaving the last frame on the canvas.
+   * @calledby src/ui/ManualOverlay.ts → setActiveTab, when its Combat tab is hidden or the manual closes
+   * @calls    the browser's cancelAnimationFrame to stop driving the animation
+   */
   stop(): void {
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
@@ -170,13 +170,24 @@ export class AnimatedSpritePreview {
     }
   }
 
-  // Stops the loop and removes the canvas from the DOM.
+  /**
+   * @function    destroy
+   * @description Stop the loop and remove the canvas from the DOM.
+   * @calledby src/ui/ManualOverlay.ts → onTeardown, tearing down the tab sections on close
+   * @calls    src/ui/animatedSpritePreview.ts → stop and DOM element removal
+   */
   destroy(): void {
     this.stop();
     this.el.remove();
   }
 
-  // rAF callback: advances the frame index on each fps interval and re-renders; clamps accumulator after tab-switch gaps.
+  /**
+   * @function    tick
+   * @description rAF callback: advance the step index on each fps interval, repaint when it changed, and reschedule; clamps the accumulator after tab-switch gaps.
+   * @param   now  High-resolution timestamp (ms) from requestAnimationFrame.
+   * @calledby the browser requestAnimationFrame loop (registered in start), while the preview is running
+   * @calls    src/ui/animatedSpritePreview.ts → renderStep and reschedules the next animation frame
+   */
   private readonly tick = (now: number): void => {
     const frameMs = 1000 / this.fps;
     this.accumulatorMs += now - this.lastTimeMs;
@@ -194,7 +205,13 @@ export class AnimatedSpritePreview {
     this.rafId = requestAnimationFrame(this.tick);
   };
 
-  // Clears the canvas and blits one sequence step back-to-front with nearest-neighbour scaling.
+  /**
+   * @function    renderStep
+   * @description Clear the canvas and blit one sequence step back-to-front with nearest-neighbour scaling; no-op if there is no 2D context or the step is missing.
+   * @param   index  Which sequence step to draw.
+   * @calledby src/ui/animatedSpritePreview.ts → constructor (first paint) and tick (each advanced frame)
+   * @calls    src/ui/animatedSpritePreview.ts → drawLayerFrame for each draw in the step
+   */
   private renderStep(index: number): void {
     if (!this.ctx) return;
     const step = this.sequence[index];
@@ -206,7 +223,15 @@ export class AnimatedSpritePreview {
     }
   }
 
-  // Blits one layer's frame at its pivot with combined layer×fit scale and optional rotation.
+  /**
+   * @function    drawLayerFrame
+   * @description Blit one layer's frame at its pivot with combined layer-times-fit scale and optional rotation; no-op if the frame index has no cut rect.
+   * @param   ctx         2D canvas context.
+   * @param   layer       Resolved layer descriptor.
+   * @param   frameIndex  Which cut rect to draw.
+   * @calledby src/ui/animatedSpritePreview.ts → renderStep, per draw of a sequence step
+   * @calls    the 2D canvas transform and image-blit primitives
+   */
   private drawLayerFrame(
     ctx: CanvasRenderingContext2D,
     layer: LayerDescriptor,
@@ -236,7 +261,15 @@ export class AnimatedSpritePreview {
   }
 }
 
-// Resolves all clips into a looping render sequence and accumulates the union bounds; returns available:false if any texture is missing.
+/**
+ * @function    buildDescriptors
+ * @description Resolve all clips into a looping render sequence and accumulate the union bounds; returns available:false if any texture is missing.
+ * @param   scene  Scene providing the texture cache.
+ * @param   clips  Ordered clip specs.
+ * @returns an { available, sequence, bounds } bundle the constructor uses to size and animate.
+ * @calledby src/ui/animatedSpritePreview.ts → constructor
+ * @calls    src/ui/animatedSpritePreview.ts → resolveLayer, growBounds, frameOrderFor, and buildStep
+ */
 function buildDescriptors(
   scene: Phaser.Scene,
   clips: ReadonlyArray<PreviewClipSpec>,
@@ -294,7 +327,16 @@ function buildDescriptors(
   return { available, sequence, bounds };
 }
 
-// Builds one tick at clip-time t; short layers wrap under longer ones via modulo.
+/**
+ * @function    buildStep
+ * @description Build one tick at clip-time t, listing which frame each drawable layer shows; short layers wrap under longer ones via modulo.
+ * @param   descriptors  Resolved layers.
+ * @param   orders       Per-layer frame orders.
+ * @param   t            Clip-time index.
+ * @returns a SequenceStep for that tick.
+ * @calledby src/ui/animatedSpritePreview.ts → buildDescriptors, per tick (including hold frames)
+ * @calls    array/modulo indexing only; no further delegation
+ */
 function buildStep(
   descriptors: ReadonlyArray<LayerDescriptor>,
   orders: ReadonlyArray<ReadonlyArray<number>>,
@@ -309,7 +351,7 @@ function buildStep(
   return { draws };
 }
 
-// Returns the spec's frame order, or all frames 0..n-1 when unspecified.
+/** Return the spec's frame order, or all frames 0..n-1 when unspecified. */
 function frameOrderFor(
   spec: PreviewLayerSpec,
   desc: LayerDescriptor,
@@ -318,8 +360,16 @@ function frameOrderFor(
   return Array.from({ length: desc.cutRects.length }, (_, i) => i);
 }
 
-// Builds a layer descriptor from its spec; base layers pivot on their anchor, attached layers ride the base at a fixed offset.
-// Returns null if the texture is missing (makes the whole preview unavailable).
+/**
+ * @function    resolveLayer
+ * @description Build a layer descriptor from its spec — base layers pivot on their anchor, attached layers ride the base at a fixed offset; returns null if the texture is missing (which makes the whole preview unavailable).
+ * @param   scene  Scene providing the texture cache.
+ * @param   spec   One layer's spec.
+ * @param   base   The resolved base layer, or null for the base itself.
+ * @returns a LayerDescriptor with cut rects and draw geometry, or null.
+ * @calledby src/ui/animatedSpritePreview.ts → buildDescriptors, per layer of a clip
+ * @calls    src/sprites/characterLoader.ts → getAnimationFrameInfo and the scene's texture-frame reads
+ */
 function resolveLayer(
   scene: Phaser.Scene,
   spec: PreviewLayerSpec,
@@ -378,12 +428,19 @@ function resolveLayer(
   };
 }
 
-// Recovers the base layer's source-pixel anchorY (stored as originPxY since base pivot == anchor).
+/** Recover the base layer's source-pixel anchorY (stored as originPxY since base pivot == anchor). */
 function baseAnchorY(base: LayerDescriptor): number {
   return base.originPxY;
 }
 
-// Expands bounds to enclose a layer's drawn rect, rotating its corners first to capture rotated overlays correctly.
+/**
+ * @function    growBounds
+ * @description Expand the bounds accumulator in place to enclose a layer's drawn rect, rotating its corners first so rotated overlays are captured correctly.
+ * @param   bounds  Mutable union accumulator.
+ * @param   layer   Descriptor whose rect to enclose.
+ * @calledby src/ui/animatedSpritePreview.ts → buildDescriptors, per clip layer
+ * @calls    trigonometry on the rotated corners only; no further delegation
+ */
 function growBounds(bounds: Bounds, layer: LayerDescriptor): void {
   const s = layer.scale;
   const left = -layer.originPxX * s;

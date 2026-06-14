@@ -7,24 +7,9 @@ import type { Enemy } from '../entities/Enemy';
 import type { LoiterPathPoint } from '../ldtk/types';
 
 /**
- * EnemyRespawnManager — per-scene registry that brings killed non-boss enemies back.
- *
- * Death events push a value snapshot of each kill here; tick() runs a throttled
- * scan and fires the respawn callback once an entry has cleared BOTH gates — at
- * least ENEMY_RESPAWN_MIN_TIME_MS elapsed since death AND the player at least
- * ENEMY_RESPAWN_MIN_DISTANCE_PX from its spawn point. The time floor stops a
- * cleared area refilling the instant the player sprints out of range; the
- * distance floor stops it refilling while the player lingers nearby. That
- * distance far exceeds the on-screen radius, so an eligible spawn is always
- * off-camera and respawns never pop into view. State is transient: cleared on
- * world teardown, so save→death→respawn rebuilds every non-boss fresh from LDtk
- * — matching the "save reloads a clean world" semantic.
- *
- * Inputs:  enemy death snapshots; per-frame player position + scene-time.
- * Outputs: invokes a respawn callback per eligible entry (the rebuild trigger).
- * @calledby the gameplay scene — fed kills on death, ticked each frame, cleared
- *           on world teardown.
- * @calls    the supplied respawn callback (the entity-rebuild path) when both gates open.
+ * @file level/EnemyRespawnManager.ts
+ * @description Per-scene registry that brings killed non-boss enemies back; an entry fires only after BOTH gates clear (≥ ENEMY_RESPAWN_MIN_TIME_MS since death AND player ≥ ENEMY_RESPAWN_MIN_DISTANCE_PX from its spawn point) — the time floor stops a cleared area refilling the instant the player sprints out of range, the distance floor stops it refilling while the player lingers nearby (that distance far exceeds the on-screen radius so an eligible spawn is always off-camera); transient state cleared on world teardown, so save→death→respawn rebuilds every non-boss fresh from LDtk, matching the "save reloads a clean world" semantic.
+ * @module level
  */
 
 // Death snapshot; everything the rebuild needs without holding a ref to the destroyed sprite.
@@ -47,7 +32,14 @@ export class EnemyRespawnManager {
   // Sentinel 0 means "scan on first call"; subsequent ticks gate on the interval.
   private lastTickAt = 0;
 
-  // Snapshots a killed enemy's spawn data for later respawn; no-ops for bosses.
+  /**
+   * @function    recordDeath
+   * @description Snapshots a killed enemy's spawn data into an iid-keyed pending entry for later respawn; no-ops for bosses.
+   * @param   enemy  The just-killed enemy.
+   * @param   now    Current scene-time ms; sets the time gate at now + min-time.
+   * @calledby src/scenes/GameScene.ts → a non-boss enemy's death event
+   * @calls    reads the enemy's identifier/iid/spawn/loiter data; no further delegation
+   */
   recordDeath(enemy: Enemy, now: number): void {
     if (enemy.isBoss()) return;
     this.pending.set(enemy.getIid(), {
@@ -60,12 +52,21 @@ export class EnemyRespawnManager {
     });
   }
 
-  // Drops the pending entry for an iid, called after the scene rebuilds the enemy.
+  /** Drops the pending entry for an iid, called after the scene rebuilds the enemy. */
   removeByIid(iid: string): void {
     this.pending.delete(iid);
   }
 
-  // Throttled scan; fires the respawn callback for every entry past both time and distance gates.
+  /**
+   * @function    tick
+   * @description Throttled scan; removes and fires the respawn callback for every entry past both time and distance gates; no-op until the interval elapses or while the registry is empty.
+   * @param   playerX    Player world-px x.
+   * @param   playerY    Player world-px y.
+   * @param   now        Scene-time ms; throttles to the check interval.
+   * @param   onRespawn  Callback invoked per eligible entry.
+   * @calledby src/scenes/GameScene.ts → the per-frame update tick
+   * @calls    the supplied respawn callback (the entity-rebuild path) once both gates open
+   */
   tick(
     playerX: number,
     playerY: number,
@@ -96,7 +97,7 @@ export class EnemyRespawnManager {
     }
   }
 
-  // Clears all pending entries and resets the throttle on world teardown.
+  /** Clears all pending entries and resets the throttle on world teardown. */
   clear(): void {
     this.pending.clear();
     this.lastTickAt = 0;

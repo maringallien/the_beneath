@@ -1,28 +1,9 @@
 import { REQUIRED_BOSS_IDENTIFIERS } from '../constants';
 
 /**
- * runProgress — the persistent per-run progress store (the win condition's memory).
- *
- * Four module-scope sets tracking what the player has achieved this run:
- * collected boss keys, defeated bosses (the win gate), opened chests, and
- * purchased capacity upgrades. It lives at module scope (not on GameScene) so it
- * survives the world rebuilds that death/respawn and HMR perform — a
- * respawn-from-save tears down and re-parses the LDtk project, re-spawning every
- * boss/chest from scratch. Bosses opt out of the auto-respawn system, but a
- * respawn-from-save rebuild revives them anyway, so the *fact* of a defeat (and
- * its key) must live somewhere the rebuild doesn't touch. Keeping it here means a
- * player who grabs a key then dies without saving still owns it, so a key-locked
- * door can never become permanently unopenable (which would soft-lock the run:
- * the boss is gone on the no-death timeline and only re-spawns on a death the
- * player is avoiding). A fresh boot starts clean (sets initialize empty); the
- * store is wiped only when a run is abandoned (New Game / Quit / Return to Title).
- *
- * Inputs:  record/query calls from the gameplay scene and entities; the required
- *          boss roster from ../constants.
- * Outputs: mutates the in-memory sets and answers boolean/count queries.
- * @calledby the boss/key/chest/shop systems recording or gating on run progress,
- *           and the run lifecycle (abandon → reset).
- * @calls    nothing — pure in-memory Set bookkeeping.
+ * @file state/runProgress.ts
+ * @description Persistent per-run progress store at module scope — four Sets (collected boss keys, defeated bosses, opened chests, purchased capacity upgrades) that survive the world rebuilds death/respawn and HMR perform, so a key grabbed then lost to an unsaved death is still owned and a key-locked door can never soft-lock; starts empty on boot, wiped only when a run is abandoned.
+ * @module state
  */
 
 // The two boss keys, matching the PickupKind string literals in Player.ts. A
@@ -54,55 +35,67 @@ const openedChests = new Set<string>();
 export type UpgradeType = 'ammo' | 'magic';
 const purchasedUpgrades = new Set<string>();
 
-// Records that the player picked up the given boss key this run.
+/** Records that the player picked up the given boss key this run. */
 export function recordKeyCollected(key: BossKeyId): void {
   collectedKeys.add(key);
 }
 
-// True if the player currently holds the given boss key.
+/** True if the player currently holds the given boss key. */
 export function hasKey(key: BossKeyId): boolean {
   return collectedKeys.has(key);
 }
 
-// Records a boss (by LDtk identifier) as defeated this run.
+/** Records a boss (by LDtk identifier) as defeated this run. */
 export function recordBossDefeated(identifier: string): void {
   defeatedBosses.add(identifier);
 }
 
-// True if the named boss has been defeated this run.
+/** True if the named boss has been defeated this run. */
 export function isBossDefeated(identifier: string): boolean {
   return defeatedBosses.has(identifier);
 }
 
-// Records a chest (by stable LDtk iid) as looted this run.
+/** Records a chest (by stable LDtk iid) as looted this run. */
 export function recordChestOpened(iid: string): void {
   openedChests.add(iid);
 }
 
-// True if the chest with this iid has already been looted this run.
+/** True if the chest with this iid has already been looted this run. */
 export function isChestOpened(iid: string): boolean {
   return openedChests.has(iid);
 }
 
-// Stable id for one shop's capacity upgrade: the upgrade line plus the level
-// that sells it. Each tech shop / mushroom merchant lives in a distinct level
-// (Level_9/11/18), so this is unique per shop and lets a shop's upgrade be
-// recorded — and refused on re-purchase — independently of the others.
+/**
+ * @function    upgradeId
+ * @description Stable id for one shop's capacity upgrade: the line plus the level that sells it. Each shop lives in a distinct level, so this is unique per shop and lets its upgrade be recorded — and refused on re-purchase — independently of the others.
+ * @param   type     The 'ammo' or 'magic' upgrade line.
+ * @param   levelId  LDtk level id of the selling shop.
+ * @returns the composite id string "type@levelId".
+ * @calledby src/entities/shop/shopTypes.ts → upgrade-item builders, src/entities/Player.ts → upgrade gating
+ * @calls    a template-string format only; no further delegation
+ */
 export function upgradeId(type: UpgradeType, levelId: string): string {
   return `${type}@${levelId}`;
 }
 
-// Records one shop's capacity upgrade (by upgradeId) as purchased this run.
+/** Records one shop's capacity upgrade (by upgradeId) as purchased this run. */
 export function recordUpgradePurchased(id: string): void {
   purchasedUpgrades.add(id);
 }
 
-// True if this specific shop's upgrade (by upgradeId) was already bought.
+/** True if this specific shop's upgrade (by upgradeId) was already bought. */
 export function hasUpgrade(id: string): boolean {
   return purchasedUpgrades.has(id);
 }
 
-// counts how many upgrades of one line the player owns (drives ammo/magic cap math)
+/**
+ * @function    countUpgrades
+ * @description Counts how many upgrades of one line the player owns this run; drives the derived ammo/magic cap math (magic steps are uneven, so the cap is summed per owned tier).
+ * @param   type  The 'ammo' or 'magic' upgrade line.
+ * @returns the integer count of purchased upgrades whose id starts with the line prefix.
+ * @calledby src/entities/Player.ts → getMaxGun1Ammo / getMaxGun2Ammo carry-cap derivation
+ * @calls    iterates the purchased-upgrades set, prefix-matching ids; no delegation
+ */
 export function countUpgrades(type: UpgradeType): number {
   const prefix = `${type}@`;
   let count = 0;
@@ -112,12 +105,23 @@ export function countUpgrades(type: UpgradeType): number {
   return count;
 }
 
-// True once every required boss has been recorded as defeated — the win gate.
+/**
+ * @function    allBossesDefeated
+ * @description True once every boss in the required roster has been recorded defeated this run — the all-bosses win gate (the run is actually won via the Level_13 portal warp; the boss roster only gates the key-heart door).
+ * @returns true only when all required bosses are present in the set.
+ * @calledby —
+ * @calls    tests the defeated-boss set against every required boss identifier
+ */
 export function allBossesDefeated(): boolean {
   return REQUIRED_BOSS_IDENTIFIERS.every((id) => defeatedBosses.has(id));
 }
 
-// wipes all progress so the next run starts fresh; NOT called on respawn or HMR by design
+/**
+ * @function    resetRunProgress
+ * @description Wipes all four progress sets so the next run starts fresh. NOT called on respawn or HMR by design — only on abandon, since death/respawn rebuilds must preserve keys/defeats to avoid soft-locks.
+ * @calledby src/scenes/GameScene.ts → run reset on abandon (New Game / Quit / Return to Title)
+ * @calls    clears each in-memory set; no further delegation
+ */
 export function resetRunProgress(): void {
   collectedKeys.clear();
   defeatedBosses.clear();

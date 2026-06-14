@@ -2,22 +2,9 @@ import Phaser from 'phaser';
 import { PROJECTILE_MAX_LIFETIME_MS } from '../constants';
 
 /**
- * EnemyProjectile — the player-targeting projectile any ranged enemy fires.
- *
- * Symmetric with the player's Projectile (terrain/world-bounds collider →
- * onImpact, lifetime cap, body disabled on impact to stop multi-hit ticks) but
- * with two per-instance fields — damage and the entity-namespaced animation
- * keys — so any ranged enemy type spawns one without a dedicated subclass. The
- * invariant the reader must hold: once it explodes it is inert (body disabled,
- * timers/listeners torn down) and self-destructs when the explode anim ends.
- *
- * Inputs:  scene, a spawn-options bundle (position, velocity, damage, the full
- *          idle/explode anim keys); world-bounds and lifetime-timer events.
- * Outputs: a moving sprite that overlaps the player for `damage`, plays its
- *          explode anim on impact, and destroys itself.
- * @calledby a ranged enemy's attack, when it looses a shot at the player.
- * @calls    Phaser physics/animation/timer systems and the scene's world-bounds
- *           event bus.
+ * @file entities/EnemyProjectile.ts
+ * @description Player-targeting projectile fired by ranged enemies. Symmetric with the player's Projectile (terrain/world-bounds collider into onImpact, lifetime cap, body disabled on impact to stop multi-hit ticks) but with two per-instance fields — damage and the entity-namespaced animation keys — so any ranged enemy type spawns one without a dedicated subclass. Invariant: once it explodes it is inert (body disabled, timers/listeners torn down) and self-destructs when the explode anim ends.
+ * @module entities
  */
 export interface EnemyProjectileSpawnOptions {
   x: number;
@@ -43,7 +30,14 @@ export class EnemyProjectile extends Phaser.Physics.Arcade.Sprite {
     body: Phaser.Physics.Arcade.Body,
   ) => void;
 
-  // spawns and launches the projectile; throws if the idle texture isn't loaded
+  /**
+   * @function    constructor
+   * @description Spawns and launches the projectile along its velocity, rotates it to face travel, and wires the world-bounds collider, lifetime cap, and destroy cleanup; throws if the idle texture isn't loaded.
+   * @param   scene    Owning Phaser scene.
+   * @param   options  Position, velocity, damage, and full idle/explode anim keys.
+   * @calledby src/scenes/GameScene.ts → spawnEnemyProjectile, when a ranged enemy looses a shot (via src/entities/Enemy.ts)
+   * @calls    Arcade physics setup, the scene lifetime timer, and the world-bounds/destroy hooks
+   */
   constructor(scene: Phaser.Scene, options: EnemyProjectileSpawnOptions) {
     if (!scene.textures.exists(options.idleAnimKey)) {
       throw new Error(
@@ -97,17 +91,22 @@ export class EnemyProjectile extends Phaser.Physics.Arcade.Sprite {
     });
   }
 
-  // Per-shot damage to apply to the player on overlap.
+  /** Per-shot damage to apply to the player on overlap. */
   getDamage(): number {
     return this.damage;
   }
 
-  // True once it has impacted (and is being torn down) — overlap checks skip it.
+  /** True once it has impacted (and is being torn down) — overlap checks skip it. */
   hasExploded(): boolean {
     return this.exploded;
   }
 
-  // detonates once; disables the body so no damage ticks stack during the explode clip
+  /**
+   * @function    onImpact
+   * @description Detonates exactly once: clears the lifetime timer, halts and disables the body so no damage ticks stack during the explode clip, then plays the explode clip and self-destroys on completion.
+   * @calledby Phaser physics overlap on the player or terrain (registered in world build), a world-bounds hit, or the lifetime cap
+   * @calls    the Arcade body, then tears the projectile down
+   */
   onImpact(): void {
     if (this.exploded) return;
     this.exploded = true;

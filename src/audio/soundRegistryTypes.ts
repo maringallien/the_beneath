@@ -1,18 +1,7 @@
 /**
- * soundRegistryTypes — the schema for the JSON-authored sound registry.
- *
- * Pure type declarations (no logic). Each sound id (e.g. "cave_drips_flowing")
- * maps to one SoundDefinition describing where the file lives and how it should
- * play by default; the surrounding interfaces describe the level-ambience,
- * entity-binding, and player-state-driven groupings the SoundManager reads. The
- * registry is the single source of truth for audio assets — adding a sound is
- * one JSON entry, not a hand-rolled load call in PreloadScene.
- *
- * Inputs:  none — type definitions only.
- * Outputs: the exported types/interfaces below, consumed by the registry loader,
- *          SoundManager, and MusicPlayer.
- * @calledby the audio loaders/managers that parse and shape sound-registry data.
- * @calls    nothing — a leaf type module.
+ * @file audio/soundRegistryTypes.ts
+ * @description Schema types for the JSON-authored sound registry — each id maps to one SoundDefinition (file + default playback), plus the level-ambience, entity-binding, and player-state groupings SoundManager reads. Single source of truth for audio assets (adding a sound is one JSON entry). Leaf type module consumed by the registry loader, SoundManager, and MusicPlayer.
+ * @module audio
  */
 
 // the three top-level audio buckets

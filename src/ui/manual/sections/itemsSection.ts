@@ -22,20 +22,13 @@ import {
 } from '../manualSection';
 
 /**
- * itemsSection — builds the manual's Items tab.
- *
- * Covers what you pick up, what's in the world, and where to spend coins. Pickup
- * rows reuse the HUD glyphs; world features and merchants are short name/detail
- * rows. Every number in the copy (heal/ammo amounts, shop prices, the orb-cap
- * range) is interpolated from the economy constants, so the tab tracks the real
- * tuning instead of hardcoding values.
- *
- * Inputs:  the economy constants; the shared manual-section DOM builders.
- * Outputs: a ManualSection (its root element; no live previews).
- * @calledby the manual overlay, when assembling the Items tab.
- * @calls    the shared manual-section element/row/block builders.
+ * @file ui/manual/sections/itemsSection.ts
+ * @description Builds the manual's Items tab — what you pick up, what's in the world, and where to spend coins. Pickup rows reuse the HUD glyphs; world features and merchants are short name/detail rows. Every number in the copy (heal/ammo amounts, shop prices, the orb-cap range) is interpolated from the economy constants so the tab tracks real tuning.
+ * @module ui/manual/sections
  */
 
+// ── World features ─────────────────────────────────────────────────────────
+// World-feature overview rows: each feature's display name and one-line detail.
 const WORLD_FEATURES: ReadonlyArray<{ name: string; detail: string }> = [
   {
     name: 'Chests',
@@ -58,7 +51,13 @@ const WORLD_FEATURES: ReadonlyArray<{ name: string; detail: string }> = [
   },
 ];
 
-// builds the Items tab: pickups, world features, and merchant descriptions
+/**
+ * @function    buildItemsSection
+ * @description Builds the Items tab: pickups, world features, and merchant descriptions. Reads the economy constants for prices/amounts.
+ * @returns a detached ManualSection element tree (no live previews).
+ * @calledby src/ui/ManualOverlay.ts → the TABS registry, built when the overlay assembles its tab pages
+ * @calls    src/ui/manual/manualSection.ts → sectionRoot, paragraph, titledBlock, glyphRow, el
+ */
 export function buildItemsSection(): ManualSection {
   const root = sectionRoot();
 

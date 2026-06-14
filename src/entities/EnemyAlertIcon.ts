@@ -8,11 +8,17 @@ import {
   ENEMY_ALERT_ICON_SUSPECT_COLOR,
 } from '../constants';
 
+/**
+ * @file entities/EnemyAlertIcon.ts
+ * @description Floating "?"/"!" detection glyph painted above an Enemy's head. Mirrors EnemyHealthBar — owned per-Enemy, anchored to body.top each tick, drawn in world space (no scroll-factor override) so the camera scrolls past it, disposed via the owner's DESTROY listener so HMR teardown reclaims it. Event-driven, not a state mirror: the owner escalates by setting a glyph and clears it after a short hold, so it's a momentary tell (yellow "?" flash on spotting, red "!" flash on engaging) rather than a persistent label. Rendered as Phaser Text at CAMERA_ZOOM resolution so it stays crisp instead of a 1x canvas magnified 3x.
+ * @module entities
+ */
+
 // What the icon paints. 'none' hides it; 'suspect' is the yellow "?" (spotted /
 // investigating), 'detect' is the red "!" (engaging).
 export type AlertGlyph = 'none' | 'suspect' | 'detect';
 
-// 0xRRGGBB → "#rrggbb" for Phaser.Text's CSS colour fields.
+/** 0xRRGGBB → "#rrggbb" for Phaser.Text's CSS colour fields. */
 function cssColor(hex: number): string {
   return `#${hex.toString(16).padStart(6, '0')}`;
 }
@@ -20,25 +26,6 @@ function cssColor(hex: number): string {
 const SUSPECT_CSS = cssColor(ENEMY_ALERT_ICON_SUSPECT_COLOR);
 const DETECT_CSS = cssColor(ENEMY_ALERT_ICON_DETECT_COLOR);
 
-/**
- * EnemyAlertIcon — floating "?"/"!" detection glyph painted above an Enemy's head.
- *
- * Mirrors EnemyHealthBar: owned per-Enemy, anchored to body.top each tick, drawn
- * in world space (no scroll-factor override) so the camera scrolls past it, and
- * disposed via the owner's DESTROY listener so HMR teardown reclaims it. It is
- * event-driven, not a state mirror: the owner escalates by setting a glyph and
- * clears it after a short hold, so the glyph is a momentary tell (a yellow "?"
- * flash on spotting, a red "!" flash on engaging) rather than a persistent label.
- * Rendered as Phaser Text at the camera's zoom resolution so it stays crisp at
- * CAMERA_ZOOM instead of a 1× canvas magnified 3×.
- *
- * Inputs:  the owning scene (for the Text object) plus per-frame anchor + glyph
- *          calls from the owner.
- * Outputs: one managed Phaser.Text drawn above the enemy; nothing else.
- * @calledby an enemy that owns a detection tell, constructing and driving it each
- *           frame and on alert escalations.
- * @calls    Phaser's text factory and the alert-icon tuning constants.
- */
 export class EnemyAlertIcon {
   private readonly text: Phaser.GameObjects.Text;
   // dedupe guard — only updates the Text on an actual glyph change
@@ -47,7 +34,13 @@ export class EnemyAlertIcon {
   private centerX = 0;
   private bodyTop = 0;
 
-  // creates the hidden glyph Text at CAMERA_ZOOM resolution for crispness
+  /**
+   * @function    constructor
+   * @description Creates the hidden glyph Text at CAMERA_ZOOM resolution for crispness.
+   * @param   scene  Owning scene that creates the Text object.
+   * @calledby src/entities/Enemy.ts → when an enemy that owns a detection tell spawns
+   * @calls    the scene's text factory and the alert-icon tuning constants
+   */
   constructor(scene: Phaser.Scene) {
     this.text = scene.add.text(0, 0, '', {
       fontFamily: 'Arial, Helvetica, sans-serif',
@@ -63,7 +56,14 @@ export class EnemyAlertIcon {
     this.text.setVisible(false);
   }
 
-  // caches the body anchor each frame; repositions live only when a glyph is visible
+  /**
+   * @function    setAnchor
+   * @description Caches the body anchor each frame; repositions live only when a glyph is visible.
+   * @param   centerX  World-px body center.
+   * @param   bodyTop  World-px body top edge.
+   * @calledby src/entities/Enemy.ts → the owning enemy's per-frame update, feeding the current body anchor
+   * @calls    the private reposition helper when a glyph is visible; no-ops if unchanged
+   */
   setAnchor(centerX: number, bodyTop: number): void {
     if (centerX === this.centerX && bodyTop === this.bodyTop) return;
     this.centerX = centerX;
@@ -71,7 +71,13 @@ export class EnemyAlertIcon {
     if (this.current !== 'none') this.reposition();
   }
 
-  // shows "!" or "?" in the right colour, or hides on 'none'; no-op if unchanged
+  /**
+   * @function    setGlyph
+   * @description Shows "!" or "?" in the right colour, or hides on 'none'; no-op if unchanged.
+   * @param   glyph  'none' hides, 'suspect' yellow "?", 'detect' red "!".
+   * @calledby src/entities/Enemy.ts → on an alert escalation or when clearing the tell
+   * @calls    the private reposition helper before showing a non-'none' glyph
+   */
   setGlyph(glyph: AlertGlyph): void {
     if (glyph === this.current) return;
     this.current = glyph;
@@ -86,12 +92,12 @@ export class EnemyAlertIcon {
     this.text.setVisible(true);
   }
 
-  // Releases the backing Text; called from the owner's destroy/HMR teardown.
+  /** Releases the backing Text; called from the owner's destroy/HMR teardown. */
   destroy(): void {
     this.text.destroy();
   }
 
-  // Moves the Text to the cached anchor, floated ENEMY_ALERT_ICON_OFFSET_Y_PX up.
+  /** Moves the Text to the cached anchor, floated ENEMY_ALERT_ICON_OFFSET_Y_PX up. */
   private reposition(): void {
     this.text.setPosition(
       this.centerX,

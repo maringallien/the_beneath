@@ -1,26 +1,18 @@
 /**
- * validate — shared primitives for the hand-rolled JSON registry validators
- * (entity registry, sound registry, animation-sound-triggers loaders).
- *
- * Every field helper takes the parent record, the field name, and a `ctx` path
- * string used verbatim in the error message, so a failure names the exact JSON
- * path that's wrong (e.g. `entityRegistry["Crow"].attack.damage must be a
- * positive number (got -3)`). The `require*` forms demand the field; the
- * `optional*` forms accept a missing field (return undefined) but still reject a
- * present-but-wrong value. The registries validate at module load, so a bad value
- * fails the boot loudly instead of misbehaving at first spawn.
- *
- * Only the primitives live here. Domain rules (cross-references between fields,
- * animation-key existence, range relationships like minRange < range) stay in the
- * loaders next to the schema they describe.
- *
- * Inputs:  a parsed-JSON record/value, a field name, and a `ctx` path string.
- * Outputs: the narrowed, typed value — or a thrown Error naming the bad path.
- * @calledby the registry loaders, field by field, while validating raw JSON.
- * @calls    the local `fail` helper, which throws the path-tagged error.
+ * @file shared/validate.ts
+ * @description Shared field-validation primitives for the hand-rolled JSON registry loaders — `require*` forms demand a field, `optional*` forms allow it missing but reject a present-but-wrong value; the pervasive `obj`/`field`/`ctx` trio (parent record, field name, JSON path used verbatim in errors) recurs across every helper, so a miss names the exact bad path and fails the boot loudly at module load. Domain rules stay in the loaders.
+ * @module shared
  */
 
-// throws a path-tagged error naming exactly what was expected vs. what was found
+/**
+ * @function    fail
+ * @description Throws a path-tagged error naming what was expected vs. what was found.
+ * @param   requirement  Expected shape in prose, embedded in the message.
+ * @param   value        The offending value, JSON-stringified into the message.
+ * @returns never — always throws an Error.
+ * @calledby src/shared/validate.ts → every require/optional helper below, on a validation miss
+ * @calls    the Error constructor only; no further delegation
+ */
 function fail(
   ctx: string,
   field: string,
@@ -32,7 +24,14 @@ function fail(
   );
 }
 
-// asserts the value is a plain object (not null, not an array)
+/**
+ * @function    requireObject
+ * @description Asserts the value is a plain object (not null, not an array).
+ * @param   raw  Parsed-JSON value under test.
+ * @returns the value narrowed to Record<string, unknown>; throws otherwise.
+ * @calledby widely used — the registry loaders, before reading any field off a node
+ * @calls    throws an Error inline on a type miss; no other delegation
+ */
 export function requireObject(
   raw: unknown,
   ctx: string,
@@ -43,7 +42,14 @@ export function requireObject(
   return raw as Record<string, unknown>;
 }
 
-// asserts the value is an array (may be empty)
+/**
+ * @function    requireArray
+ * @description Asserts the value is an array (may be empty).
+ * @param   raw  Parsed-JSON value under test.
+ * @returns the value as unknown[]; throws otherwise.
+ * @calledby widely used — the registry loaders, before iterating a list field
+ * @calls    throws an Error inline on a type miss; no other delegation
+ */
 export function requireArray(raw: unknown, ctx: string): unknown[] {
   if (!Array.isArray(raw)) {
     throw new Error(`${ctx} must be an array`);
@@ -51,7 +57,14 @@ export function requireArray(raw: unknown, ctx: string): unknown[] {
   return raw;
 }
 
-// asserts the value is a non-empty array
+/**
+ * @function    requireNonEmptyArray
+ * @description Asserts the value is an array with at least one element.
+ * @param   raw  Parsed-JSON value under test.
+ * @returns the value as unknown[]; throws on a non-array or empty array.
+ * @calledby widely used — the registry loaders, for lists that must carry at least one entry
+ * @calls    throws an Error inline on a miss; no other delegation
+ */
 export function requireNonEmptyArray(raw: unknown, ctx: string): unknown[] {
   if (!Array.isArray(raw) || raw.length === 0) {
     throw new Error(`${ctx} must be a non-empty array`);
@@ -59,7 +72,13 @@ export function requireNonEmptyArray(raw: unknown, ctx: string): unknown[] {
   return raw;
 }
 
-// reads a required non-empty string field
+/**
+ * @function    requireString
+ * @description Reads a required non-empty string field.
+ * @returns the string; throws via fail() if absent/empty/non-string.
+ * @calledby widely used — the registry loaders, for mandatory text fields (ids, keys)
+ * @calls    src/shared/validate.ts → fail on a miss
+ */
 export function requireString(
   obj: Record<string, unknown>,
   field: string,
@@ -72,7 +91,13 @@ export function requireString(
   return value;
 }
 
-// reads an optional string — undefined if absent, error if present but empty/non-string
+/**
+ * @function    optionalString
+ * @description Reads an optional string — undefined if absent, error if present-but-empty.
+ * @returns string | undefined; throws via fail() on a present-but-wrong value.
+ * @calledby widely used — the registry loaders, for optional text fields
+ * @calls    src/shared/validate.ts → fail on a present-but-invalid value
+ */
 export function optionalString(
   obj: Record<string, unknown>,
   field: string,
@@ -86,7 +111,13 @@ export function optionalString(
   return value;
 }
 
-// reads a required boolean field (no truthy coercion)
+/**
+ * @function    requireBoolean
+ * @description Reads a required boolean field (no truthy coercion).
+ * @returns the boolean; throws via fail() if absent or non-boolean.
+ * @calledby widely used — the registry loaders, for mandatory flag fields
+ * @calls    src/shared/validate.ts → fail on a miss
+ */
 export function requireBoolean(
   obj: Record<string, unknown>,
   field: string,
@@ -99,7 +130,13 @@ export function requireBoolean(
   return value;
 }
 
-// reads an optional boolean — undefined if absent, error if present but not boolean
+/**
+ * @function    optionalBoolean
+ * @description Reads an optional boolean — undefined if absent, error if present-but-not-boolean.
+ * @returns boolean | undefined; throws via fail() on a present-but-wrong value.
+ * @calledby widely used — the registry loaders, for optional flag fields
+ * @calls    src/shared/validate.ts → fail on a present-but-invalid value
+ */
 export function optionalBoolean(
   obj: Record<string, unknown>,
   field: string,
@@ -113,7 +150,13 @@ export function optionalBoolean(
   return value;
 }
 
-// reads a required finite number (any sign including zero, no NaN/±Infinity)
+/**
+ * @function    requireFinite
+ * @description Reads a required finite number (any sign incl. zero; rejects NaN/±Infinity).
+ * @returns the number; throws via fail() on a non-finite/absent value.
+ * @calledby widely used — the registry loaders, for numeric fields with no sign constraint
+ * @calls    src/shared/validate.ts → fail on a miss
+ */
 export function requireFinite(
   obj: Record<string, unknown>,
   field: string,
@@ -126,7 +169,13 @@ export function requireFinite(
   return value;
 }
 
-// reads an optional finite number — undefined if absent
+/**
+ * @function    optionalFinite
+ * @description Reads an optional finite number — undefined if absent.
+ * @returns number | undefined; throws via fail() on a present-but-non-finite value.
+ * @calledby widely used — the registry loaders, for optional unconstrained-sign numbers
+ * @calls    src/shared/validate.ts → fail on a present-but-invalid value
+ */
 export function optionalFinite(
   obj: Record<string, unknown>,
   field: string,
@@ -140,7 +189,13 @@ export function optionalFinite(
   return value;
 }
 
-// reads a required positive number (strictly > 0; zero rejected)
+/**
+ * @function    requirePositive
+ * @description Reads a required positive number (strictly > 0; zero rejected).
+ * @returns the number; throws via fail() on a non-positive/absent value.
+ * @calledby widely used — the registry loaders, for magnitudes that must exceed zero
+ * @calls    src/shared/validate.ts → fail on a miss
+ */
 export function requirePositive(
   obj: Record<string, unknown>,
   field: string,
@@ -153,7 +208,13 @@ export function requirePositive(
   return value;
 }
 
-// reads an optional positive number — undefined if absent
+/**
+ * @function    optionalPositive
+ * @description Reads an optional positive number — undefined if absent.
+ * @returns number | undefined; throws via fail() on a present-but-non-positive value.
+ * @calledby widely used — the registry loaders, for optional strictly-positive magnitudes
+ * @calls    src/shared/validate.ts → fail on a present-but-invalid value
+ */
 export function optionalPositive(
   obj: Record<string, unknown>,
   field: string,
@@ -167,7 +228,13 @@ export function optionalPositive(
   return value;
 }
 
-// reads a required non-negative number (≥ 0; zero allowed)
+/**
+ * @function    requireNonNegative
+ * @description Reads a required non-negative number (≥ 0; zero allowed).
+ * @returns the number; throws via fail() on a negative/absent value.
+ * @calledby widely used — the registry loaders, for magnitudes where zero is meaningful
+ * @calls    src/shared/validate.ts → fail on a miss
+ */
 export function requireNonNegative(
   obj: Record<string, unknown>,
   field: string,
@@ -180,7 +247,13 @@ export function requireNonNegative(
   return value;
 }
 
-// reads an optional non-negative number — undefined if absent
+/**
+ * @function    optionalNonNegative
+ * @description Reads an optional non-negative number — undefined if absent.
+ * @returns number | undefined; throws via fail() on a present-but-negative value.
+ * @calledby widely used — the registry loaders, for optional zero-allowed magnitudes
+ * @calls    src/shared/validate.ts → fail on a present-but-invalid value
+ */
 export function optionalNonNegative(
   obj: Record<string, unknown>,
   field: string,
@@ -194,7 +267,13 @@ export function optionalNonNegative(
   return value;
 }
 
-// reads a required non-negative integer (whole, ≥ 0; for counts and indices)
+/**
+ * @function    requireNonNegativeInt
+ * @description Reads a required non-negative integer (whole, ≥ 0; for counts and indices).
+ * @returns the integer; throws via fail() on a non-integer/negative/absent value.
+ * @calledby widely used — the registry loaders, for whole-number counts and indices
+ * @calls    src/shared/validate.ts → fail on a miss
+ */
 export function requireNonNegativeInt(
   obj: Record<string, unknown>,
   field: string,
@@ -207,7 +286,13 @@ export function requireNonNegativeInt(
   return value;
 }
 
-// reads an optional non-negative integer — undefined if absent
+/**
+ * @function    optionalNonNegativeInt
+ * @description Reads an optional non-negative integer — undefined if absent.
+ * @returns number | undefined; throws via fail() on a present-but-invalid value.
+ * @calledby widely used — the registry loaders, for optional whole-number counts/indices
+ * @calls    src/shared/validate.ts → fail on a present-but-invalid value
+ */
 export function optionalNonNegativeInt(
   obj: Record<string, unknown>,
   field: string,
@@ -221,7 +306,13 @@ export function optionalNonNegativeInt(
   return value;
 }
 
-// reads a required positive integer (whole, strictly > 0; for at-least-one counts)
+/**
+ * @function    requirePositiveInt
+ * @description Reads a required positive integer (whole, strictly > 0; for at-least-one counts).
+ * @returns the integer; throws via fail() on a non-integer/non-positive/absent value.
+ * @calledby widely used — the registry loaders, for counts that must be at least one
+ * @calls    src/shared/validate.ts → fail on a miss
+ */
 export function requirePositiveInt(
   obj: Record<string, unknown>,
   field: string,
@@ -234,7 +325,13 @@ export function requirePositiveInt(
   return value;
 }
 
-// reads an optional positive integer — undefined if absent
+/**
+ * @function    optionalPositiveInt
+ * @description Reads an optional positive integer — undefined if absent.
+ * @returns number | undefined; throws via fail() on a present-but-invalid value.
+ * @calledby widely used — the registry loaders, for optional at-least-one counts
+ * @calls    src/shared/validate.ts → fail on a present-but-invalid value
+ */
 export function optionalPositiveInt(
   obj: Record<string, unknown>,
   field: string,
@@ -248,7 +345,13 @@ export function optionalPositiveInt(
   return value;
 }
 
-// reads an optional fraction strictly inside (0, 1) — omit the field to mean "never"/"always" instead of passing 0/1
+/**
+ * @function    optionalFraction
+ * @description Reads an optional fraction strictly inside (0, 1) — omit the field to mean "never"/"always" rather than passing 0 or 1.
+ * @returns number | undefined; throws via fail() on a value outside (0, 1) exclusive.
+ * @calledby widely used — the registry loaders, for probability/ratio fields
+ * @calls    src/shared/validate.ts → fail on a present-but-out-of-range value
+ */
 export function optionalFraction(
   obj: Record<string, unknown>,
   field: string,
@@ -267,7 +370,14 @@ export function optionalFraction(
   return value;
 }
 
-// reads a required string-enum field; the error message lists the allowed options so a typo is obvious
+/**
+ * @function    requireOneOf
+ * @description Reads a required string-enum field; the error lists the allowed options so a typo is obvious.
+ * @param   allowed  The permitted values, as an array or set.
+ * @returns the value narrowed to the enum type T; throws via fail() if not allowed.
+ * @calledby widely used — the registry loaders, for discriminant/kind fields with a fixed vocabulary
+ * @calls    src/shared/validate.ts → fail on a miss
+ */
 export function requireOneOf<T extends string>(
   obj: Record<string, unknown>,
   field: string,

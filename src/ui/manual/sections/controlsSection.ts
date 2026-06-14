@@ -6,18 +6,9 @@ import {
 } from '../manualSection';
 
 /**
- * controlsSection — builds the manual's "Controls" tab (the key cheat sheet).
- *
- * Lays out movement / actions / mouse bindings as labelled key-chip rows grouped
- * by category. This is presentation only: the rows mirror the authoritative
- * bindings owned by the player and interaction systems (debug-only keys such as
- * fly mode are intentionally omitted), so editing this table changes the cheat
- * sheet, not the actual controls.
- *
- * Inputs:  the static CATEGORIES table below and the shared manual DOM helpers.
- * Outputs: a detached ManualSection element tree (no animated previews).
- * @calledby the in-game manual overlay, when assembling its tab pages.
- * @calls    the shared manual DOM/section helpers and the key-chip builder.
+ * @file ui/manual/sections/controlsSection.ts
+ * @description Builds the manual's "Controls" tab — movement/actions/mouse bindings as labelled key-chip rows grouped by category. Presentation only: the rows mirror the authoritative bindings owned by the player and interaction systems (debug-only keys like fly mode omitted), so editing this table changes the cheat sheet, not the controls.
+ * @module ui/manual/sections
  */
 
 // One binding row: the keys to display as chips and the action they perform.
@@ -32,6 +23,7 @@ interface CommandCategory {
   readonly commands: ReadonlyArray<CommandRow>;
 }
 
+// ── Cheat sheet ────────────────────────────────────────────────────────────
 // The full cheat sheet: every category and its bindings, in display order.
 const CATEGORIES: ReadonlyArray<CommandCategory> = [
   {
@@ -61,7 +53,14 @@ const CATEGORIES: ReadonlyArray<CommandCategory> = [
   },
 ];
 
-// Builds one binding row: its key chips followed by the action label.
+/**
+ * @function    commandRow
+ * @description Builds one binding row: its key chips followed by the action label.
+ * @param   command  The keys to chip and the action label.
+ * @returns a detached command-row element.
+ * @calledby src/ui/manual/sections/controlsSection.ts → buildControlsSection, per category binding
+ * @calls    src/ui/manual/manualSection.ts → keyChips, el
+ */
 function commandRow(command: CommandRow): HTMLElement {
   const row = el('div', 'options-command');
   const keys = keyChips(command.keys, 'options-command-keys');
@@ -70,7 +69,13 @@ function commandRow(command: CommandRow): HTMLElement {
   return row;
 }
 
-// builds the Controls tab: a grid of key-binding rows grouped by category
+/**
+ * @function    buildControlsSection
+ * @description Builds the Controls tab: a grid of key-binding rows grouped by category. Reads the static CATEGORIES table.
+ * @returns a detached ManualSection element tree (no animated previews).
+ * @calledby src/ui/ManualOverlay.ts → the TABS registry, built when the overlay assembles its tab pages
+ * @calls    src/ui/manual/manualSection.ts → sectionRoot, el and src/ui/manual/sections/controlsSection.ts → commandRow
+ */
 export function buildControlsSection(): ManualSection {
   const root = sectionRoot();
   const grid = el('div', 'manual-controls');

@@ -12,21 +12,9 @@ import {
 } from '../constants';
 
 /**
- * playerProjectileConfig — per-gun-mode firing parameters, resolved from the
- * animation registry once at boot.
- *
- * Firing is overlay-only: the gun sprite's attack1 clip is the visible gunshot,
- * so its "fire" stage frame index drives projectile-spawn timing and its
- * animation-complete event ends the locked-attack window (the body has no
- * attack1). This module reads those registry stages plus the projectile tuning
- * constants and bakes them into one immutable map keyed by firing mode.
- *
- * Inputs:  the gun-overlay animation registry (stage frames + natural duration)
- *          and the projectile speed/damage/fire-rate constants.
- * Outputs: a frozen mode → ProjectileFireConfig map; throws if the registry is
- *          missing the expected "fire" stage or natural duration.
- * @calledby the player firing system at construction, to precompute fire configs.
- * @calls    the character-loader registry queries for overlay stages/durations.
+ * @file entities/playerProjectileConfig.ts
+ * @description Per-gun-mode firing parameters baked once at boot from the animation registry — firing is overlay-only, so the gun sprite's attack1 "fire" stage frame drives projectile-spawn timing and its complete event ends the locked-attack window (the body has no attack1); throws if the expected "fire" stage or natural duration is missing.
+ * @module entities
  */
 
 export interface ProjectileFireConfig {
@@ -41,7 +29,13 @@ export interface ProjectileFireConfig {
   readonly overlayDurationMs?: number;
 }
 
-// Builds the immutable mode → fire-config map from the animation registry; throws if the "fire" stage is missing.
+/**
+ * @function    buildProjectileFireConfigs
+ * @description Build the immutable mode-to-fire-config map from the animation registry; gun1 carries the fire-rate-adjusted overlay duration, gun2 plays at natural speed.
+ * @returns a frozen map keyed by firing mode; throws if the overlays' "fire" stage or gun1 natural duration is missing.
+ * @calledby src/entities/Player.ts → constructor, precomputing fire configs at spawn
+ * @calls    the character-loader queries for overlay anim keys, stages, and durations
+ */
 export function buildProjectileFireConfigs(): ReadonlyMap<
   'gunslinger_gun1' | 'gunslinger_gun2',
   ProjectileFireConfig

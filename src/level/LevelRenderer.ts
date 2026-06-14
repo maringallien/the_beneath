@@ -40,29 +40,9 @@ import { getBrightFrames, glowAtlasTextureKey } from './GlowAtlasBaker';
 import { tilesetTextureKey } from './TilesetRegistry';
 
 /**
- * LevelRenderer — turns one parsed LDtk level into the scene's visual layers.
- *
- * The tilemap/level rendering pipeline. Each renderable tile layer is baked
- * into a single RenderTexture (one draw call, not one Image per tile); animated
- * layers (foreground glow, neon/house signs, decoration entities) stay as
- * Containers of live Images so their tweens can run. Three concerns thread
- * through every layer: stacking (depth follows the LDtk-authored layer order,
- * but Foreground2/3 are lifted into an overlay band so they occlude dynamic
- * entities), brightness (per-layer ADD-blended sibling lifts via
- * LAYER_BRIGHTNESS_FACTORS), and spill containment (a per-level GeometryMask on
- * Image layers; baked RTs self-clip; out-of-bounds decorations are left
- * unmasked to bleed into the next level). Masks and RTs are inflated by
- * MASK_OVERLAP_PX so neighbours overlap and the inter-level seam can't show.
- * Collision is owned separately by LevelCollision, so nothing here is physical.
- *
- * Inputs:  the LDtk project + one level, the scene (textures must be preloaded),
- *          and the glow/sign/brightness tuning constants.
- * Outputs: a RenderedLevel (layers, mask Graphics, looping tweens) plus the
- *          GameObjects added to the scene; mutates nothing it doesn't own.
- * @calledby the level-streaming code, as each level enters the camera's reach,
- *           and torn down via destroyRenderedLevel when it leaves.
- * @calls    the tileset/glow-atlas registries, the sign-texture baker, and
- *           Phaser's RenderTexture / Container / mask / tween machinery.
+ * @file level/LevelRenderer.ts
+ * @description Turns one parsed LDtk level into the scene's visual layers; each tile layer baked into ONE RenderTexture (one draw call), animated layers (foreground glow, neon/house signs, decorations) stay Containers of live Images; three concerns thread through: stacking (LDtk-authored depth, but Foreground2/3 lifted into an overlay band to occlude dynamic entities), brightness (per-layer ADD-blended sibling lifts via LAYER_BRIGHTNESS_FACTORS), spill containment (per-level GeometryMask on Image layers, baked RTs self-clip, out-of-bounds decorations left unmasked to bleed into the next level); masks/RTs inflated by MASK_OVERLAP_PX so neighbours overlap and the seam can't show; collision owned separately by LevelCollision.
+ * @module level
  */
 
 const FLIP_HORIZONTAL = 1;
@@ -98,7 +78,16 @@ export interface RenderedLevel {
   animations: LevelAnimations;
 }
 
-// Renders one level: bakes tile layers, builds animated glow/sign/decoration layers, applies the spill mask, and returns the RenderedLevel handle.
+/**
+ * @function    renderLevel
+ * @description Renders one level: bakes tile layers, builds animated glow/sign/decoration layers, applies the spill mask; returns the RenderedLevel handle.
+ * @param   scene    Textures must already be preloaded.
+ * @param   project  Parsed LDtk project.
+ * @param   level    The one level to render.
+ * @returns a RenderedLevel (layers, mask Graphics, looping tweens); also adds GameObjects to the scene. Throws if a layer references an undefined tileset or an unloaded texture.
+ * @calledby src/scenes/GameScene.ts → level streaming, as each level enters the camera's reach
+ * @calls    the tileset/glow-atlas registries, the tile-layer baker, the sign-texture baker, the glow/sign tween starters, and Phaser RenderTexture / Container / mask machinery
+ */
 export function renderLevel(
   scene: Phaser.Scene,
   project: LdtkProject,
@@ -294,7 +283,17 @@ export function renderLevel(
   };
 }
 
-// Bakes all tiles of one layer into a single RenderTexture so the whole layer costs one draw call.
+/**
+ * @function    bakeTileLayer
+ * @description Bakes all tiles of one layer into a single RenderTexture so the whole layer costs one draw call.
+ * @param   scene       The scene.
+ * @param   level       For world position + size.
+ * @param   tiles       The layer's auto-layer tiles with frame + flip + px.
+ * @param   textureKey  The tileset texture.
+ * @returns a NEAREST-filtered RenderTexture (inflated by MASK_OVERLAP_PX) with every tile stamped at its position.
+ * @calledby src/level/LevelRenderer.ts → renderLevel, once per base tile layer and once more per brightness-overlay layer
+ * @calls    Phaser RenderTexture batch-draw with a temporary stamp Image
+ */
 function bakeTileLayer(
   scene: Phaser.Scene,
   level: LdtkLevel,
@@ -330,7 +329,16 @@ function bakeTileLayer(
   return rt;
 }
 
-// Builds a decoration Image: registers its custom-rect frame, applies FitInside scaling, and anchors at the LDtk pivot.
+/**
+ * @function    createEntityTileImage
+ * @description Builds a decoration Image: registers its custom-rect frame, applies FitInside scaling, and anchors at the LDtk pivot.
+ * @param   scene       The scene.
+ * @param   textureKey  The decoration's tileset.
+ * @param   dec         The entity tile: src rect, entity size, px/py, pivot, alpha.
+ * @returns a positioned, scaled, pivot-anchored Image (frame registered lazily on first use).
+ * @calledby src/level/LevelRenderer.ts → renderLevel, for a plain (non-lit) decoration tile
+ * @calls    the texture's frame-add and Phaser's image factory
+ */
 function createEntityTileImage(
   scene: Phaser.Scene,
   textureKey: string,
@@ -351,7 +359,7 @@ function createEntityTileImage(
   return img;
 }
 
-// Looks up a rendered layer by its LDtk identifier, or undefined if absent.
+/** Looks up a rendered layer by its LDtk identifier, or undefined if absent. */
 export function findRenderedLayer(
   rendered: RenderedLevel,
   identifier: string,
@@ -359,7 +367,15 @@ export function findRenderedLayer(
   return rendered.layers.find((l) => l.identifier === identifier);
 }
 
-// Starts a random-phase, Sine-eased yoyo tween on one glow Image so each tile flickers on its own schedule.
+/**
+ * @function    startGlowFlicker
+ * @description Starts a random-phase, Sine-eased yoyo tween on one glow Image so each tile flickers on its own schedule; sets a random start alpha, adds an infinitely-repeating yoyo alpha tween, seeks a random phase, and collects it for off-camera culling.
+ * @param   scene   The scene.
+ * @param   target  The glow Image to pulse.
+ * @param   anims   The level's tween collection to register into.
+ * @calledby src/level/LevelRenderer.ts → renderLevel, once per bright glow tile
+ * @calls    Phaser's tween manager and random helpers
+ */
 function startGlowFlicker(
   scene: Phaser.Scene,
   target: Phaser.GameObjects.Image,
@@ -391,7 +407,16 @@ function startGlowFlicker(
   anims.tweens.push(tween);
 }
 
-// Builds one of the two sign layer Images (structure or lit), matching createEntityTileImage's FitInside scaling and pivot.
+/**
+ * @function    createSignLayerImage
+ * @description Builds one of the two sign layer Images (structure or lit), matching the decoration FitInside scaling and pivot.
+ * @param   scene       The scene.
+ * @param   textureKey  The pre-baked structure or lit texture.
+ * @param   dec         Entity tile: src rect, entity size, px/py, pivot, alpha.
+ * @returns a positioned, scaled, pivot-anchored Image.
+ * @calledby src/level/LevelRenderer.ts → renderLevel, twice per lit decoration (structure layer and lit overlay)
+ * @calls    Phaser's image factory
+ */
 function createSignLayerImage(
   scene: Phaser.Scene,
   textureKey: string,
@@ -405,7 +430,14 @@ function createSignLayerImage(
   return img;
 }
 
-// Drives a self-rescheduling tween chain on a sign's lit overlay so it reads as a buzzing neon light.
+/**
+ * @function    startSignFlicker
+ * @description Drives a self-rescheduling tween chain on a sign's lit overlay so it reads as a buzzing neon light; schedules randomized dim/bright bursts followed by a hold, re-arming itself each cycle; bails if the level unloads.
+ * @param   scene   The scene.
+ * @param   target  The lit overlay Image to flicker.
+ * @calledby src/level/LevelRenderer.ts → renderLevel, for a lit decoration whose mode is 'flicker'
+ * @calls    Phaser's tween chain, delayed-call, and random helpers; re-invokes itself on cycle complete
+ */
 function startSignFlicker(
   scene: Phaser.Scene,
   target: Phaser.GameObjects.Image,
@@ -462,7 +494,14 @@ function startSignFlicker(
   );
 }
 
-// Drives a slow breathing glow on a lit overlay: stage-1 ramps to a random phase, stage-2 is the eternal yoyo.
+/**
+ * @function    startSignPulsate
+ * @description Drives a slow breathing glow on a lit overlay: stage-1 ramps to a random phase, stage-2 is the eternal yoyo; a two-stage tween (rate-matched ramp into an endpoint, then an infinite yoyo); bails if the level unloads between stages.
+ * @param   scene   The scene.
+ * @param   target  The lit overlay Image to pulse.
+ * @calledby src/level/LevelRenderer.ts → renderLevel, for a lit decoration whose mode is 'pulsate' (e.g. house windows)
+ * @calls    Phaser's tween manager and random helpers
+ */
 function startSignPulsate(
   scene: Phaser.Scene,
   target: Phaser.GameObjects.Image,
@@ -504,7 +543,13 @@ function startSignPulsate(
   });
 }
 
-// Tears down a rendered level: clears masks, destroys all layers and their children, and removes glow tweens.
+/**
+ * @function    destroyRenderedLevel
+ * @description Tears down a rendered level: clears each layer's mask, destroys all layers and the backing mask Graphics, and explicitly removes collected glow tweens so none leak into the next world build.
+ * @param   rendered  The RenderedLevel handle returned by the renderer.
+ * @calledby src/scenes/GameScene.ts → level streaming, when a level leaves the camera's reach
+ * @calls    Phaser's clearMask/destroy and the tween manager's remove
+ */
 export function destroyRenderedLevel(rendered: RenderedLevel): void {
   // Clear masks before destroying the backing Graphics; a dangling mask reference throws on the next frame.
   for (const layer of rendered.layers) {

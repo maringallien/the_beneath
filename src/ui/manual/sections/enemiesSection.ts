@@ -8,20 +8,12 @@ import {
 } from '../manualSection';
 
 /**
- * enemiesSection — builds the manual's "Enemies" tab (stealth/detection + bestiary).
- *
- * Teaches the detection system: the ? "investigating" and ! "detected" states and
- * how the screen-edge corner brackets recolour to show exposure, then lists the
- * broad enemy archetypes from the ENEMY_TYPES table below. Deliberately not an
- * exhaustive bestiary — it teaches how to read alerts and what kinds of threats
- * exist, not stats for every foe.
- *
- * Inputs:  the static ENEMY_TYPES copy below and the shared manual DOM helpers.
- * Outputs: a detached ManualSection element tree (no animated previews).
- * @calledby the in-game manual overlay, when assembling its tab pages.
- * @calls    the shared manual DOM/section helpers, including the marker-row builder.
+ * @file ui/manual/sections/enemiesSection.ts
+ * @description Builds the manual's "Enemies" tab — teaches the detection system (the ? "investigating" and ! "detected" states and how the screen-edge corner brackets recolour to show exposure), then lists the broad enemy archetypes from ENEMY_TYPES. Not an exhaustive bestiary; it teaches how to read alerts and what threats exist, not per-foe stats.
+ * @module ui/manual/sections
  */
 
+// ── Enemy archetypes ───────────────────────────────────────────────────────
 // The enemy archetype overview: each faction's display name and one-line summary.
 const ENEMY_TYPES: ReadonlyArray<{ name: string; detail: string }> = [
   {
@@ -56,7 +48,13 @@ const ENEMY_TYPES: ReadonlyArray<{ name: string; detail: string }> = [
   },
 ];
 
-// builds the Enemies tab: detection states (?/!) and a broad enemy-type overview
+/**
+ * @function    buildEnemiesSection
+ * @description Builds the Enemies tab: detection states (?/!) and a broad enemy-type overview. Reads the static ENEMY_TYPES copy.
+ * @returns a detached ManualSection element tree (no animated previews).
+ * @calledby src/ui/ManualOverlay.ts → the TABS registry, built when the overlay assembles its tab pages
+ * @calls    src/ui/manual/manualSection.ts → sectionRoot, paragraph, titledBlock, markerRow, el
+ */
 export function buildEnemiesSection(): ManualSection {
   const root = sectionRoot();
 

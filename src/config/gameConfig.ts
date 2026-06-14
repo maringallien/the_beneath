@@ -8,19 +8,9 @@ import { PreloadScene } from '../scenes/PreloadScene';
 import { VictoryScene } from '../scenes/VictoryScene';
 
 /**
- * gameConfig — the single Phaser.Game configuration object.
- *
- * Declares the renderer, world physics, scaling, and the scene roster the entry
- * point hands to `new Phaser.Game`. Two non-obvious choices are baked in here:
- * arcade physics steps per rendered frame (fixedStep: false) so motion stays
- * smooth at any refresh rate, and the scene array is ordered so overlay scenes
- * (landing / pause / victory) render above GameScene. The merchant shop is a DOM
- * overlay, not a scene, so it is deliberately absent.
- *
- * Inputs:  the world gravity constant and the scene classes it lists.
- * Outputs: the GameConfig consumed once at game construction.
- * @calledby the entry point, when it constructs the Phaser game.
- * @calls    nothing — a configuration value (Phaser reads it).
+ * @file config/gameConfig.ts
+ * @description The single Phaser.Game config object — renderer, world physics, scaling, and the scene roster the entry point hands to new Phaser.Game. Two non-obvious choices: arcade physics steps per rendered frame (fixedStep:false) so motion stays smooth at any refresh rate, and the scene array is ordered so overlay scenes (landing/pause/victory) render above GameScene. The merchant shop is a DOM overlay, not a scene, so it is deliberately absent. Consumed once by src/main.ts.
+ * @module config
  */
 export const gameConfig: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,

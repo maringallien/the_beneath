@@ -17,26 +17,9 @@ import { buildEnemiesSection } from './manual/sections/enemiesSection';
 import { buildItemsSection } from './manual/sections/itemsSection';
 
 /**
- * ManualOverlay — the DOM "How to Play" manual shown over the pause menu.
- *
- * The expanded form of the old options panel: the same in-world frame as the
- * merchant shop (.shop-overlay backdrop + .shop-window grey 9-slice panel) and
- * the same music toggle, fronted by a tab bar (Basics / Controls / Combat / HUD
- * / Enemies / Items). Each tab's section is built once up front; the Combat tab
- * embeds looping sprite-master attack animations (AnimatedSpritePreview), and
- * only the visible tab's previews animate (the rest are paused). The full-
- * viewport backdrop intercepts mouse events so the pause buttons underneath
- * stay unclickable, and while open PauseScene disables its own Phaser keyboard
- * so the two layers never both react to a key — this overlay owns ESC/M plus
- * tab navigation through a window-level capture listener.
- *
- * Inputs:  the parent DOM host, the Phaser scene (for building previews), the
- *          music volume preference, and keyboard/mouse while open.
- * Outputs: the manual DOM tree; live music-volume writes; fires the caller's
- *          onClose when it finishes closing.
- * @calledby the pause menu, when the player opens the manual from the pause UI.
- * @calls    the per-tab section builders, the sprite-preview controllers, and the
- *           shared music-volume audio controls.
+ * @file ui/ManualOverlay.ts
+ * @description DOM "How to Play" manual over the pause menu — the merchant-shop frame plus a music toggle, fronted by a tab bar (Basics/Controls/Combat/HUD/Enemies/Items); each section is built once up front and only the visible tab's sprite previews animate; owns ESC/M plus tab navigation through a window-level capture listener.
+ * @module ui
  */
 interface TabDef {
   readonly id: string;
@@ -79,7 +62,13 @@ export class ManualOverlay extends DomOverlay {
     this.scene = scene;
   }
 
-  // Opens the manual; no-op if already open.
+  /**
+   * @function    open
+   * @description Open the manual; no-op if already open.
+   * @param   options  Carries the onClose callback fired when the manual closes.
+   * @calledby src/scenes/PauseScene.ts and src/scenes/LandingScene.ts → their How-to-Play handlers
+   * @calls    src/ui/DomOverlay.ts → openShell, src/ui/ManualOverlay.ts → buildDom, and src/ui/DomOverlay.ts → attachKeyboard
+   */
   open(options: OpenOptions): void {
     if (this.isOpen()) return;
     this.openShell(options.onClose);
@@ -87,7 +76,12 @@ export class ManualOverlay extends DomOverlay {
     this.attachKeyboard();
   }
 
-  // Stops all tab sprite-preview rAF loops and clears element refs.
+  /**
+   * @function    onTeardown
+   * @description Destroy every tab's sprite-preview rAF loops and reset the overlay's element/state refs.
+   * @calledby src/ui/DomOverlay.ts → teardown, while closing the manual
+   * @calls    each preview's destroy
+   */
   protected onTeardown(): void {
     for (const tab of this.builtTabs) {
       for (const preview of tab.section.previews) preview.destroy();
@@ -99,7 +93,12 @@ export class ManualOverlay extends DomOverlay {
     this.activeIndex = 0;
   }
 
-  // Assembles the full window (header, tabs, content, footer), mounts it, and selects the first tab.
+  /**
+   * @function    buildDom
+   * @description Assemble and mount the full window (header, tabs, content, footer), sync the volume UI, and activate the first tab.
+   * @calledby src/ui/ManualOverlay.ts → open
+   * @calls    src/ui/ManualOverlay.ts → buildHeader/buildTabBar/buildContent/buildFooter/syncVolumeUI/setActiveTab, plus src/ui/DomOverlay.ts → createBackdrop/mount
+   */
   private buildDom(): void {
     const { overlay, win } = this.createBackdrop('shop-window manual-window');
 
@@ -114,7 +113,13 @@ export class ManualOverlay extends DomOverlay {
     this.setActiveTab(0);
   }
 
-  // Header row: the "How to Play" title plus the music volume control on the right.
+  /**
+   * @function    buildHeader
+   * @description Build the header row — the "How to Play" title plus the music volume control on the right.
+   * @returns a detached header div.
+   * @calledby src/ui/ManualOverlay.ts → buildDom
+   * @calls    src/ui/ManualOverlay.ts → buildVolumeControl and DOM element creation
+   */
   private buildHeader(): HTMLDivElement {
     const header = document.createElement('div');
     header.className = 'options-header manual-header';
@@ -128,7 +133,13 @@ export class ManualOverlay extends DomOverlay {
     return header;
   }
 
-  // Builds the speaker-icon mute button + range slider for music volume; MusicPlayer follows the slider live.
+  /**
+   * @function    buildVolumeControl
+   * @description Build the speaker-icon mute button + range slider for music volume (MusicPlayer follows the slider live), recording the icon/slider refs for later syncing.
+   * @returns a detached volume-control div.
+   * @calledby src/ui/ManualOverlay.ts → buildHeader
+   * @calls    src/audio → toggleMusicMuted / setMusicVolume (on click/drag) and src/ui/ManualOverlay.ts → syncVolumeUI
+   */
   private buildVolumeControl(): HTMLDivElement {
     const wrap = document.createElement('div');
     wrap.className = 'options-volume';
@@ -164,7 +175,13 @@ export class ManualOverlay extends DomOverlay {
     return wrap;
   }
 
-  // Builds the tab bar and, in the same pass, the section body behind each tab.
+  /**
+   * @function    buildTabBar
+   * @description Build the tab bar and, in the same pass, the section body behind each tab, populating builtTabs with each tab's button + built section.
+   * @returns a detached tab-bar div.
+   * @calledby src/ui/ManualOverlay.ts → buildDom
+   * @calls    each tab's section builder (a tab-button click activates that tab via setActiveTab) and DOM creation
+   */
   private buildTabBar(): HTMLDivElement {
     const bar = document.createElement('div');
     bar.className = 'manual-tabs';
@@ -186,7 +203,13 @@ export class ManualOverlay extends DomOverlay {
     return bar;
   }
 
-  // Scrollable content host: stacks every section hidden (setActiveTab reveals one).
+  /**
+   * @function    buildContent
+   * @description Build the scrollable content host, appending every (already-built) section hidden so the active-tab switch reveals one; records the host ref.
+   * @returns a detached scrollable host.
+   * @calledby src/ui/ManualOverlay.ts → buildDom, after the tab bar is built
+   * @calls    DOM append only
+   */
   private buildContent(): HTMLDivElement {
     const host = document.createElement('div');
     host.className = 'manual-content';
@@ -200,7 +223,13 @@ export class ManualOverlay extends DomOverlay {
     return host;
   }
 
-  // Footer row of keyboard hints (Tabs / Mute / Close), each as kbd glyphs + label.
+  /**
+   * @function    buildFooter
+   * @description Build the footer row of keyboard hints (Tabs / Mute / Close), each as kbd glyphs + label.
+   * @returns a detached footer div of hint chips.
+   * @calledby src/ui/ManualOverlay.ts → buildDom
+   * @calls    DOM element-create/append only
+   */
   private buildFooter(): HTMLDivElement {
     const footer = document.createElement('div');
     footer.className = 'options-footer manual-footer';
@@ -230,7 +259,13 @@ export class ManualOverlay extends DomOverlay {
     return footer;
   }
 
-  // Switches to the given tab: stops the previous tab's previews, starts the new one's, resets scroll.
+  /**
+   * @function    setActiveTab
+   * @description Switch to the given tab — reveal the chosen section, hide the previous, swap preview rAF loops, and reset scroll. Out-of-range index is ignored.
+   * @param   index  Target tab index.
+   * @calledby src/ui/ManualOverlay.ts → buildDom, cycleTab, onKeydown, and tab-button click handlers
+   * @calls    each tab's preview start/stop controls
+   */
   private setActiveTab(index: number): void {
     if (index < 0 || index >= this.builtTabs.length) return;
     const previous = this.builtTabs[this.activeIndex];
@@ -249,13 +284,24 @@ export class ManualOverlay extends DomOverlay {
     this.activeIndex = index;
   }
 
-  // Steps the active tab by delta with wrap-around (delta +1 / -1 from arrow keys).
+  /**
+   * @function    cycleTab
+   * @description Step the active tab by delta with wrap-around at the ends.
+   * @param   delta  +1 to advance, -1 to go back.
+   * @calledby src/ui/ManualOverlay.ts → onKeydown, on the left/right arrow keypresses
+   * @calls    src/ui/ManualOverlay.ts → setActiveTab
+   */
   private cycleTab(delta: number): void {
     const count = this.builtTabs.length;
     this.setActiveTab((this.activeIndex + delta + count) % count);
   }
 
-  // Syncs slider value, speaker icon, filled track, and a11y labels to the current music volume.
+  /**
+   * @function    syncVolumeUI
+   * @description Sync slider value, speaker icon, filled track, and a11y labels to the live music volume; avoids clobbering a value being dragged. No-op if refs missing.
+   * @calledby src/ui/ManualOverlay.ts → buildDom, buildVolumeControl, and onKeydown, after any mute/volume change
+   * @calls    src/audio → getMusicVolume and DOM attribute writes
+   */
   private syncVolumeUI(): void {
     if (!this.volumeIconEl || !this.volumeSliderEl) return;
     const volume = getMusicVolume();
@@ -275,7 +321,13 @@ export class ManualOverlay extends DomOverlay {
     this.volumeSliderEl.style.setProperty('--volume-fill', `${pct}%`); // drives the filled track portion (see options.css)
   }
 
-  // ESC closes, M mutes, ←/→ cycle tabs, digit 1–N jumps to that tab; slider focus gets all keys except ESC.
+  /**
+   * @function    onKeydown
+   * @description Dispatch ESC (close), M (mute), left/right (cycle tabs), and digit 1-N (jump to that tab), swallowing handled keys; a focused slider keeps all its own keys except ESC.
+   * @param   e  Keyboard event from the window-level capture listener.
+   * @calledby src/ui/DomOverlay.ts → the capture-phase keydown listener, on any keypress while open
+   * @calls    src/ui/DomOverlay.ts → close, src/audio → toggleMusicMuted, and src/ui/ManualOverlay.ts → syncVolumeUI/cycleTab/setActiveTab
+   */
   protected onKeydown(e: KeyboardEvent): void {
     // Let the slider handle its own arrow/digit keys while focused, except ESC.
     if (e.target === this.volumeSliderEl && e.key !== 'Escape') {

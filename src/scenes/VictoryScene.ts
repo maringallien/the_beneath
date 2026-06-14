@@ -13,21 +13,9 @@ import {
 import type { GameScene } from './GameScene';
 
 /**
- * VictoryScene — the full-screen "YOU WON" win overlay.
- *
- * Launched on top of the game scene (paused beneath it) when the final boss
- * (the Heart Hoarder) dies. Fades a solid-black scrim + "YOU WON" title in over
- * the frozen world, holds for VICTORY_HOLD_MS, then auto-returns to the
- * home/title screen; a click / Enter / Space skips the hold. The return path
- * rebuilds the world in place AND resets the run-progress store, then re-shows
- * the landing page (the same path the pause menu's Quit takes), so play
- * resumes behind a fresh title screen. The title reuses the Nosifer display
- * font for thematic continuity with the start screen.
- *
- * Inputs:  the victory tuning constants and a handle to the game scene.
- * Outputs: a scrim + title overlay; on exit, the world rebuild + run reset.
- * @calledby the win flow, when the final boss is defeated.
- * @calls    the game scene's run-rebuild path and Phaser scene resume/stop.
+ * @file scenes/VictoryScene.ts
+ * @description Full-screen "YOU WON" win overlay launched atop the game scene (paused beneath it) when the final boss (the Heart Hoarder) dies. Fades a solid-black scrim and title in over the frozen world, holds for VICTORY_HOLD_MS, then auto-returns to the title (a click / Enter / Space skips the hold). The return path rebuilds the world in place AND resets the run-progress store, then re-shows the landing page — the same path the pause menu's Quit takes — so play resumes behind a fresh title screen. The title reuses the Nosifer display font for thematic continuity with the start screen.
+ * @module scenes
  */
 export class VictoryScene extends Phaser.Scene {
   private dim!: Phaser.GameObjects.Rectangle;
@@ -39,7 +27,12 @@ export class VictoryScene extends Phaser.Scene {
     super({ key: SCENE_KEYS.VICTORY });
   }
 
-  // Builds the scrim + title, fades them in, then holds and schedules the auto-return.
+  /**
+   * @function    create
+   * @description Builds the scrim and title, fades them in, then on full reveal arms the skip and schedules the auto-return; skip is armed only after the reveal so the killing blow can't trigger it.
+   * @calledby Phaser scene lifecycle at create, when the win overlay is launched on the final boss's death (via src/scenes/GameScene.ts)
+   * @calls    src/scenes/VictoryScene.ts → layout, armSkip, returnToTitle and the tween system
+   */
   create(): void {
     this.accepting = true;
     const { width, height } = this.cameras.main;
@@ -85,7 +78,12 @@ export class VictoryScene extends Phaser.Scene {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.onShutdown, this);
   }
 
-  // Arms click/Enter/Space to skip the hold; bound after the reveal so the killing blow can't trigger it.
+  /**
+   * @function    armSkip
+   * @description Arms click/Enter/Space to skip the hold; bound after the reveal so the killing blow can't trigger it.
+   * @calledby src/scenes/VictoryScene.ts → the title fade-in's onComplete, once the overlay is fully revealed
+   * @calls    Phaser input/keyboard binding to src/scenes/VictoryScene.ts → returnToTitle
+   */
   private armSkip(): void {
     this.input.on('pointerdown', this.returnToTitle, this);
     const kb = this.input.keyboard;
@@ -95,25 +93,40 @@ export class VictoryScene extends Phaser.Scene {
     }
   }
 
-  // Stretch the scrim to the new viewport and re-center the title.
+  /**
+   * @function    onResize
+   * @description Stretch the scrim to the new viewport and re-center the title.
+   * @calledby Phaser scale-manager RESIZE event (registered in create), since the canvas follows the window
+   * @calls    src/scenes/VictoryScene.ts → layout after resizing the dim rectangle
+   */
   private onResize(): void {
     const { width, height } = this.cameras.main;
     this.dim.setSize(width, height);
     this.layout();
   }
 
-  // Drop the resize listener so it doesn't outlive the scene.
+  /**
+   * @function    onShutdown
+   * @description Drop the resize listener so it doesn't outlive the scene.
+   * @calledby Phaser SHUTDOWN event (registered once in create)
+   * @calls    the scale manager to remove the resize listener
+   */
   private onShutdown(): void {
     this.scale.off(Phaser.Scale.Events.RESIZE, this.onResize, this);
   }
 
-  // Center the title horizontally at the configured viewport fraction down.
+  /** Center the title horizontally at the configured viewport fraction down. */
   private layout(): void {
     const { width, height } = this.cameras.main;
     this.title.setPosition(width / 2, height * VICTORY_TITLE_VIEWPORT_FRACTION_Y);
   }
 
-  // Rebuilds the world, resets run progress, resumes the game scene, and stops this overlay.
+  /**
+   * @function    returnToTitle
+   * @description Rebuilds the world back to the title, resets run progress, resumes the game scene, and stops this overlay; the accepting flag guards the auto-return timer and a skip input from both firing.
+   * @calledby src/scenes/VictoryScene.ts → the auto-return timer (in create) or a skip input armed by armSkip
+   * @calls    src/scenes/GameScene.ts → restartRun and Phaser scene resume/stop
+   */
   private returnToTitle(): void {
     if (!this.accepting) return;
     this.accepting = false;

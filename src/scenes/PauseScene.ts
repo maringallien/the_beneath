@@ -23,23 +23,9 @@ import { ManualOverlay } from '../ui/ManualOverlay';
 import type { GameScene } from './GameScene';
 
 /**
- * PauseScene — the pause-menu overlay scene.
- *
- * Launched on top of the game scene which is then paused beneath it; running
- * the menu as a separate scene is idiomatic Phaser — pausing the underlying
- * scene halts its update loop, physics, tweens, and timers in one call, with no
- * "paused" flag threaded through every entity. Renders a dimmed scrim, a
- * centered column of word-sprite buttons inside a drawn frame, and offers four
- * actions: Continue (resume the game), New Game (abandon the run and rebuild
- * straight into gameplay), Options (open the How-to-Play manual), and Quit
- * (abandon the run and return to the home/title screen). Resume/rebuild always
- * resumes-then-stops, the symmetric counterpart of the launch-then-pause that
- * opened it.
- *
- * Inputs:  the pause UI tuning constants and a handle to the game scene.
- * Outputs: the menu overlay; on action, game resume or an in-place run rebuild.
- * @calledby the pause flow, when the player opens the menu mid-game.
- * @calls    the game scene's run-rebuild path, Phaser resume/stop, and the manual.
+ * @file scenes/PauseScene.ts
+ * @description Pause-menu overlay scene launched atop the game scene (paused beneath it) — running the menu as its own scene halts the underlying update loop, physics, tweens, and timers in one call, with no "paused" flag threaded through every entity. Renders a dimmed scrim and a centered column of word-sprite buttons inside a drawn frame, offering four actions: Continue (resume), New Game (abandon the run and rebuild straight into gameplay), Options (open the How-to-Play manual), and Quit (abandon the run and return to the title). Every resume/rebuild resumes-then-stops, the symmetric counterpart of the launch-then-pause that opened it.
+ * @module scenes
  */
 
 // Four menu actions in display order; Continue is first so Enter reflexively resumes.
@@ -69,7 +55,12 @@ export class PauseScene extends Phaser.Scene {
     super({ key: SCENE_KEYS.PAUSE });
   }
 
-  // Builds the dim, word-sprite buttons, frame, and keyboard navigation.
+  /**
+   * @function    create
+   * @description Builds the dim, word-sprite buttons, frame, initial selection tint, and the keyboard/resize/shutdown listeners.
+   * @calledby Phaser scene lifecycle at create, when the pause menu is launched mid-game (via src/scenes/GameScene.ts → openPauseMenu)
+   * @calls    src/scenes/PauseScene.ts → layout and applySelectionTint plus Phaser input/scale systems
+   */
   create(): void {
     const { width, height } = this.cameras.main;
 
@@ -116,13 +107,24 @@ export class PauseScene extends Phaser.Scene {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.onShutdown, this);
   }
 
-  // Stretch the dim to the new viewport and re-center the menu.
+  /**
+   * @function    onResize
+   * @description Stretch the dim to the new viewport and re-center the menu.
+   * @calledby Phaser scale-manager RESIZE event (registered in create), since the canvas follows the window
+   * @calls    src/scenes/PauseScene.ts → layout after resizing the dim rectangle
+   */
   private onResize(): void {
     const { width, height } = this.cameras.main;
     this.dim.setSize(width, height);
     this.layout();
   }
 
+  /**
+   * @function    onShutdown
+   * @description Detaches the resize listener and drops the manual overlay's DOM node on scene stop.
+   * @calledby Phaser SHUTDOWN event (registered once in create)
+   * @calls    the scale manager and the manual overlay's destroy, nulling the handle
+   */
   private onShutdown(): void {
     this.scale.off(Phaser.Scale.Events.RESIZE, this.onResize, this);
     // Drop the manual overlay's DOM node if the scene stops while it's open.
@@ -130,7 +132,12 @@ export class PauseScene extends Phaser.Scene {
     this.manualOverlay = null;
   }
 
-  // Centers the button column in the viewport then redraws the frame around it.
+  /**
+   * @function    layout
+   * @description Centers the button column in the viewport as a vertically-centered stack then redraws the frame around it.
+   * @calledby src/scenes/PauseScene.ts → create and onResize
+   * @calls    src/scenes/PauseScene.ts → drawFrame after positioning the stack top-to-bottom
+   */
   private layout(): void {
     const { width, height } = this.cameras.main;
     const cx = width / 2;
@@ -152,7 +159,12 @@ export class PauseScene extends Phaser.Scene {
     this.drawFrame();
   }
 
-  // Draws a stroked rect plus four corner accent squares around the button group.
+  /**
+   * @function    drawFrame
+   * @description Draws a padded stroked rect plus four filled corner accent squares around the button group; the corner accents avoid needing a 9-slice asset.
+   * @calledby src/scenes/PauseScene.ts → layout, after the button stack is positioned
+   * @calls    the frame Graphics object's clear/stroke/fill draws
+   */
   private drawFrame(): void {
     const bounds = this.buttons.map((button) => button.getBounds());
     const left = Math.min(...bounds.map((b) => b.left));
@@ -186,25 +198,36 @@ export class PauseScene extends Phaser.Scene {
     }
   }
 
-  // Move selection up one, wrapping to the bottom.
+  /** Move selection up one, wrapping to the bottom. */
   private selectPrevious(): void {
     const count = this.buttons.length;
     this.setSelection((this.selectedIndex - 1 + count) % count);
   }
 
-  // Move selection down one, wrapping to the top.
+  /** Move selection down one, wrapping to the top. */
   private selectNext(): void {
     this.setSelection((this.selectedIndex + 1) % this.buttons.length);
   }
 
-  // Set the focused button (no-op if unchanged) and refresh the tints.
+  /**
+   * @function    setSelection
+   * @description Set the focused button (no-op if unchanged) and refresh the tints.
+   * @param   index  The button index to focus.
+   * @calledby src/scenes/PauseScene.ts → selectPrevious, selectNext, and a button's pointerover (wired in create)
+   * @calls    src/scenes/PauseScene.ts → applySelectionTint when the focus actually changes
+   */
   private setSelection(index: number): void {
     if (this.selectedIndex === index) return;
     this.selectedIndex = index;
     this.applySelectionTint();
   }
 
-  // Selected = full-brightness (white passthrough); the rest dim via setTint.
+  /**
+   * @function    applySelectionTint
+   * @description Re-tints every button to reflect the focus — selected is full-brightness (white passthrough), the rest dim via setTint.
+   * @calledby src/scenes/PauseScene.ts → create's initial paint and setSelection on focus change
+   * @calls    each button's setTint with the selected/unselected tint
+   */
   private applySelectionTint(): void {
     this.buttons.forEach((button, index) => {
       button.setTint(
@@ -215,12 +238,18 @@ export class PauseScene extends Phaser.Scene {
     });
   }
 
-  // Fire the currently focused button's action (Enter / Space).
+  /** Fire the currently focused button's action (Enter / Space). */
   private confirmSelection(): void {
     this.activate(BUTTON_DEFS[this.selectedIndex].action);
   }
 
-  // Dispatches the selected action to resume, new game, options, or quit.
+  /**
+   * @function    activate
+   * @description Dispatches the selected action to resume, new game, options, or quit.
+   * @param   action  One of continue/newGame/options/quit.
+   * @calledby a button's pointerdown and src/scenes/PauseScene.ts → confirmSelection (Enter/Space)
+   * @calls    src/scenes/PauseScene.ts → resumeGame, restartRun, or openManual, per the chosen action
+   */
   private activate(action: PauseAction): void {
     switch (action) {
       case 'continue':
@@ -240,14 +269,25 @@ export class PauseScene extends Phaser.Scene {
     }
   }
 
-  // Resumes the game scene then stops this overlay (resume-before-stop mirrors the launch-before-pause).
+  /**
+   * @function    resumeGame
+   * @description Resumes animations and the game scene, then stops this overlay (resume-before-stop mirrors launch-before-pause).
+   * @calledby src/scenes/PauseScene.ts → activate (Continue) and the ESC key (wired in create)
+   * @calls    the animation system and Phaser scene resume/stop
+   */
   private resumeGame(): void {
     this.anims.resumeAll();
     this.scene.resume(SCENE_KEYS.GAME);
     this.scene.stop();
   }
 
-  // Rebuilds the world in place, then resumes the game and stops this overlay.
+  /**
+   * @function    restartRun
+   * @description Rebuilds the world in place, then resumes the game and stops this overlay.
+   * @param   showLanding  true routes the rebuild back to the title screen; false drops into gameplay.
+   * @calledby src/scenes/PauseScene.ts → activate for the New Game (false) and Quit (true) actions
+   * @calls    src/scenes/GameScene.ts → restartRun across the pause boundary, then Phaser resume/stop
+   */
   private restartRun(showLanding: boolean): void {
     const gameScene = this.scene.get(SCENE_KEYS.GAME) as GameScene;
     gameScene.restartRun(showLanding);
@@ -255,7 +295,12 @@ export class PauseScene extends Phaser.Scene {
     this.scene.stop();
   }
 
-  // Opens the How-to-Play manual; disables this scene's keyboard while the panel is up.
+  /**
+   * @function    openManual
+   * @description Lazily builds and opens the How-to-Play manual, disabling menu keyboard navigation while the panel is up; a no-op if the manual is already open.
+   * @calledby src/scenes/PauseScene.ts → activate for the Options action
+   * @calls    the manual DOM overlay; on close it re-enables the keyboard on the next tick so the closing ESC/click doesn't also drive menu navigation
+   */
   private openManual(): void {
     if (this.manualOverlay?.isOpen()) return;
     if (!this.manualOverlay) {

@@ -38,28 +38,9 @@ import { ManualOverlay } from '../ui/ManualOverlay';
 import type { GameScene } from './GameScene';
 
 /**
- * LandingScene — the first-boot title overlay, launched on top of GameScene.
- *
- * Renders the START word sprite at the right of the viewport with OPTIONS and
- * CREDITS banners stacked beneath, framed by a vignette + corner brackets; the
- * GameScene side of the same flow holds its camera so the player sits on the
- * left behind it. Committing START (click or Enter/Space) fades both scene
- * cameras to black, then at full black hands off to gameplay and stops this
- * scene — GameScene owns the subsequent black-hold and world/HUD fade-in.
- * OPTIONS opens the shared How-to-Play manual (the same ManualOverlay the pause
- * menu uses) and CREDITS opens a short title/author panel. The scene instance
- * is reused across runs (Quit relaunches it), so create() re-arms the
- * activation guard each time. An optional `fadeIn` launch flag (set on a no-save
- * death relaunch) reveals the title from black in lockstep with the world.
- *
- * Inputs:  optional `{ fadeIn }` launch data; pointer/keyboard input; the live
- *          GameScene (looked up by key) to fade and hand off to.
- * Outputs: the title/menu display objects, hover/press sounds, the two DOM
- *          overlays, and the camera fade chain that starts gameplay.
- * @calledby the boot flow (launched over GameScene at startup) and the death/
- *           Quit paths that return the player to the home screen.
- * @calls    Phaser's scene/camera/tween/input systems, the shared one-shot
- *           audio player, and the manual / credits DOM overlays.
+ * @file scenes/LandingScene.ts
+ * @description First-boot title overlay launched atop GameScene — START word sprite plus OPTIONS/CREDITS banners inside a vignette and corner-bracket frame, the player visible on the left behind it. Committing START fades both cameras to black then hands off to gameplay and stops this scene (GameScene owns the black-hold and world/HUD fade-in); OPTIONS opens the shared How-to-Play manual, CREDITS the author panel. The instance is reused across runs (Quit relaunches it) so create re-arms the activation guard, and an optional fadeIn launch flag reveals the title from black in lockstep with the world on a no-save death relaunch.
+ * @module scenes
  */
 export class LandingScene extends Phaser.Scene {
   private startImage!: Phaser.GameObjects.Image;
@@ -79,17 +60,22 @@ export class LandingScene extends Phaser.Scene {
   // When true (no-save death relaunch), create() fades this camera up from black.
   private fadeInOnCreate = false;
 
-  // Registers the scene under its stable key (SCENE_KEYS.LANDING).
+  /** Registers the scene under its stable key (SCENE_KEYS.LANDING). */
   constructor() {
     super({ key: SCENE_KEYS.LANDING });
   }
 
-  // Records the optional fadeIn launch flag (true only on a no-save-death relaunch).
+  /** Records the optional fadeIn launch flag (true only on a no-save-death relaunch). */
   init(data: { fadeIn?: boolean } = {}): void {
     this.fadeInOnCreate = data.fadeIn ?? false;
   }
 
-  // Builds the full title screen — vignette, title, START + secondary banners, frame, inputs.
+  /**
+   * @function    create
+   * @description Builds the full title screen — vignette, title, START and secondary banners, frame, inputs — and re-arms the activation guard so a relaunched START isn't dead; optionally fades the camera up from black.
+   * @calledby Phaser scene lifecycle at create, each time the scene is launched (including Quit relaunch)
+   * @calls    the layout pass, the menu-button builder, and Phaser input/scale/camera systems
+   */
   create(): void {
     // Phaser reuses the scene instance, so without this re-arm a Quit→relaunch
     // would inherit onStart's `false` and START would silently no-op.
@@ -154,12 +140,17 @@ export class LandingScene extends Phaser.Scene {
     }
   }
 
-  // Re-runs layout when the window/canvas resizes.
+  /** Re-runs layout when the window/canvas resizes. */
   private onResize(): void {
     this.layout();
   }
 
-  // Cleans up the resize listener and destroys any open DOM overlays on scene stop.
+  /**
+   * @function    onShutdown
+   * @description Cleans up the resize listener and destroys any open DOM overlays on scene stop.
+   * @calledby Phaser SHUTDOWN event (registered once in create)
+   * @calls    the scale manager and each open overlay's destroy, nulling the handles
+   */
   private onShutdown(): void {
     this.scale.off(Phaser.Scale.Events.RESIZE, this.onResize, this);
     this.manualOverlay?.destroy();
@@ -168,7 +159,12 @@ export class LandingScene extends Phaser.Scene {
     this.creditsOverlay = null;
   }
 
-  // Re-rasterizes the title when the display font loads, in case it baked in the fallback face.
+  /**
+   * @function    refreshTitleFontWhenReady
+   * @description Re-rasterizes the title when the display font loads, in case it baked in the fallback face; a no-op if the title is gone or the font never loads.
+   * @calledby src/scenes/LandingScene.ts → create, right after the title text is built
+   * @calls    the browser Font Loading API; on success updates the text texture and re-lays-out the screen
+   */
   private refreshTitleFontWhenReady(): void {
     if (!document.fonts) return;
     document.fonts
@@ -184,7 +180,12 @@ export class LandingScene extends Phaser.Scene {
       });
   }
 
-  // Positions all display objects against the live viewport and redraws the vignette and frame.
+  /**
+   * @function    layout
+   * @description Positions all display objects against the live viewport then redraws the vignette and frame; uses source-height×scale so hover wobble can't perturb the spacing.
+   * @calledby src/scenes/LandingScene.ts → create, onResize, and refreshTitleFontWhenReady — anything that changes the viewport
+   * @calls    src/scenes/LandingScene.ts → drawVignette and drawScreenFrame
+   */
   private layout(): void {
     const { width, height } = this.cameras.main;
     const x = width * LANDING_BUTTON_VIEWPORT_FRACTION_X;
@@ -206,7 +207,15 @@ export class LandingScene extends Phaser.Scene {
     this.drawScreenFrame();
   }
 
-  // Creates a secondary menu banner (OPTIONS/CREDITS) with hover/press feedback.
+  /**
+   * @function    createMenuButton
+   * @description Creates a secondary menu banner (OPTIONS/CREDITS) with hover/press feedback.
+   * @param   textureKey  The banner image key.
+   * @param   onActivate  The click callback.
+   * @returns a scaled, interactive Image wired to hover-in/out tweens and a press pulse.
+   * @calledby src/scenes/LandingScene.ts → create, when building the OPTIONS and CREDITS banners
+   * @calls    src/scenes/LandingScene.ts → hoverIn, hoverOut, pressPulse, and the supplied activation callback
+   */
   private createMenuButton(
     textureKey: string,
     onActivate: () => void,
@@ -226,7 +235,14 @@ export class LandingScene extends Phaser.Scene {
     return image;
   }
 
-  // Plays the hover blip, tints, and eases the sprite up to hover scale.
+  /**
+   * @function    hoverIn
+   * @description Plays the hover blip, tints, and eases the sprite up to hover scale.
+   * @param   image      The hovered banner.
+   * @param   baseScale  Its un-hovered scale.
+   * @calledby a banner's pointerover handler (wired in createMenuButton / create)
+   * @calls    src/audio → playOneShot and the tween system (killing prior tweens first)
+   */
   private hoverIn(image: Phaser.GameObjects.Image, baseScale: number): void {
     playOneShot(this, UI_BUTTON_HOVER_SOUND_ID);
     image.setTint(LANDING_BUTTON_HOVER_TINT);
@@ -240,7 +256,14 @@ export class LandingScene extends Phaser.Scene {
     });
   }
 
-  // Clears the tint and eases the sprite back to its base scale.
+  /**
+   * @function    hoverOut
+   * @description Clears the tint and eases the sprite back to its base scale.
+   * @param   image      The un-hovered banner.
+   * @param   baseScale  Its resting scale.
+   * @calledby a banner's pointerout handler (wired in createMenuButton / create)
+   * @calls    the tween system, killing any in-flight hover tween first
+   */
   private hoverOut(image: Phaser.GameObjects.Image, baseScale: number): void {
     image.clearTint();
     this.tweens.killTweensOf(image);
@@ -253,7 +276,14 @@ export class LandingScene extends Phaser.Scene {
     });
   }
 
-  // Brief scale-dip-and-back yoyo so a click reads as physical.
+  /**
+   * @function    pressPulse
+   * @description Brief scale-dip-and-back yoyo so a click reads as physical.
+   * @param   image      The pressed banner.
+   * @param   baseScale  Its resting scale.
+   * @calledby a banner's pointerdown (via createMenuButton) and src/scenes/LandingScene.ts → onStart for the keyboard confirm
+   * @calls    the tween system, killing any in-flight tween first
+   */
   private pressPulse(image: Phaser.GameObjects.Image, baseScale: number): void {
     this.tweens.killTweensOf(image);
     this.tweens.add({
@@ -266,7 +296,12 @@ export class LandingScene extends Phaser.Scene {
     });
   }
 
-  // Draws four gradient black strips along the viewport edges to form the vignette.
+  /**
+   * @function    drawVignette
+   * @description Draws four gradient black strips along the viewport edges to form the vignette — each edge fades from opaque at the border to transparent inward.
+   * @calledby src/scenes/LandingScene.ts → layout, whenever the screen is (re)laid-out
+   * @calls    the vignette Graphics object's clear and gradient-fill draw calls
+   */
   private drawVignette(): void {
     const { width, height } = this.cameras.main;
     const thickness = LANDING_VIGNETTE_THICKNESS_PX;
@@ -292,7 +327,12 @@ export class LandingScene extends Phaser.Scene {
     this.vignette.fillRect(width - thickness, 0, thickness, height);
   }
 
-  // Draws an L-shaped bracket at each viewport corner (no connecting runs between them).
+  /**
+   * @function    drawScreenFrame
+   * @description Draws an L-shaped bracket at each viewport corner (no connecting runs between them), inset by the configured margin.
+   * @calledby src/scenes/LandingScene.ts → layout, whenever the screen is (re)laid-out
+   * @calls    the screen-frame Graphics object's clear and line-draw calls
+   */
   private drawScreenFrame(): void {
     const { width, height } = this.cameras.main;
     const margin = LANDING_SCREEN_FRAME_MARGIN_PX;
@@ -326,7 +366,12 @@ export class LandingScene extends Phaser.Scene {
     this.screenFrame.lineBetween(right, bottom - len, right, bottom);
   }
 
-  // Commits START: locks input, fades both cameras to black, then hands off to gameplay.
+  /**
+   * @function    onStart
+   * @description Commits START — locks input, fades both cameras to black, then at full black hands control to gameplay and stops this scene so the title can't re-reveal; the accepting flag guards a double-click or mashed Enter from racing two fades.
+   * @calledby committing the title — a START pointerdown or an Enter/Space keypress (wired in create)
+   * @calls    src/audio → playOneShot, src/scenes/LandingScene.ts → pressPulse, both cameras' fade-out, and src/scenes/GameScene.ts → beginGameplay
+   */
   private onStart(): void {
     if (!this.accepting) return;
     this.accepting = false;
@@ -357,7 +402,12 @@ export class LandingScene extends Phaser.Scene {
     );
   }
 
-  // Opens the How-to-Play manual; disables this scene's keyboard while the panel is up.
+  /**
+   * @function    openManual
+   * @description Opens the How-to-Play manual and disables this scene's keyboard while the panel is up; guarded against opening while committing START or with either overlay already up.
+   * @calledby activating the OPTIONS banner (its onActivate, wired in create)
+   * @calls    the manual DOM overlay; on close it re-enables the keyboard on the next tick
+   */
   private openManual(): void {
     if (!this.accepting) return;
     if (this.manualOverlay?.isOpen() || this.creditsOverlay?.isOpen()) return;
@@ -368,7 +418,12 @@ export class LandingScene extends Phaser.Scene {
     this.manualOverlay.open({ onClose: () => this.reenableKeyboardNextTick() });
   }
 
-  // Opens the credits panel; same guards and keyboard handling as openManual.
+  /**
+   * @function    openCredits
+   * @description Opens the credits panel and disables this scene's keyboard while it's up; same guards as the manual (no-op while committing START or with either overlay already open).
+   * @calledby activating the CREDITS banner (its onActivate, wired in create)
+   * @calls    the credits DOM overlay; on close it re-enables the keyboard on the next tick
+   */
   private openCredits(): void {
     if (!this.accepting) return;
     if (this.manualOverlay?.isOpen() || this.creditsOverlay?.isOpen()) return;
@@ -379,18 +434,22 @@ export class LandingScene extends Phaser.Scene {
     this.creditsOverlay.open({ onClose: () => this.reenableKeyboardNextTick() });
   }
 
-  // Returns the canvas parent for overlay attachment, falling back to body.
+  /** Canvas parent for overlay attachment, falling back to body. */
   private overlayParent(): HTMLElement {
     return this.game.canvas.parentElement ?? document.body;
   }
 
-  // Enables/disables this scene's keyboard input (no-op if there is no keyboard).
+  /** Enables/disables this scene's keyboard input (no-op if there is no keyboard). */
   private setKeyboardEnabled(enabled: boolean): void {
     if (this.input.keyboard) this.input.keyboard.enabled = enabled;
   }
 
-  // Re-enable on the next tick so the same ESC/click that closed the panel
-  // isn't also handled by this scene's Start binding this frame.
+  /**
+   * @function    reenableKeyboardNextTick
+   * @description Re-enables this scene's keyboard one tick later so the same ESC/click that closed a panel isn't also handled by this scene's START binding this frame.
+   * @calledby a manual/credits overlay's onClose callback (passed in openManual / openCredits)
+   * @calls    a zero-delay timer that flips the keyboard back on
+   */
   private reenableKeyboardNextTick(): void {
     this.time.delayedCall(0, () => this.setKeyboardEnabled(true));
   }

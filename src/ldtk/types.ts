@@ -1,19 +1,7 @@
 /**
- * ldtk/types — the subset of LDtk's level-JSON schema the game reads.
- *
- * Plain structural interfaces mirroring LDtk's exported project/level/layer/
- * entity/tileset shapes — only the fields the parser and renderer consume, not
- * the full editor schema. LDtk's own field names are kept verbatim (the `__`-
- * prefixed ones are LDtk-computed; `px`/`src`/`f`/`t` are its terse tile keys)
- * so this maps 1:1 onto the raw JSON with no renaming. Three shapes are NOT
- * native LDtk and are stamped on by parseLdtk as a convenience for downstream
- * code: LoiterPathPoint, plus the loiterPath and __levelId enrichments on
- * LdtkEntityInstance (each marked below).
- *
- * Inputs:  none — type declarations only.
- * Outputs: the interfaces below, consumed by the parser and the level renderer.
- * @calledby the LDtk parsing layer and every consumer of the parsed level model.
- * @calls    nothing — a leaf type module.
+ * @file ldtk/types.ts
+ * @description Structural interfaces for the subset of LDtk's level-JSON schema the game reads (only the project/level/layer/entity/tileset fields the parser and renderer consume) — LDtk's own names are kept verbatim (__-prefixed = LDtk-computed; px/src/f/t are its terse tile keys) so this maps 1:1 onto the raw JSON; three shapes are NOT native LDtk but stamped on by parseLdtk for downstream code — LoiterPathPoint plus the loiterPath and __levelId enrichments on LdtkEntityInstance (each marked below).
+ * @module ldtk
  */
 
 export type LdtkLayerType = 'Entities' | 'IntGrid' | 'AutoLayer' | 'Tiles';

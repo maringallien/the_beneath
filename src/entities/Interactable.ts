@@ -1,19 +1,7 @@
 /**
- * Interactable — the generic "hold E to interact" contract.
- *
- * Any entity that opts in by implementing this interface gets picked up by the
- * interaction manager with no per-entity wiring in the scene. A structural
- * interface (not a base class) lets an entity keep its own inheritance (e.g.
- * Chest extending AnimatedEntity) while still being addressable as an
- * interactable. Add new interactables by implementing the interface and
- * registering them with the interaction manager.
- *
- * Inputs:  implementors expose their anchor, range, gate, and a side-effecting
- *          handler; the guard takes an arbitrary unknown value.
- * Outputs: the contract the interaction manager consumes; a type predicate.
- * @calledby the interaction manager's per-frame closest-target scan and hold
- *           dispatch; implementors are the world's interactable entities.
- * @calls    nothing — a contract plus a structural type guard.
+ * @file entities/Interactable.ts
+ * @description Generic "hold E to interact" contract. Any entity that implements this interface is picked up by the interaction manager with no per-entity wiring in the scene. A structural interface (not a base class) lets an entity keep its own inheritance (e.g. Chest extending AnimatedEntity) while still being addressable as an interactable. Add new interactables by implementing the interface and registering them with the interaction manager.
+ * @module entities
  */
 
 export interface Interactable {
@@ -30,7 +18,14 @@ export interface Interactable {
   onInteract(): void;
 }
 
-// Duck-type check that an unknown value implements all four Interactable methods.
+/**
+ * @function    isInteractable
+ * @description Duck-type guard checking that an unknown value implements all four Interactable methods.
+ * @param   obj  An arbitrary unknown value.
+ * @returns a type predicate narrowing obj to Interactable when it matches.
+ * @calledby —
+ * @calls    — (pure structural checks)
+ */
 export function isInteractable(obj: unknown): obj is Interactable {
   if (obj == null || typeof obj !== 'object') return false;
   const candidate = obj as Record<string, unknown>;

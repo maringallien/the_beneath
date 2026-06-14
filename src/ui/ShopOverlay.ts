@@ -12,27 +12,9 @@ import { DomOverlay } from './DomOverlay';
 import './shop.css';
 
 /**
- * ShopOverlay — the HTML/CSS merchant shop panel over the Phaser canvas.
- *
- * Renders a styled DOM panel above the game inside the same #game parent.
- * GameScene opens it (pausing itself) when a shop is requested and resumes the
- * game once the overlay calls onClose. The item list comes from the merchant
- * kind + level; rows can be navigated by keyboard or mouse, and every purchase
- * routes through Player.tryPurchase so the validation (enough coins? at cap?)
- * lives in one place. refresh() reconciles the whole list (balance, selection,
- * disabled/sold-out pills) to live Player state after any change.
- *
- * Why DOM over a Phaser scene: HTML+CSS gives gradients, transitions, hover, and
- * themed layouts for ~30 lines of CSS that would be much heavier in Phaser
- * Graphics + Image + Text.
- *
- * Inputs:  the scene + parent host, an open() request (kind, levelId, player),
- *          and keyboard/mouse while open; reads live Player resource counts.
- * Outputs: the shop DOM tree, purchase attempts against the Player, and the
- *          caller's onClose when it finishes closing.
- * @calledby the gameplay scene, when the player triggers a merchant shop.
- * @calls    the shop catalog lookups, the Player's purchase + resource queries,
- *           and the frame-canvas icon renderer.
+ * @file ui/ShopOverlay.ts
+ * @description HTML/CSS merchant shop panel over the Phaser canvas, opened by GameScene (which pauses itself); the item list comes from the merchant kind + level, rows navigate by keyboard or mouse, every purchase routes through Player.tryPurchase, and refresh reconciles the whole list to live Player state after any change.
+ * @module ui
  */
 // Pixel-art textures that need nearest-neighbor scaling in the DOM (smooth procedural textures are not listed).
 const PIXEL_ART_TEXTURE_KEYS: ReadonlySet<string> = new Set(['hud_ammo']);
@@ -61,7 +43,13 @@ export class ShopOverlay extends DomOverlay {
     this.scene = scene;
   }
 
-  // Opens the shop for this merchant kind + level; no-op if already open.
+  /**
+   * @function    open
+   * @description Open the shop for this merchant kind + level — load the catalog, arm the close callback, build + mount the DOM, and refresh to live state. No-op if already open.
+   * @param   options  Merchant kind, LDtk levelId or null, the Player, and the onClose callback.
+   * @calledby src/scenes/GameScene.ts → openShop, when the player triggers a merchant shop
+   * @calls    src/entities/shop/shopTypes.ts → shopItemsFor, src/ui/DomOverlay.ts → openShell/attachKeyboard, and src/ui/ShopOverlay.ts → buildDom/refresh
+   */
   open(options: OpenOptions): void {
     if (this.isOpen()) return;
     this.items = shopItemsFor(options.kind, options.levelId);
@@ -73,7 +61,12 @@ export class ShopOverlay extends DomOverlay {
     this.refresh();
   }
 
-  // Clears element refs + cached state back to closed; the base shell calls this on close.
+  /**
+   * @function    onTeardown
+   * @description Reset the balance ref, item elements, catalog, player, and selection back to closed.
+   * @calledby src/ui/DomOverlay.ts → teardown, while closing the shop
+   * @calls    —
+   */
   protected onTeardown(): void {
     this.balanceTextEl = null;
     this.itemEls = [];
@@ -82,7 +75,13 @@ export class ShopOverlay extends DomOverlay {
     this.selectedIndex = 0;
   }
 
-  // Builds and mounts the backdrop + window (header, items list, footer) for this kind.
+  /**
+   * @function    buildDom
+   * @description Assemble and mount the backdrop + window (header, items list, footer) for this kind.
+   * @param   kind  Merchant kind, which themes the window.
+   * @calledby src/ui/ShopOverlay.ts → open
+   * @calls    src/ui/DomOverlay.ts → createBackdrop/mount and src/ui/ShopOverlay.ts → buildHeader/buildItemsList/buildFooter
+   */
   private buildDom(kind: ShopKind): void {
     const { overlay, win } = this.createBackdrop(
       `shop-window shop-window--${kind}`,
@@ -96,7 +95,14 @@ export class ShopOverlay extends DomOverlay {
     this.mount(overlay);
   }
 
-  // Header: the merchant title plus the live coin balance (refresh() updates the count).
+  /**
+   * @function    buildHeader
+   * @description Build the header — the merchant title plus the live coin balance (refresh updates the count) — recording the balance-text ref.
+   * @param   kind  Merchant kind, selects the title.
+   * @returns a detached header div.
+   * @calledby src/ui/ShopOverlay.ts → buildDom
+   * @calls    src/entities/shop/shopTypes.ts → shopTitleFor, src/ui/ShopOverlay.ts → buildCoinIcon, and DOM creation
+   */
   private buildHeader(kind: ShopKind): HTMLDivElement {
     const header = document.createElement('div');
     header.className = 'shop-header';
@@ -118,7 +124,13 @@ export class ShopOverlay extends DomOverlay {
     return header;
   }
 
-  // Builds one row per catalog item; status pill created hidden up front so revealing it doesn't reflow.
+  /**
+   * @function    buildItemsList
+   * @description Build one row per catalog item (status pill created hidden up front so revealing it doesn't reflow), recording the per-row element refs.
+   * @returns a detached items-list div.
+   * @calledby src/ui/ShopOverlay.ts → buildDom
+   * @calls    src/ui/ShopOverlay.ts → buildItemIcon; row hover calls setSelection, a click calls setSelection then attemptPurchase
+   */
   private buildItemsList(): HTMLDivElement {
     const list = document.createElement('div');
     list.className = 'shop-items';
@@ -178,7 +190,13 @@ export class ShopOverlay extends DomOverlay {
     return list;
   }
 
-  // Footer row of keyboard hints (Select / Buy / Close), each as kbd glyphs + label.
+  /**
+   * @function    buildFooter
+   * @description Build the footer row of keyboard hints (Select / Buy / Close), each as kbd glyphs + label.
+   * @returns a detached footer div of hint chips.
+   * @calledby src/ui/ShopOverlay.ts → buildDom
+   * @calls    DOM element-create/append only
+   */
   private buildFooter(): HTMLDivElement {
     const footer = document.createElement('div');
     footer.className = 'shop-footer';
@@ -207,7 +225,14 @@ export class ShopOverlay extends DomOverlay {
     return footer;
   }
 
-  // Renders an item's icon frame to a canvas; non-pixel-art keys get smooth sampling.
+  /**
+   * @function    buildItemIcon
+   * @description Render an item's icon frame to a canvas, adding the smooth-sampling class for non-pixel-art textures.
+   * @param   item  Catalog item whose icon texture/frame to draw.
+   * @returns a canvas with the item icon.
+   * @calledby src/ui/ShopOverlay.ts → buildItemsList, per row
+   * @calls    src/ui/textureCanvas.ts → frameCanvas
+   */
   private buildItemIcon(item: ShopItem): HTMLCanvasElement {
     const canvas = frameCanvas(this.scene, item.iconTextureKey, item.iconFrame);
     canvas.className = 'shop-item-icon';
@@ -217,14 +242,20 @@ export class ShopOverlay extends DomOverlay {
     return canvas;
   }
 
-  // A small coin glyph canvas, reused in the header balance and each price column.
+  /** A small coin glyph canvas, reused in the header balance and each price column. */
   private buildCoinIcon(): HTMLCanvasElement {
     const canvas = frameCanvas(this.scene, COIN_TEXTURE_KEY);
     canvas.className = 'shop-coin';
     return canvas;
   }
 
-  // ESC closes, ↑/W and ↓/S move selection, Enter/Space buys; no stopPropagation needed (GameScene is paused).
+  /**
+   * @function    onKeydown
+   * @description Dispatch ESC (close), up/W and down/S (move selection), and Enter/Space (buy), swallowing the default for handled keys; no stopPropagation needed since GameScene is paused.
+   * @param   e  Keyboard event from the window-level capture listener.
+   * @calledby src/ui/DomOverlay.ts → the capture-phase keydown listener, on any keypress while open
+   * @calls    src/ui/DomOverlay.ts → close and src/ui/ShopOverlay.ts → selectPrevious/selectNext/attemptPurchase
+   */
   protected onKeydown(e: KeyboardEvent): void {
     switch (e.key) {
       case 'Escape':
@@ -253,7 +284,13 @@ export class ShopOverlay extends DomOverlay {
     }
   }
 
-  // Selects a row (clamped in range), skipping a no-op; a real change triggers refresh().
+  /**
+   * @function    setSelection
+   * @description Select a row (clamped to the valid range); a real change triggers refresh. No-op when empty or unchanged.
+   * @param   index  Desired selection.
+   * @calledby src/ui/ShopOverlay.ts → row hover/click handlers, selectPrevious, and selectNext
+   * @calls    src/ui/ShopOverlay.ts → refresh
+   */
   private setSelection(index: number): void {
     if (this.itemEls.length === 0) return;
     const clamped = Math.max(0, Math.min(this.itemEls.length - 1, index));
@@ -262,7 +299,12 @@ export class ShopOverlay extends DomOverlay {
     this.refresh();
   }
 
-  // Moves the selection up one row, wrapping from the top to the bottom.
+  /**
+   * @function    selectPrevious
+   * @description Move the selection up one row, wrapping from the top to the bottom; no-op if empty.
+   * @calledby src/ui/ShopOverlay.ts → onKeydown, on the up-arrow / W keypress
+   * @calls    src/ui/ShopOverlay.ts → setSelection
+   */
   private selectPrevious(): void {
     if (this.itemEls.length === 0) return;
     const next =
@@ -270,7 +312,12 @@ export class ShopOverlay extends DomOverlay {
     this.setSelection(next);
   }
 
-  // Moves the selection down one row, wrapping from the bottom to the top.
+  /**
+   * @function    selectNext
+   * @description Move the selection down one row, wrapping from the bottom to the top; no-op if empty.
+   * @calledby src/ui/ShopOverlay.ts → onKeydown, on the down-arrow / S keypress
+   * @calls    src/ui/ShopOverlay.ts → setSelection
+   */
   private selectNext(): void {
     if (this.itemEls.length === 0) return;
     const next =
@@ -278,7 +325,12 @@ export class ShopOverlay extends DomOverlay {
     this.setSelection(next);
   }
 
-  // Tries to buy through the Player, refreshes the panel, and flashes the row green or red.
+  /**
+   * @function    attemptPurchase
+   * @description Route the currently selected item's buy through the Player, refresh, and restart a success/fail flash animation on the row.
+   * @calledby src/ui/ShopOverlay.ts → onKeydown (Enter/Space) and a row click
+   * @calls    src/entities/Player.ts → tryPurchase and src/ui/ShopOverlay.ts → refresh
+   */
   private attemptPurchase(): void {
     if (!this.player) return;
     const item = this.items[this.selectedIndex];
@@ -293,7 +345,12 @@ export class ShopOverlay extends DomOverlay {
     row.classList.add(ok ? successClass : failClass);
   }
 
-  // Reconciles balance, selection, disabled/can't-afford classes, and status pills to live Player state.
+  /**
+   * @function    refresh
+   * @description Reconcile the balance and every row's selected/disabled/can't-afford classes and status pills to live Player state; no-op if not open.
+   * @calledby src/ui/ShopOverlay.ts → open, setSelection, and attemptPurchase
+   * @calls    src/entities/Player.ts → getCoins/getResourceValue/getResourceMax/ownsUpgrade and DOM class/text writes
+   */
   private refresh(): void {
     if (!this.player || !this.balanceTextEl) return;
     this.balanceTextEl.textContent = String(this.player.getCoins());

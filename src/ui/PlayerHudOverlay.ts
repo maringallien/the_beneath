@@ -4,27 +4,9 @@ import { createFillableHeart, createHudIcon, type HudIconName } from './hudIcons
 import './playerHud.css';
 
 /**
- * PlayerHudOverlay — the in-game player HUD (health, resources, weapon) over the
- * Phaser canvas.
- *
- * A DOM layer in the same #game parent as the shop/options overlays, but
- * deliberately NOT matched to those pixel-art panels: a modern, minimal,
- * monochrome (black/white/grey) look — hairline translucent panels, SVG glyph
- * icons, hearts/pips for HP/STA, and white-vs-grey state instead of colour
- * accents. GameScene builds a PlayerHudValues snapshot from the live Player each
- * frame and hands it to update(); the overlay holds no gameplay state beyond
- * small per-element dedup caches, so a steady-state frame touches no DOM. The
- * root is pointer-events:none so gameplay input passes through, and it sits below
- * the modal shop/options in the z-order (GameScene hides it on pause so the dim
- * covers it).
- *
- * Why DOM over canvas: layout, alignment, crisp text, and resolution-independent
- * SVG come free from CSS, and the dedup keeps DOM writes off the hot path.
- *
- * Inputs:  the parent DOM host and a per-frame PlayerHudValues snapshot.
- * Outputs: the HUD DOM tree, updated in place only when a value changes.
- * @calledby the gameplay scene, building + ticking the HUD each frame.
- * @calls    the shared HUD icon/heart factories and CSS classes.
+ * @file ui/PlayerHudOverlay.ts
+ * @description In-game player HUD (health, resources, weapon) as a DOM layer over the Phaser canvas — deliberately modern monochrome, not the pixel-art panels; fed a PlayerHudValues snapshot each frame and dedup'd per element so a steady-state frame touches no DOM; pointer-events none so input passes through.
+ * @module ui
  */
 // Per-frame snapshot of player resources for the HUD; max* fields are part of the GameScene contract even if not all are used.
 export interface PlayerHudValues {
@@ -106,13 +88,19 @@ export class PlayerHudOverlay {
     this.buildDom();
   }
 
-  // Shows or hides the HUD; GameScene hides it while paused so the dim covers it.
+  /** Show or hide the HUD; hidden while the scene is paused so the dim covers it. */
   setVisible(visible: boolean): void {
     if (!this.rootEl) return;
     this.rootEl.style.display = visible ? '' : 'none';
   }
 
-  // Fades the HUD in from transparent; used once on the landing→gameplay transition so HUD and world appear together.
+  /**
+   * @function    fadeIn
+   * @description Fade the HUD in from transparent (one-shot opacity transition that clears its inline styles when done) so HUD and world appear together on the landing-to-gameplay transition.
+   * @param   durationMs  Fade duration in milliseconds.
+   * @calledby src/scenes/gameHud.ts → fadeIn, on the landing-into-gameplay transition
+   * @calls    a forced reflow and a CSS opacity transition (transitionend cleanup)
+   */
   fadeIn(durationMs: number): void {
     const el = this.rootEl;
     if (!el) return;
@@ -132,7 +120,12 @@ export class PlayerHudOverlay {
     );
   }
 
-  // Removes the DOM node and clears all refs; called on Quit-to-title and HMR teardown.
+  /**
+   * @function    destroy
+   * @description Remove the DOM node and clear every cached element reference.
+   * @calledby src/scenes/gameHud.ts → destroy / destroyForSceneShutdown (Quit-to-title and hot-reload teardown)
+   * @calls    DOM element removal only
+   */
   destroy(): void {
     if (this.rootEl) {
       this.rootEl.remove();
@@ -150,7 +143,13 @@ export class PlayerHudOverlay {
     this.weaponMagicTag = null;
   }
 
-  // Syncs all HUD elements to the snapshot; each sub-update dedup's so a steady-state frame touches no DOM.
+  /**
+   * @function    update
+   * @description Sync HP, stamina, every count row, and the weapon indicator to the snapshot; each sub-update dedup's so a steady-state frame touches no DOM. No-op if not mounted.
+   * @param   values  Per-frame PlayerHudValues snapshot from GameScene.
+   * @calledby src/scenes/gameHud.ts → updateHud, each gameplay frame
+   * @calls    src/ui/PlayerHudOverlay.ts → updateHp, updateStamina, updateCount, updateWeapon
+   */
   update(values: PlayerHudValues): void {
     if (!this.rootEl) return;
     this.updateHp(values.health, values.maxHealth);
@@ -163,7 +162,14 @@ export class PlayerHudOverlay {
     this.updateWeapon(values.mode, values.magicSelected);
   }
 
-  // Distributes the HP ratio across the heart row; boundary heart fills fractionally.
+  /**
+   * @function    updateHp
+   * @description Distribute the HP ratio across the heart row (boundary heart fills fractionally), setting each heart's clip width; dedup'd, no-op if the ratio is unchanged.
+   * @param   health     Current HP.
+   * @param   maxHealth  Max HP; guards divide-by-zero.
+   * @calledby src/ui/PlayerHudOverlay.ts → update
+   * @calls    src/ui/PlayerHudOverlay.ts → clamp01 and DOM style writes only
+   */
   private updateHp(health: number, maxHealth: number): void {
     const ratio = clamp01(maxHealth > 0 ? health / maxHealth : 0);
     if (ratio === this.lastHpRatio) return;
@@ -175,7 +181,13 @@ export class PlayerHudOverlay {
     }
   }
 
-  // Lights the first `value` STA pips and dims the rest (is-empty); dedup'd on value.
+  /**
+   * @function    updateStamina
+   * @description Light the first `value` STA pips and dim the rest (is-empty); dedup'd on value.
+   * @param   value  Current stamina count.
+   * @calledby src/ui/PlayerHudOverlay.ts → update
+   * @calls    DOM classList toggles only
+   */
   private updateStamina(value: number): void {
     if (this.lastStamina === value) return;
     this.lastStamina = value;
@@ -184,7 +196,14 @@ export class PlayerHudOverlay {
     }
   }
 
-  // Writes a count row's number and dims icon+number when zero; dedup'd, no-op if null.
+  /**
+   * @function    updateCount
+   * @description Write a count row's number and dim icon+number when zero; dedup'd, no-op if the row is null or the value is unchanged.
+   * @param   row      Count row handle, or null.
+   * @param   current  Value to display.
+   * @calledby src/ui/PlayerHudOverlay.ts → update, for each resource counter (ammo, orbs, coins, heal)
+   * @calls    DOM text/classList writes only
+   */
   private updateCount(row: CountRow | null, current: number): void {
     if (!row || row.lastCount === current) return;
     row.lastCount = current;
@@ -194,7 +213,14 @@ export class PlayerHudOverlay {
     row.count.classList.toggle('is-empty', empty);
   }
 
-  // Updates the weapon glyph+label on mode change and lights the magic tag when magicSelected.
+  /**
+   * @function    updateWeapon
+   * @description Swap the weapon glyph/label on mode change and toggle the magic-stance tag when magicSelected; dedup'd on each.
+   * @param   mode           Active wheel weapon.
+   * @param   magicSelected  Whether the magic stance is on.
+   * @calledby src/ui/PlayerHudOverlay.ts → update
+   * @calls    src/ui/hudIcons.ts → createHudIcon and DOM text/style/classList writes
+   */
   private updateWeapon(mode: CharacterModeId, magicSelected: boolean): void {
     if (this.lastWeaponMode !== mode) {
       this.lastWeaponMode = mode;
@@ -214,7 +240,12 @@ export class PlayerHudOverlay {
     }
   }
 
-  // Builds the three HUD clusters (HP/STA, counts, weapon indicator) and mounts the root.
+  /**
+   * @function    buildDom
+   * @description Build the three HUD clusters (HP/STA, counts, weapon indicator), append the root to the parent, and record its ref.
+   * @calledby src/ui/PlayerHudOverlay.ts → constructor
+   * @calls    src/ui/PlayerHudOverlay.ts → buildLeftPanel, buildRightPanel, buildWeaponPanel, and DOM append
+   */
   private buildDom(): void {
     const root = document.createElement('div');
     root.className = 'player-hud';
@@ -225,7 +256,13 @@ export class PlayerHudOverlay {
     this.rootEl = root;
   }
 
-  // Left cluster: a row of HP hearts above a row of STA diamond pips.
+  /**
+   * @function    buildLeftPanel
+   * @description Build the left cluster — a row of HP hearts above a row of STA pips — recording the heart-clip and stamina-pip refs for updates.
+   * @returns a detached left panel.
+   * @calledby src/ui/PlayerHudOverlay.ts → buildDom
+   * @calls    src/ui/hudIcons.ts → createFillableHeart and createHudIcon
+   */
   private buildLeftPanel(): HTMLDivElement {
     const panel = this.makePanel('hud-panel--left');
 
@@ -250,7 +287,13 @@ export class PlayerHudOverlay {
     return panel;
   }
 
-  // Right cluster: G1/G2 ammo + orb/coin/heal counters in an icon|count grid.
+  /**
+   * @function    buildRightPanel
+   * @description Build the right cluster — G1/G2 ammo + orb/coin/heal counters in an icon-and-count grid — recording each count-row handle for updates.
+   * @returns a detached right panel.
+   * @calledby src/ui/PlayerHudOverlay.ts → buildDom
+   * @calls    src/ui/PlayerHudOverlay.ts → addCountRow, once per resource
+   */
   private buildRightPanel(): HTMLDivElement {
     const panel = this.makePanel('hud-panel--right');
     const grid = document.createElement('div');
@@ -266,7 +309,13 @@ export class PlayerHudOverlay {
     return panel;
   }
 
-  // Bottom-left weapon indicator with an inline magic-stance sub-tag.
+  /**
+   * @function    buildWeaponPanel
+   * @description Build the bottom-left weapon indicator with an inline magic-stance sub-tag, recording the icon-wrap, label, and magic-tag refs for updates.
+   * @returns a detached weapon panel.
+   * @calledby src/ui/PlayerHudOverlay.ts → buildDom
+   * @calls    src/ui/hudIcons.ts → createHudIcon and DOM element creation
+   */
   private buildWeaponPanel(): HTMLDivElement {
     const panel = this.makePanel('hud-panel--weapon');
     const row = document.createElement('div');
@@ -294,15 +343,22 @@ export class PlayerHudOverlay {
     return panel;
   }
 
-  // Creates a hud-panel div carrying the given modifier class.
+  /** Create a hud-panel div carrying the given modifier class. */
   private makePanel(modifier: string): HTMLDivElement {
     const panel = document.createElement('div');
     panel.className = `hud-panel ${modifier}`;
     return panel;
   }
 
-  // Appends an [icon, count] pair to the right grid and returns the CountRow handle
-  // for later updates.
+  /**
+   * @function    addCountRow
+   * @description Append an [icon, count] pair to the right grid and return the CountRow handle (lastCount seeded to -1) for later updates.
+   * @param   grid  Right-panel grid to append into.
+   * @param   icon  Which HUD glyph to draw.
+   * @returns the CountRow handle.
+   * @calledby src/ui/PlayerHudOverlay.ts → buildRightPanel, once per resource
+   * @calls    src/ui/hudIcons.ts → createHudIcon and DOM append
+   */
   private addCountRow(grid: HTMLDivElement, icon: HudIconName): CountRow {
     const iconEl = createHudIcon(icon, 'hud-icon');
     grid.appendChild(iconEl);

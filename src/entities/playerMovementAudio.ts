@@ -2,20 +2,9 @@ import type Phaser from 'phaser';
 import { playOneShot, setPlayerStateSoundActive } from '../audio';
 
 /**
- * playerMovementAudio — the player's state-driven movement sound loops.
- *
- * Drives the cloth-movement loop, surface-aware footstep loops, the land thud,
- * and the falling whoosh off one per-frame snapshot of player state. Owns the
- * only two pieces of cross-frame state the sounds need: the airborne apex (so a
- * land's fall distance is measured from the true peak) and a continuous-fall
- * timer (so the whoosh gates on sustained falls, not brief hops). Pure
- * consumer of the snapshot — it reads flags and toggles audio slots, never
- * touching the player or the body geometry; the foot-surface probe is injected.
- *
- * Inputs:  a MovementAudioInput per frame plus an injected foot-surface probe.
- * Outputs: starts/stops the player state-sound slots and one-shot land sounds.
- * @calledby the player's per-frame update, after its visual state is resolved.
- * @calls    the shared player-state-sound activator and the one-shot player.
+ * @file entities/playerMovementAudio.ts
+ * @description State-driven player movement sound loops (cloth-movement, surface-aware footsteps, land thud, falling whoosh) driven off one per-frame snapshot of player state. Owns the only cross-frame state the sounds need — the airborne apex (so a land's fall distance is measured from the true peak) and a continuous-fall timer (so the whoosh gates on sustained falls, not hops). A pure snapshot consumer that toggles audio slots, never touching the player or body geometry; the foot-surface probe is injected.
+ * @module entities
  */
 
 // LDtk IntGrid values; ground = pebble loop, bridge = metal-stairs loop
@@ -61,7 +50,13 @@ export class PlayerMovementAudio {
     this.probeFootSurface = probeFootSurface;
   }
 
-  // run all four movement-sound sub-updaters from this frame's snapshot
+  /**
+   * @function    update
+   * @description Run all four movement-sound sub-updaters from this frame's snapshot.
+   * @param   input  This frame's player-state snapshot.
+   * @calledby src/entities/Player.ts → update, after its visual state is resolved
+   * @calls    src/entities/playerMovementAudio.ts → updateMovementSound, updateFootstepsSound, updateLandingSound, updateFallingSound
+   */
   update(input: MovementAudioInput): void {
     this.updateMovementSound(input);
     this.updateFootstepsSound(input);
@@ -69,7 +64,13 @@ export class PlayerMovementAudio {
     this.updateFallingSound(input);
   }
 
-  // cloth-movement loop active when the body is animating; hurtPlaying keeps it on during take_hit
+  /**
+   * @function    updateMovementSound
+   * @description Cloth-movement loop active when the body is animating (hurtPlaying keeps it on during take_hit); off entirely in fly mode.
+   * @param   input  This frame's snapshot (reads flyMode / dead / bodyMoving / hurtPlaying).
+   * @calledby src/entities/playerMovementAudio.ts → update
+   * @calls    src/audio → setPlayerStateSoundActive
+   */
   private updateMovementSound(input: MovementAudioInput): void {
     if (input.flyMode) {
       setPlayerStateSoundActive(this.scene, 'movement', false);
@@ -79,7 +80,13 @@ export class PlayerMovementAudio {
     setPlayerStateSoundActive(this.scene, 'movement', active);
   }
 
-  // footstep loop for the tile underfoot; ground→pebbles, bridge→metal stairs, mutually exclusive
+  /**
+   * @function    updateFootstepsSound
+   * @description Footstep loop for the tile underfoot — ground to pebbles, bridge to metal stairs, mutually exclusive; activates exactly one (or neither) slot.
+   * @param   input  This frame's snapshot (reads flyMode / running / onGround).
+   * @calledby src/entities/playerMovementAudio.ts → update
+   * @calls    the injected foot-surface probe (only when running + grounded) and src/audio → setPlayerStateSoundActive
+   */
   private updateFootstepsSound(input: MovementAudioInput): void {
     if (input.flyMode) {
       setPlayerStateSoundActive(this.scene, 'footstepsGround', false);
@@ -102,7 +109,13 @@ export class PlayerMovementAudio {
     );
   }
 
-  // fire the land thud when grounded after a fall of at least MIN_LAND_FALL_DISTANCE_PX
+  /**
+   * @function    updateLandingSound
+   * @description Fire the land thud when grounded after a fall of at least MIN_LAND_FALL_DISTANCE_PX, measured from the tracked airborne apex.
+   * @param   input  This frame's snapshot (reads dead / onGround / y).
+   * @calledby src/entities/playerMovementAudio.ts → update
+   * @calls    src/audio → playOneShot when the fall distance from the apex clears the threshold
+   */
   private updateLandingSound(input: MovementAudioInput): void {
     if (input.dead) {
       this.airborneApexY = null;
@@ -121,7 +134,13 @@ export class PlayerMovementAudio {
     }
   }
 
-  // swell the wind whoosh after FALL_WHOOSH_DELAY_MS of continuous descent; fade out quickly on landing
+  /**
+   * @function    updateFallingSound
+   * @description Swell the wind whoosh after FALL_WHOOSH_DELAY_MS of continuous descent (slow fade-in); fade out quickly on landing.
+   * @param   input  This frame's snapshot (reads flyMode / onGround / descending / dead / wallSliding / deltaMs).
+   * @calledby src/entities/playerMovementAudio.ts → update
+   * @calls    src/audio → setPlayerStateSoundActive with the chosen fade duration
+   */
   private updateFallingSound(input: MovementAudioInput): void {
     const falling =
       !input.flyMode &&

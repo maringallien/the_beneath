@@ -1,30 +1,17 @@
 import { PLAYER_JUMP_VELOCITY } from '../constants';
 
 /**
- * navProbe — pure, Phaser-free ballistic reachability probe ("can a body get
- * from here to there with one jump?").
- *
- * The shared jump oracle the NavGraph builder uses to generate jump edges. This
- * is a faithful MIRROR of Enemy.ts's chase-leap solver (simulateLeapArc /
- * findLeapLanding / columnSolid / rowSolid), kept algorithm-identical ON PURPOSE
- * so the graph plans jumps with exactly the physics the live enemy executes —
- * every jump edge the pathfinder emits is one the body can actually land, and
- * the executor never stalls on a waypoint it can't reach. INVARIANT: if you
- * change the arc math in one place, change it in BOTH. (Enemy keeps its own copy
- * rather than importing this because its constants are entangled with other
- * locomotion helpers; this module stays Phaser-free and unit-testable in
- * isolation, reusable from the graph builder with a canonical body.)
- *
- * Inputs:  per-call launch params plus an ArcContext (a solidAt grid predicate,
- *          optional level bounds, gravity, and body dimensions).
- * Outputs: landing points / landing lists — never mutation, no scene access.
- * @calledby the navigation-graph build, generating the jump edges out of a node.
- * @calls    only the caller-supplied tile-solidity predicate; no engine calls.
+ * @file level/navProbe.ts
+ * @description Pure, Phaser-free ballistic reachability probe answering "can a body get from here to there with one jump?" — the shared jump oracle the NavGraph builder uses for jump edges, and a faithful MIRROR of Enemy.ts's chase-leap solver (arc simulation, landing search, column/row solidity) kept algorithm-identical ON PURPOSE so the graph plans jumps with exactly the physics the live enemy executes; INVARIANT: change the arc math in BOTH places; stays Phaser-free and unit-testable in isolation (Enemy keeps its own copy because its constants are entangled with other locomotion helpers).
+ * @module level
  */
 
 // World grid size (px). LDtk authors this game on a 16 px tile.
 export const TILE_PX = 16;
 
+// ── Leap probe tuning (mirror of Enemy.ts) ─────────────────────────────────
+// Arc integration + velocity-ladder + landing knobs, kept value-identical to the live enemy's
+// chase-leap solver so a planned jump edge is always one the body can actually execute.
 // Probe step matches 60 Hz physics; budget exceeds the player's airtime so long arcs and shaft climbs are found.
 const LEAP_PROBE_STEP_S = 1 / 60;
 const LEAP_PROBE_MAX_TIME_S = 1.3;
@@ -65,7 +52,17 @@ export interface LeapLanding {
   readonly vy: number;
 }
 
-// True if any solid tile lies on the vertical segment at xEdge — the body's leading side hitting a wall.
+/**
+ * @function    columnSolid
+ * @description True if any solid tile lies on the vertical segment at xEdge — the body's leading side hitting a wall.
+ * @param   solidAt  Tile-solidity predicate.
+ * @param   xEdge    World-px column to test.
+ * @param   yTop     Top of the world-px vertical span.
+ * @param   yBottom  Bottom of the world-px vertical span.
+ * @returns true if any sample (every LEAP_PROBE_SAMPLE_PX, plus the exact bottom) is solid.
+ * @calledby src/level/navProbe.ts → simulateLeapArc, deciding whether horizontal advance is blocked by a wall
+ * @calls    the supplied solidity predicate at half-tile sample steps
+ */
 function columnSolid(
   solidAt: SolidAt,
   xEdge: number,
@@ -78,7 +75,17 @@ function columnSolid(
   return solidAt(xEdge, yBottom);
 }
 
-// True if any solid tile lies on the horizontal segment at yEdge — used for floor landings and ceiling bonks.
+/**
+ * @function    rowSolid
+ * @description True if any solid tile lies on the horizontal segment at yEdge — used for floor landings and ceiling bonks.
+ * @param   solidAt  Tile-solidity predicate.
+ * @param   yEdge    World-px row to test.
+ * @param   xLeft    Left of the world-px horizontal span.
+ * @param   xRight   Right of the world-px horizontal span.
+ * @returns true if any sample (every LEAP_PROBE_SAMPLE_PX, plus the exact right edge) is solid.
+ * @calledby src/level/navProbe.ts → simulateLeapArc, testing for a floor landing, a ceiling bonk, or headroom clearance
+ * @calls    the supplied solidity predicate at half-tile sample steps
+ */
 function rowSolid(
   solidAt: SolidAt,
   yEdge: number,
@@ -91,7 +98,19 @@ function rowSolid(
   return solidAt(xRight, yEdge);
 }
 
-// Swept-AABB arc probe for one launch velocity: slides along walls, bonks ceilings, returns the first floor landing or null.
+/**
+ * @function    simulateLeapArc
+ * @description Swept-AABB arc probe for one launch velocity: slides along walls, bonks ceilings, returns the first floor landing or null.
+ * @param   ctx       ArcContext: solidity, optional bounds, gravity, body w/h.
+ * @param   centerX   Launch body-center x (world px).
+ * @param   centerY   Launch body-center y (world px).
+ * @param   dir       Horizontal direction of travel: 1 = right, -1 = left.
+ * @param   launchVx  Horizontal launch speed (px/s, magnitude).
+ * @param   launchVy  Vertical launch speed (px/s; negative = up).
+ * @returns the landing foot point {x, y}, or null if the arc leaves bounds, finds no standable floor, or only falls back onto the takeoff spot.
+ * @calledby src/level/navProbe.ts → findLeapLanding / collectLeapLandings, once per candidate launch velocity
+ * @calls    the column/row solidity tests as it integrates the arc step by step
+ */
 export function simulateLeapArc(
   ctx: ArcContext,
   centerX: number,
@@ -150,7 +169,20 @@ export function simulateLeapArc(
   return null;
 }
 
-// Tries launch velocities from gentlest to maxLaunchVelocity and returns the landing that best advances toward the target.
+/**
+ * @function    findLeapLanding
+ * @description Tries launch velocities from gentlest to maxLaunchVelocity and returns the landing that best advances toward the target.
+ * @param   ctx                ArcContext: solidity, optional bounds, gravity, body w/h.
+ * @param   centerX            Launch body-center x (world px).
+ * @param   centerY            Launch body-center y (world px).
+ * @param   dir                Horizontal direction: 1 = right, -1 = left.
+ * @param   launchVx           Horizontal launch speed (px/s, magnitude).
+ * @param   target             World-px goal to minimize landing distance to.
+ * @param   maxLaunchVelocity  Most-negative vy allowed; defaults to a player-grade jump.
+ * @returns the LeapLanding (x, y, launch vy) closest to the target, or null if no velocity in the ladder lands solidly.
+ * @calledby src/entities/Enemy.ts → the live enemy's chase-leap solver path (mirrored here), choosing a jump toward a target
+ * @calls    the per-velocity arc probe and a solid-top check at each candidate landing
+ */
 export function findLeapLanding(
   ctx: ArcContext,
   centerX: number,
@@ -183,7 +215,19 @@ export function findLeapLanding(
   return best ? { x: best.x, y: best.y, vy: best.vy } : null;
 }
 
-// Graph-build variant: returns every distinct standable landing across the velocity ladder (one per tile cell) for jump edges.
+/**
+ * @function    collectLeapLandings
+ * @description Graph-build variant: returns every distinct standable landing across the velocity ladder (one per tile cell) for jump edges.
+ * @param   ctx                ArcContext: solidity, optional bounds, gravity, body w/h.
+ * @param   centerX            Launch body-center x (world px).
+ * @param   centerY            Launch body-center y (world px).
+ * @param   dir                Horizontal direction: 1 = right, -1 = left.
+ * @param   launchVx           Horizontal launch speed (px/s, magnitude).
+ * @param   maxLaunchVelocity  Most-negative vy allowed; defaults to a player-grade jump.
+ * @returns the list of distinct standable LeapLandings (deduplicated to one per tile cell).
+ * @calledby src/level/NavGraph.ts → computeEdges, generating the jump edges out of a node
+ * @calls    the per-velocity arc probe and a solid-top check, deduplicating landings by tile cell
+ */
 export function collectLeapLandings(
   ctx: ArcContext,
   centerX: number,

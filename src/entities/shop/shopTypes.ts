@@ -21,21 +21,9 @@ import { upgradeId, type UpgradeType } from '../../state/runProgress';
 import type { PickupKind } from '../Player';
 
 /**
- * shopTypes — the shop item model and per-merchant inventory assembly.
- *
- * Defines the ShopItem discriminated union (a repeatable 'resource' restock vs a
- * one-time 'upgrade') and builds the inventory a given merchant offers in a given
- * level. The two fixed restock tables are static; capacity upgrades are appended
- * only at the three upgrade levels — a level is matched against AMMO_/MAGIC_
- * UPGRADE_LEVELS, and that array index doubles as the tier index into the
- * parallel price/step constants, so the tables must stay index-aligned.
- *
- * Inputs:  the shop/pricing constants, runProgress upgrade-id helper, and a
- *          merchant kind + current level id at call time.
- * Outputs: shop item descriptors and the assembled per-merchant inventory array;
- *          a window title string.
- * @calledby the shop UI/scene, when opening a merchant and rendering its stock.
- * @calls    the upgrade-id helper and the shop pricing/step constants only.
+ * @file entities/shop/shopTypes.ts
+ * @description ShopItem model (a repeatable 'resource' restock vs a one-time 'upgrade') plus the assembly of the inventory a merchant offers in a given level. The two fixed restock tables are static; a capacity upgrade is appended only at the three upgrade levels — a level matches against AMMO_/MAGIC_ UPGRADE_LEVELS, and that array index doubles as the tier index into the parallel price/step constants, so the tables must stay index-aligned. Read by the shop UI/scene when opening a merchant and rendering its stock.
+ * @module entities/shop
  */
 
 // which merchant is open — drives inventory selection and the window title
@@ -115,7 +103,15 @@ const MUSHROOM_SHOP_ITEMS: ReadonlyArray<ResourceShopItem> = [
   },
 ];
 
-// builds the "Ammo Storage" upgrade descriptor for the tech shop at this level/tier
+/**
+ * @function    ammoUpgradeItem
+ * @description Builds the "Ammo Storage" upgrade descriptor for the tech shop at this level/tier.
+ * @param   levelId    Current LDtk level id.
+ * @param   tierIndex  Index into the parallel price array.
+ * @returns an UpgradeShopItem with this tier's price and the pistol/shotgun cap detail string.
+ * @calledby src/entities/shop/shopTypes.ts → upgradeItemFor, when this level is an ammo-upgrade level
+ * @calls    src/state/runProgress.ts → upgradeId, plus the ammo price/step constants
+ */
 function ammoUpgradeItem(levelId: string, tierIndex: number): UpgradeShopItem {
   return {
     kind: 'upgrade',
@@ -129,7 +125,15 @@ function ammoUpgradeItem(levelId: string, tierIndex: number): UpgradeShopItem {
   };
 }
 
-// builds the "Crystal Pouch" upgrade descriptor for the mushroom merchant at this level/tier
+/**
+ * @function    magicUpgradeItem
+ * @description Builds the "Crystal Pouch" upgrade descriptor for the mushroom merchant at this level/tier.
+ * @param   levelId    Current LDtk level id.
+ * @param   tierIndex  Index into the parallel step/price arrays.
+ * @returns an UpgradeShopItem with this tier's price and the crystal-cap detail string.
+ * @calledby src/entities/shop/shopTypes.ts → upgradeItemFor, when this level is a magic-upgrade level
+ * @calls    src/state/runProgress.ts → upgradeId, plus the magic price/step constants
+ */
 function magicUpgradeItem(levelId: string, tierIndex: number): UpgradeShopItem {
   return {
     kind: 'upgrade',
@@ -142,7 +146,15 @@ function magicUpgradeItem(levelId: string, tierIndex: number): UpgradeShopItem {
   };
 }
 
-// returns the capacity upgrade for this merchant/level, or null if none applies
+/**
+ * @function    upgradeItemFor
+ * @description Returns the capacity upgrade for this merchant/level, or null if none applies.
+ * @param   kind     Which merchant: 'tech' or 'mushroom'.
+ * @param   levelId  Current LDtk level id, or null.
+ * @returns the matching UpgradeShopItem, or null when there's no level or this level isn't an upgrade level for that merchant.
+ * @calledby src/entities/shop/shopTypes.ts → shopItemsFor, deciding whether to append an upgrade
+ * @calls    src/entities/shop/shopTypes.ts → ammoUpgradeItem / magicUpgradeItem, after an UPGRADE_LEVELS index match
+ */
 function upgradeItemFor(
   kind: ShopKind,
   levelId: string | null,
@@ -156,12 +168,20 @@ function upgradeItemFor(
   return tier >= 0 ? magicUpgradeItem(levelId, tier) : null;
 }
 
-// Title rendered at the top of the shop window per merchant kind.
+/** Title rendered at the top of the shop window per merchant kind. */
 export function shopTitleFor(kind: ShopKind): string {
   return kind === 'tech' ? 'TECH SHOP' : 'MUSHROOM MERCHANT';
 }
 
-// assembles the merchant's full stock: fixed restocks plus the level's upgrade if one exists
+/**
+ * @function    shopItemsFor
+ * @description Assembles the merchant's full stock: fixed restocks plus the level's upgrade if one exists.
+ * @param   kind     Which merchant: 'tech' or 'mushroom'.
+ * @param   levelId  Current LDtk level id, or null.
+ * @returns a readonly ShopItem array — the fixed restock table, with the level's capacity upgrade appended when one applies.
+ * @calledby src/ui/ShopOverlay.ts → opening a merchant to populate its item list
+ * @calls    src/entities/shop/shopTypes.ts → upgradeItemFor, then concatenates onto the per-kind restock table
+ */
 export function shopItemsFor(
   kind: ShopKind,
   levelId: string | null,

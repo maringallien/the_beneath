@@ -1,18 +1,7 @@
 /**
- * animationSoundTriggersTypes — runtime-side shapes for the
- * animationSoundTriggers.json data file.
- *
- * Pure type definitions: the schema for animation-frame-driven sound effects
- * (a trigger fires a one-shot when an animation reaches a frame threshold).
- * Authored by the tools/anim-sound-aligner browser tool and consumed by the
- * entity that plays frame-synced audio (currently the player, plus any future
- * entity needing it).
- *
- * Inputs:  none — declarations only.
- * Outputs: the AnimationTrigger / AnimationSoundTriggers interfaces below.
- * @calledby the audio loader that parses the triggers JSON and the entity code
- *           that fires sounds off animation-frame events.
- * @calls    nothing — a leaf type module.
+ * @file audio/animationSoundTriggersTypes.ts
+ * @description Schema types for animationSoundTriggers.json — a trigger fires a one-shot when an anim reaches a frame threshold; hand-authored and consumed by the loader and the frame-synced playback path (currently the player). Leaf type module, no logic.
+ * @module audio
  */
 
 export interface AnimationTrigger {

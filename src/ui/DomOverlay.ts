@@ -1,23 +1,7 @@
 /**
- * DomOverlay — abstract base for the DOM panels rendered over the Phaser canvas.
- *
- * Shared scaffolding for the styled HTML overlays (merchant shop, How-to-Play
- * manual, credits). Each lives in the same #game parent as the canvas: a
- * full-viewport dim backdrop (.shop-overlay) that closes on outside-click, a
- * framed window, and a window-level capture-phase keydown listener the overlay
- * owns while open. The base owns the open/close lifecycle; subclasses own
- * everything visible — they build the window contents, decide their keydown
- * behavior (the handlers genuinely differ: the shop navigates items, the manual
- * cycles tabs and toggles mute, credits only closes), and reset their extra
- * state in onTeardown().
- *
- * Inputs:  the #game parent element; keyboard events while open.
- * Outputs: appends/removes overlay DOM, owns a window keydown listener, and
- *          fires the onClose callback back to the launching scene.
- * @calledby the scenes that open a shop/manual/credits panel and need the
- *           game paused behind a modal overlay.
- * @calls    the DOM (element create/append/remove, event listeners) and the
- *           subclass hooks that build contents and handle keys.
+ * @file ui/DomOverlay.ts
+ * @description Abstract base for DOM panels over the Phaser canvas (shop, manual, credits) — owns the open/close lifecycle: a dim outside-click backdrop, a framed window, and a window-level capture keydown listener; subclasses build the contents and decide their keydown behaviour.
+ * @module ui
  */
 export abstract class DomOverlay {
   protected readonly parent: HTMLElement;
@@ -30,12 +14,17 @@ export abstract class DomOverlay {
     this.parent = parent;
   }
 
-  // True while the overlay DOM is mounted.
+  /** True while the overlay DOM is mounted. */
   isOpen(): boolean {
     return this.overlayEl !== null;
   }
 
-  // Tears down the panel and fires onClose so the launching scene can resume.
+  /**
+   * @function    close
+   * @description Tear down the panel and fire onClose so the launching scene can resume; no-op if already closed.
+   * @calledby a subclass when the user dismisses the panel (ESC, outside-click, or a buy/close action)
+   * @calls    src/ui/DomOverlay.ts → teardown, then the launching scene's onClose callback
+   */
   close(): void {
     if (!this.isOpen()) return;
     const cb = this.onCloseCb;
@@ -43,18 +32,30 @@ export abstract class DomOverlay {
     if (cb) cb();
   }
 
-  // Force-close without firing onClose — used when the launching scene is itself shutting down.
+  /**
+   * @function    destroy
+   * @description Force-close without firing onClose — for when the launching scene is itself shutting down or hot-reloading and must drop the panel silently; no-op if already closed.
+   * @calledby the launching scene on shutdown / hot-reload teardown
+   * @calls    src/ui/DomOverlay.ts → teardown only
+   */
   destroy(): void {
     if (!this.isOpen()) return;
     this.teardown();
   }
 
-  // Arms the close callback; subclass open() calls this first, then builds DOM and attaches keyboard.
+  /** Arm the close callback; a subclass open() calls this first, then builds DOM and attaches keyboard. */
   protected openShell(onClose: () => void): void {
     this.onCloseCb = onClose;
   }
 
-  // Creates the dim backdrop (closes on outside-click) and an empty framed window for the subclass to fill.
+  /**
+   * @function    createBackdrop
+   * @description Create the dim backdrop (closes on outside-click) and an empty framed window for the subclass to fill.
+   * @param   windowClassName  CSS class for the inner framed window.
+   * @returns an { overlay, win } pair — overlay the dim backdrop, win the empty window to populate.
+   * @calledby a subclass while it builds its panel DOM
+   * @calls    the DOM element-create API; wires the backdrop's outside-click to close
+   */
   protected createBackdrop(windowClassName: string): {
     overlay: HTMLDivElement;
     win: HTMLDivElement;
@@ -69,26 +70,36 @@ export abstract class DomOverlay {
     return { overlay, win };
   }
 
-  // Appends the built overlay to the #game parent and records it as open.
+  /** Append the built overlay to the #game parent and record it as open. */
   protected mount(overlay: HTMLDivElement): void {
     this.parent.appendChild(overlay);
     this.overlayEl = overlay;
   }
 
-  // Window-level capture-phase key handler; subclass decides which keys it handles.
+  /** Window-level capture-phase key handler; the subclass decides which keys it handles. */
   protected abstract onKeydown(e: KeyboardEvent): void;
 
-  // Hook for subclass teardown before the shell DOM is removed (release previews, refs, etc.).
+  /** Hook for subclass teardown before the shell DOM is removed (release previews, refs, etc.). */
   protected onTeardown(): void {}
 
-  // Arms the window-level capture-phase keydown listener for this panel.
+  /**
+   * @function    attachKeyboard
+   * @description Arm the window-level capture-phase keydown listener that forwards to the subclass onKeydown.
+   * @calledby a subclass while it finishes opening its panel
+   * @calls    the DOM addEventListener (capture phase)
+   */
   protected attachKeyboard(): void {
     const handler = (e: KeyboardEvent): void => this.onKeydown(e);
     window.addEventListener('keydown', handler, true);
     this.keydownHandler = handler;
   }
 
-  // Removes the keydown listener if one is armed.
+  /**
+   * @function    detachKeyboard
+   * @description Remove the window keydown listener and clear its ref; no-op if none armed.
+   * @calledby src/ui/DomOverlay.ts → teardown
+   * @calls    the DOM removeEventListener
+   */
   private detachKeyboard(): void {
     if (this.keydownHandler) {
       window.removeEventListener('keydown', this.keydownHandler, true);
@@ -96,7 +107,12 @@ export abstract class DomOverlay {
     }
   }
 
-  // Releases keyboard listener, runs the subclass hook, removes the DOM, clears the callback.
+  /**
+   * @function    teardown
+   * @description Fully dismantle the open panel — release the keyboard listener, run the subclass hook, remove the DOM, clear the callback.
+   * @calledby src/ui/DomOverlay.ts → close and destroy
+   * @calls    src/ui/DomOverlay.ts → detachKeyboard and onTeardown, plus DOM removal
+   */
   private teardown(): void {
     this.detachKeyboard();
     this.onTeardown();

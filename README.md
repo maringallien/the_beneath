@@ -27,10 +27,14 @@ The game was developed and tested on **Ubuntu**.
 ### Steps
 
 ```bash
-# 1. Install dependencies
+# 1. Clone the repository and enter the project directory
+git clone https://github.com/maringallien/platformer_game
+cd platformer_game
+
+# 2. Install dependencies
 npm install
 
-# 2. Start the development server
+# 3. Start the development server
 npm run dev
 ```
 

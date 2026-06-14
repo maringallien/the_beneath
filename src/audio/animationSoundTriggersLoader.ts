@@ -7,33 +7,25 @@ import type {
 } from './animationSoundTriggersTypes';
 
 /**
- * animationSoundTriggersLoader — parses, validates, and exposes the
- * frame-synced animation→sound trigger table.
- *
- * Builds a frozen, validated registry from animationSoundTriggers.json at module
- * load and serves trigger lists keyed by full Phaser anim key. Validation fails
- * fast on: unknown top-level / per-trigger keys, a non-object triggers map or
- * non-array trigger list, a duplicate trigger name within an anim, an anim key or
- * name/soundId that breaks the /^[A-Za-z0-9_]+$/ shape, a non-integer or <1
- * frameIndex, or a soundId not declared in soundRegistry.json. This mirrors the
- * validation in tools/anim-sound-aligner/save-plugin.mjs, so a tool-saved file is
- * guaranteed to load (no asymmetry). Optional fields that are zero/false are
- * normalized to undefined so a parsed trigger only carries flags that do something.
- *
- * Inputs:  the bundled animationSoundTriggers.json and the sound-registry lookup
- *          (to verify each referenced soundId exists).
- * Outputs: a frozen AnimationSoundTriggers registry plus the trigger-lookup
- *          accessors below; throws at load on any malformed entry.
- * @calledby the audio playback layer resolving which sounds fire on which anim
- *           frames, and diagnostic tooling enumerating the table.
- * @calls    the shared validation helpers and the sound-registry definition lookup.
+ * @file audio/animationSoundTriggersLoader.ts
+ * @description Parses, validates, and exposes the frame-synced animation→sound trigger table — builds a frozen registry from animationSoundTriggers.json at module load, keyed by full Phaser anim key. Fails fast on unknown keys, a non-object/array shape, a duplicate name within an anim, an anim-key/name/soundId breaking the A-Za-z0-9_ shape, a non-integer or below-one frameIndex, or a soundId absent from soundRegistry.json. Zero/false optional flags normalize to undefined. Read by the frame-synced playback path (and diagnostic tooling); delegates to the shared validate.* helpers and getSoundDefinition.
+ * @module audio
  */
 
 const TRIGGER_NAME_REGEX = /^[A-Za-z0-9_]+$/;
 const SOUND_ID_REGEX = /^[A-Za-z0-9_]+$/;
 const ANIM_KEY_REGEX = /^[A-Za-z0-9_]+$/;
 
-// validates one trigger entry; optional flags are only included when meaningfully set
+/**
+ * @function    validateTrigger
+ * @description Validates one trigger entry into a typed AnimationTrigger — checks keys, the name/soundId shape, name uniqueness, soundId existence, and a positive-int frameIndex; optional flags are included only when meaningfully set.
+ * @param   ctx        JSON path prefix for error messages.
+ * @param   raw        The unvalidated trigger entry.
+ * @param   seenNames  Names already used in this anim's list, for duplicate detection (mutated).
+ * @returns the frozen-shape AnimationTrigger carrying only fields that do something.
+ * @calledby the REGISTRY build IIFE below, per trigger in each anim's list
+ * @calls    the shared validate.* primitives and getSoundDefinition, throwing a path-tagged Error on any bad field
+ */
 function validateTrigger(
   ctx: string,
   raw: unknown,
@@ -145,14 +137,14 @@ const REGISTRY: AnimationSoundTriggers = (() => {
 // shared frozen empty list for anims with no triggers
 const EMPTY: ReadonlyArray<AnimationTrigger> = Object.freeze([]);
 
-// returns the trigger list for an anim key, or the shared empty array — so callers can always iterate without a null check
+/** Trigger list for an anim key, or the shared empty array so callers iterate without a null check (used by Player/Enemy/Trap on anim-frame update). */
 export function getTriggersFor(
   fullAnimKey: string,
 ): ReadonlyArray<AnimationTrigger> {
   return REGISTRY.triggers[fullAnimKey] ?? EMPTY;
 }
 
-// every (animKey, triggers) pair; for diagnostics and bulk validation, not on the hot path
+/** Every (animKey, triggers) pair; for diagnostics and bulk validation, not on the hot path. */
 export function listAllTriggers(): ReadonlyArray<
   readonly [string, ReadonlyArray<AnimationTrigger>]
 > {

@@ -18,35 +18,9 @@ import type {
 } from './soundRegistryTypes';
 
 /**
- * SoundManager — the game's whole audio runtime: spatial loops, one-shots, and
- * music/ambience crossfades.
- *
- * A module of free functions over module-level maps (no class). It owns level
- * ambience crossfades, player-state loops (footsteps/cloth/falling-whoosh),
- * per-entity spatial loops (static decoration + moving creatures + state-gated
- * enemy footsteps + playlists), periodic creature one-shots, and fire-and-forget
- * one-shots. Phaser's sound manager is game-scoped (one instance across all
- * scenes), so every BaseSound here outlives any one scene; the module-level
- * state is what keeps audio correct across scene.restart (respawn re-runs
- * GameScene.create() but our maps persist, so ambience never resets).
- *
- * Audio-thread budget is a first-class concern (this game has hit audio-thread
- * saturation): idle loops are PAUSED not just muted, sources past earshot are
- * distance-culled (paused with a hysteresis margin), and one-shots are freed on
- * COMPLETE/STOP plus a duration safety net — all to cap how many Web Audio voices
- * compete at once. Volume falloff everywhere is the same linear band: full inside
- * minRadius, zero past maxRadius, lerped between.
- *
- * Inputs:  the sound registry (definitions, per-entity bindings, ambience sets),
- *          a Phaser scene per call (for scene.sound / tweens / timers), and live
- *          player + sprite positions.
- * Outputs: created/destroyed BaseSound voices, volume tweens, and the cached
- *          player position used to gate off-frame timers.
- * @calledby the preload pipeline, the gameplay scene at level load / per frame /
- *           on level transition, the player's movement-and-combat code, and the
- *           enemy spawn/death lifecycle.
- * @calls    Phaser's game-scoped sound manager, the tween engine, the timer
- *           system, and the sound-registry loaders.
+ * @file audio/SoundManager.ts
+ * @description The game's whole audio runtime — free functions over module-level maps (no class). Owns level-ambience crossfades, player-state loops (footsteps/cloth/falling-whoosh), per-entity spatial loops (static decoration + moving creatures + state-gated enemy footsteps + playlists), periodic creature one-shots, and fire-and-forget one-shots. Phaser's sound manager is game-scoped, so every BaseSound outlives any one scene and the module state keeps audio correct across scene.restart (respawn re-runs create() but the maps persist, so ambience never resets). Audio-thread budget is first-class (this game has hit saturation): idle loops are PAUSED not just muted, out-of-earshot sources are distance-culled with a hysteresis margin, and one-shots are freed on COMPLETE/STOP plus a duration safety net. Falloff is one linear band everywhere: full inside minRadius, zero past maxRadius, lerped between. Driven by the preloader, the gameplay scene (level load / per frame / transition), the player's movement-combat code, and the enemy spawn/death lifecycle. Most exports take a pervasive `scene: Phaser.Scene` (the active scene; scene.sound is game-global regardless), omitted from per-function @param lists.
+ * @module audio
  */
 
 // structural type for anything that has a live world position (keeps SoundManager decoupled from Phaser sprites)
@@ -73,7 +47,12 @@ let currentLevelId: string | null = null;
 // global tracks are muted-not-destroyed on fade-out, so re-entry to a global-ambience level just fades them back up
 const GLOBAL_AMBIENCE_SET: ReadonlySet<string> = new Set(getGlobalAmbienceIds());
 
-// queues every registry sound with Phaser's loader; skips duplicates so a second pass is harmless
+/**
+ * @function    preloadAll
+ * @description Queues every registry sound with Phaser's loader; skips already-cached ids so a second pass is harmless.
+ * @calledby src/scenes/PreloadScene.ts → the preload pipeline at game load, before any playback
+ * @calls    getAllSoundDefinitions and Phaser's audio loader
+ */
 export function preloadAll(scene: Phaser.Scene): void {
   for (const [id, def] of getAllSoundDefinitions()) {
     // Don't double-queue — Phaser's loader throws on duplicate keys.
@@ -84,7 +63,13 @@ export function preloadAll(scene: Phaser.Scene): void {
   }
 }
 
-// crossfades to the new level's ambience set; globals mute-and-keep, non-globals stop-and-destroy; idempotent
+/**
+ * @function    setLevelAmbience
+ * @description Crossfades to the new level's ambience set — outgoing global tracks mute-and-keep (re-entry just fades them back up), outgoing non-globals stop-and-destroy; idempotent for the same level.
+ * @param   levelId  Target level, or null for the global default ambience.
+ * @calledby src/scenes/GameScene.ts → level load and level transition
+ * @calls    getGlobalAmbienceIds/getAmbienceForLevel/getSoundDefinition, the fadeSound primitive, and Phaser's sound manager (add/play/stop/destroy)
+ */
 export function setLevelAmbience(
   scene: Phaser.Scene,
   levelId: string | null,
@@ -139,30 +124,16 @@ export function setLevelAmbience(
   currentLevelId = levelId;
 }
 
-// cold-start helper: fades up the default global ambience (same as setLevelAmbience(scene, null))
-export function startGlobalAmbience(scene: Phaser.Scene): void {
-  setLevelAmbience(scene, null);
-}
-
-// sets master volume clamped to [0,1]; Phaser multiplies it by each track's own volume
+/**
+ * @function    setMasterVolume
+ * @description Sets the global master volume, which Phaser multiplies by each track's own volume.
+ * @param   value  Target volume; clamped to [0, 1].
+ * @calledby — (exported via the audio barrel as the master-volume API; no in-repo caller)
+ * @calls    nothing beyond writing Phaser's sound-manager volume
+ */
 export function setMasterVolume(scene: Phaser.Scene, value: number): void {
   const clamped = Math.max(0, Math.min(1, value));
   scene.sound.volume = clamped;
-}
-
-// full audio shutdown — stops ambience, player-state loops, and entity sounds; intended for menu return
-export function stopAll(scene: Phaser.Scene): void {
-  for (const [id, sound] of ACTIVE.entries()) {
-    scene.tweens.killTweensOf(sound);
-    sound.stop();
-    sound.destroy();
-    ACTIVE.delete(id);
-  }
-  currentAmbienceIds = [];
-  currentLevelId = null;
-    // reset so the next activation recreates the (now-destroyed) BaseSound rather than fading a stale ref
-  PLAYER_SOUND_ACTIVE.clear();
-  clearEntitySounds();
 }
 
 // keyed by "iid:soundId"; static anchors hold world coords, moving anchors hold a live sprite ref
@@ -189,7 +160,7 @@ const PERIODIC_TIMERS: Map<string, Phaser.Time.TimerEvent> = new Map();
 // surrogate numeric ids for sprites (WeakMap so destroyed sprites don't leak)
 let periodicIdCounter = 0;
 const SPRITE_IDS: WeakMap<PositionedGameObject, string> = new WeakMap();
-// get-or-mint a stable surrogate id for a sprite
+/** Get-or-mint a stable surrogate string id for a sprite (used to key its anchors/timers). */
 function getSpriteId(sprite: PositionedGameObject): string {
   let id = SPRITE_IDS.get(sprite);
   if (id === undefined) {
@@ -213,13 +184,22 @@ const STATIC_ANCHOR_KEYS_BY_IID: Map<string, string[]> = new Map();
 
 // small pitch jitter so layered crow/wasp copies don't comb-filter into a "hollow whoosh"
 const MOVING_RATE_JITTER = 0.08;
-// applies ±MOVING_RATE_JITTER to decorrelate layered copies of the same sound
+/** Applies ±MOVING_RATE_JITTER to a base rate to decorrelate layered copies of the same sound. */
 function jitteredRate(base: number): number {
   const jitter = 1 - MOVING_RATE_JITTER + Math.random() * MOVING_RATE_JITTER * 2;
   return base * jitter;
 }
 
-// registers fixed-position spatial loops for an immovable LDtk entity; idempotent, random seek so copies don't comb-filter
+/**
+ * @function    registerEntitySound
+ * @description Registers fixed-position spatial loops for an immovable LDtk entity; idempotent per (iid, soundId), with a random seek so layered copies don't comb-filter.
+ * @param   entityIdentifier  LDtk type to look up bindings for.
+ * @param   iid               This instance's unique id — the dedup / teardown key.
+ * @param   worldX            Fixed anchor X (world px).
+ * @param   worldY            Fixed anchor Y (world px).
+ * @calledby src/scenes/GameScene.ts and src/level/BossEncounterController.ts → world build, for static sound-emitting props
+ * @calls    getEntitySoundIds/getSoundDefinition and Phaser's sound manager (add/play)
+ */
 export function registerEntitySound(
   scene: Phaser.Scene,
   entityIdentifier: string,
@@ -262,7 +242,14 @@ export function registerEntitySound(
   }
 }
 
-// like registerEntitySound but stores a live sprite ref — the per-frame update tracks the creature's position
+/**
+ * @function    registerMovingEntitySound
+ * @description Like registerEntitySound, but stores a live sprite ref so the per-frame update tracks the creature's moving position; rate is jittered to decorrelate layered copies.
+ * @param   entityIdentifier  LDtk type to look up bindings for.
+ * @param   sprite            The live creature whose position drives falloff.
+ * @calledby src/scenes/GameScene.ts → enemy/creature spawn, for ambient-noise creatures (wasps, crows)
+ * @calls    getMovingEntitySoundIds/getSoundDefinition, Phaser's sound manager, and the sprite's DESTROY teardown (tearDownMovingAnchorKeys)
+ */
 export function registerMovingEntitySound(
   scene: Phaser.Scene,
   entityIdentifier: string,
@@ -303,7 +290,13 @@ export function registerMovingEntitySound(
   });
 }
 
-// stops and destroys every moving/walk anchor a sprite owns
+/**
+ * @function    tearDownMovingAnchorKeys
+ * @description Stops and destroys every moving/walk anchor a sprite owns, then clears its moving + walk anchor indices.
+ * @param   sprite  The sprite whose anchors to tear down.
+ * @calledby the sprite DESTROY handler and unregisterEntityAudio
+ * @calls    Phaser stop/destroy on each anchor's voice
+ */
 function tearDownMovingAnchorKeys(sprite: PositionedGameObject): void {
   const anchorKeys = MOVING_ANCHOR_KEYS_BY_SPRITE.get(sprite);
   if (!anchorKeys) return;
@@ -322,7 +315,14 @@ function tearDownMovingAnchorKeys(sprite: PositionedGameObject): void {
 const WALK_ANCHOR_KEYS_BY_SPRITE: WeakMap<PositionedGameObject, string[]> =
   new WeakMap();
 
-// registers walk-sound loops for an enemy: each starts muted+paused (costs nothing idle), resumes mid-cycle on chase
+/**
+ * @function    registerEnemyWalkSound
+ * @description Registers walk-sound loops for an enemy — each starts muted and paused (an idle enemy costs nothing) and resumes mid-cycle when chase state enables it; reuses the moving-anchor index for teardown.
+ * @param   entityIdentifier  LDtk type to look up walk bindings for.
+ * @param   sprite            The enemy the footsteps follow.
+ * @calledby src/scenes/GameScene.ts → enemy spawn, for enemies with footstep bindings
+ * @calls    getEntityWalkSoundBindings/getSoundDefinition and Phaser's sound manager (add/play/pause)
+ */
 export function registerEnemyWalkSound(
   scene: Phaser.Scene,
   entityIdentifier: string,
@@ -378,7 +378,15 @@ export function registerEnemyWalkSound(
   }
 }
 
-// flips walk anchor enabled flags; next per-frame update applies them (surface-gated anchors only enable when tile matches)
+/**
+ * @function    setEnemyWalkSoundEnabled
+ * @description Flips the enabled flags on an enemy's walk anchors; the next per-frame update applies the actual pause/resume (so this hot path can't thrash the distance cull). Surface-gated anchors only enable when the tile underfoot matches.
+ * @param   sprite   The enemy whose walk anchors to flip.
+ * @param   enabled  Whether footsteps should play.
+ * @param   surface  'ground' | 'bridge' | null — the tile underfoot, for gating surface-specific bindings.
+ * @calledby src/entities/Enemy.ts → chase/movement logic each time walk state or surface changes
+ * @calls    nothing beyond reading the walk-anchor index and setting flags
+ */
 export function setEnemyWalkSoundEnabled(
   sprite: PositionedGameObject,
   enabled: boolean,
@@ -417,7 +425,14 @@ interface EntitySoundSequenceState {
 const SEQUENCE_STATES: Map<PositionedGameObject, EntitySoundSequenceState> =
   new Map();
 
-// starts an entity's sound-sequence playlist at index 0; idempotent (scene.restart safe)
+/**
+ * @function    registerEntitySoundSequence
+ * @description Starts an entity's sound-sequence playlist at index 0; idempotent (scene.restart safe) and a no-op if the entity has no sequence.
+ * @param   entityIdentifier  LDtk type to look up the sequence for.
+ * @param   sprite            The creature the playlist follows.
+ * @calledby src/scenes/GameScene.ts → creature spawn, for entities with an authored sound sequence
+ * @calls    getEntitySoundSequence/getSoundDefinition, then playCurrentSequenceClip (which advances on COMPLETE)
+ */
 export function registerEntitySoundSequence(
   scene: Phaser.Scene,
   entityIdentifier: string,
@@ -447,7 +462,13 @@ export function registerEntitySoundSequence(
   });
 }
 
-// plays the current clip at volume 0 and wires COMPLETE to advance to the next (no-op while paused)
+/**
+ * @function    playCurrentSequenceClip
+ * @description Plays the playlist's current clip at volume 0 and wires COMPLETE to advance (and wrap) to the next; stays put while paused. A late COMPLETE after teardown is guarded by an identity check.
+ * @param   state  The playlist state whose currentIndex clip to start.
+ * @calledby registerEntitySoundSequence, resumeEntitySoundSequence, and its own COMPLETE handler
+ * @calls    getSoundDefinition and Phaser's sound manager (add/play), re-entering itself on COMPLETE
+ */
 function playCurrentSequenceClip(state: EntitySoundSequenceState): void {
   const soundId = state.soundIds[state.currentIndex];
   const def = getSoundDefinition(soundId);
@@ -474,7 +495,13 @@ function playCurrentSequenceClip(state: EntitySoundSequenceState): void {
   sound.play();
 }
 
-// pauses the current clip mid-position so resume picks up exactly where it left off
+/**
+ * @function    pauseEntitySoundSequence
+ * @description Pauses a sprite's sequence at its current clip position so resume picks up exactly where it left off; no-op if absent or already paused.
+ * @param   sprite  The creature whose playlist to pause.
+ * @calledby src/entities/Enemy.ts → when a sequenced creature should fall silent (off-screen, dormant) without losing position
+ * @calls    Phaser's pause on the current clip
+ */
 export function pauseEntitySoundSequence(sprite: PositionedGameObject): void {
   const state = SEQUENCE_STATES.get(sprite);
   if (!state || state.isPaused) return;
@@ -484,7 +511,13 @@ export function pauseEntitySoundSequence(sprite: PositionedGameObject): void {
   }
 }
 
-// resumes a paused sequence; if the pause landed between clips, starts the next one
+/**
+ * @function    resumeEntitySoundSequence
+ * @description Resumes a paused sequence; if the pause landed in the gap between clips, starts the next clip instead. No-op if absent or not paused.
+ * @param   sprite  The creature whose playlist to resume.
+ * @calledby src/entities/Enemy.ts → when a previously-paused sequenced creature should sound again
+ * @calls    Phaser's resume, or playCurrentSequenceClip when between clips
+ */
 export function resumeEntitySoundSequence(sprite: PositionedGameObject): void {
   const state = SEQUENCE_STATES.get(sprite);
   if (!state || !state.isPaused) return;
@@ -496,7 +529,13 @@ export function resumeEntitySoundSequence(sprite: PositionedGameObject): void {
   }
 }
 
-// stops/destroys the active clip and removes the playlist state for a sprite
+/**
+ * @function    tearDownEntitySoundSequence
+ * @description Stops/destroys the active clip and removes the playlist state for a sprite.
+ * @param   sprite  The sprite whose sequence to tear down.
+ * @calledby the sprite DESTROY handler and unregisterEntityAudio
+ * @calls    Phaser stop/destroy on the current clip
+ */
 function tearDownEntitySoundSequence(sprite: PositionedGameObject): void {
   const state = SEQUENCE_STATES.get(sprite);
   if (!state) return;
@@ -508,7 +547,13 @@ function tearDownEntitySoundSequence(sprite: PositionedGameObject): void {
   SEQUENCE_STATES.delete(sprite);
 }
 
-// cancels every pending periodic timer for a sprite so no fire lands on a destroyed voice
+/**
+ * @function    tearDownPeriodicTimerKeys
+ * @description Cancels every pending periodic timer for a sprite so no fire lands on a destroyed voice.
+ * @param   sprite  The sprite whose periodic timers to cancel.
+ * @calledby the sprite DESTROY handler and unregisterEntityAudio
+ * @calls    Phaser TimerEvent.remove on each pending timer
+ */
 function tearDownPeriodicTimerKeys(sprite: PositionedGameObject): void {
   const timerKeys = PERIODIC_TIMER_KEYS_BY_SPRITE.get(sprite);
   if (!timerKeys) return;
@@ -520,7 +565,13 @@ function tearDownPeriodicTimerKeys(sprite: PositionedGameObject): void {
   PERIODIC_TIMER_KEYS_BY_SPRITE.delete(sprite);
 }
 
-// stops/destroys static anchors owned by a dying enemy (e.g. hive's bee buzz)
+/**
+ * @function    tearDownStaticAnchorKeysByIid
+ * @description Stops/destroys the static anchors owned by a dying enemy (e.g. a hive's bee buzz), keyed by LDtk iid.
+ * @param   iid  The LDtk instance id whose static anchors to tear down.
+ * @calledby unregisterEntityAudio, when an iid is supplied
+ * @calls    Phaser stop/destroy on each anchor's voice
+ */
 function tearDownStaticAnchorKeysByIid(iid: string): void {
   const anchorKeys = STATIC_ANCHOR_KEYS_BY_IID.get(iid);
   if (!anchorKeys) return;
@@ -534,7 +585,14 @@ function tearDownStaticAnchorKeysByIid(iid: string): void {
   STATIC_ANCHOR_KEYS_BY_IID.delete(iid);
 }
 
-// cuts all audio for an entity at the killing blow — doesn't wait for the death animation to finish
+/**
+ * @function    unregisterEntityAudio
+ * @description Cuts all audio an entity owns at the killing blow — moving/walk anchors, periodic timers, sequence playlist, and (if an iid is given) its static anchors — rather than waiting for the death animation to end.
+ * @param   sprite  The dying entity.
+ * @param   iid     Optional LDtk instance id, for tearing down static anchors keyed by iid.
+ * @calledby src/entities/Enemy.ts → the death path, the instant an enemy is killed
+ * @calls    tearDownMovingAnchorKeys, tearDownPeriodicTimerKeys, tearDownEntitySoundSequence, tearDownStaticAnchorKeysByIid
+ */
 export function unregisterEntityAudio(
   sprite: PositionedGameObject,
   iid?: string,
@@ -547,7 +605,14 @@ export function unregisterEntityAudio(
   }
 }
 
-// schedules self-rescheduling one-shots for a creature (e.g. crow caw) with a random delay; silent past maxRadius
+/**
+ * @function    registerEntityPeriodicSound
+ * @description Schedules self-rescheduling one-shots for a creature (e.g. a crow caw) at a random delay in each binding's interval; each fire is distance-gated (silent past maxRadius, linear falloff within).
+ * @param   entityIdentifier  LDtk type to look up periodic bindings for.
+ * @param   sprite            The creature emitting the one-shots.
+ * @calledby src/scenes/GameScene.ts → creature spawn, for entities with periodic-sound bindings
+ * @calls    getEntityPeriodicSoundBindings/getSoundDefinition, Phaser's timer + sound managers, and the cached player position for gating
+ */
 export function registerEntityPeriodicSound(
   scene: Phaser.Scene,
   entityIdentifier: string,
@@ -606,7 +671,14 @@ export function registerEntityPeriodicSound(
 
 // hysteresis margin past maxRadius before culling; stops edge-of-range enemies from pausing/resuming every frame
 const AUDIBLE_CULL_MARGIN_PX = 96;
-// per-frame spatial volume update for all anchors and sequences; pauses (not just mutes) out-of-range voices to save audio thread
+/**
+ * @function    updateEntitySounds
+ * @description Per-frame spatial volume update for all entity anchors and sequence clips — caches the player position, pauses (not just mutes) disabled and out-of-range voices to save the audio thread, resumes ones back in earshot, and lerps volume across the linear falloff band. Cull uses a hysteresis margin so edge-of-range voices don't pause/resume every frame.
+ * @param   playerX  The player's live world X — falloff origin and gate for off-frame periodic timers.
+ * @param   playerY  The player's live world Y.
+ * @calledby Phaser per-frame update loop (via src/scenes/GameScene.ts → update)
+ * @calls    Phaser's per-sound pause/resume and setVolume on the concrete WebAudioSound subclass
+ */
 export function updateEntitySounds(playerX: number, playerY: number): void {
   lastPlayerX = playerX;
   lastPlayerY = playerY;
@@ -671,20 +743,12 @@ export function updateEntitySounds(playerX: number, playerY: number): void {
   }
 }
 
-// TEMP DIAGNOSTIC: live collection sizes for the DEBUG_AUDIO logger (growing counts = leak; flat counts + dead audio = saturation)
-export function debugAudioCounts(): {
-  anchors: number;
-  sequences: number;
-  periodic: number;
-} {
-  return {
-    anchors: ENTITY_ANCHORS.size,
-    sequences: SEQUENCE_STATES.size,
-    periodic: PERIODIC_TIMERS.size,
-  };
-}
-
-// destroys all entity audio for HMR world rebuilds; NOT called on scene.restart (iid dedup handles that)
+/**
+ * @function    clearEntitySounds
+ * @description Destroys all entity audio — anchors, periodic timers, and sequence clips — and clears every index. For HMR world rebuilds only; NOT called on scene.restart, where iid dedup keeps voices alive.
+ * @calledby src/scenes/GameScene.ts → the HMR path that rebuilds the world from scratch
+ * @calls    Phaser stop/destroy on each voice and TimerEvent.remove on each timer
+ */
 export function clearEntitySounds(): void {
   for (const anchor of ENTITY_ANCHORS.values()) {
     anchor.sound.stop();
@@ -709,7 +773,15 @@ export function clearEntitySounds(): void {
 // cached active state per slot; short-circuits same-value calls on the hot per-frame path
 const PLAYER_SOUND_ACTIVE: Map<PlayerSoundSlot, boolean> = new Map();
 
-// toggles a player-state loop (footsteps, cloth, falling-whoosh); lazy-creates at volume 0, fades but never destroys
+/**
+ * @function    setPlayerStateSoundActive
+ * @description Toggles a player-state loop (footsteps, cloth, falling-whoosh) — lazy-creates the voice at volume 0 on first use, then fades to the default volume or silence; never destroys (the loop lives for the session). Short-circuits same-value calls on this hot path.
+ * @param   slot    Which player-state loop.
+ * @param   active  Whether the loop should be audible.
+ * @param   fadeMs  Crossfade duration; defaults to the snappy PLAYER_STATE_CROSSFADE_MS.
+ * @calledby src/entities/Player.ts and src/entities/playerMovementAudio.ts → as walk/slide/fall begin and end
+ * @calls    getPlayerStateSoundId/getSoundDefinition, Phaser's sound manager, and fadeSoundDuration
+ */
 export function setPlayerStateSoundActive(
   scene: Phaser.Scene,
   slot: PlayerSoundSlot,
@@ -742,7 +814,16 @@ const DEFAULT_ONE_SHOT_SPATIAL: SpatialConfig = {
   maxRadius: 320,
 };
 
-// plays a sound once and frees it on completion; pass an emitter for spatial falloff, omit for camera-fixed sounds
+/**
+ * @function    playOneShot
+ * @description Plays a sound once and frees it on completion. With an emitter it applies spatial falloff (silent past maxRadius, linear within) off the cached player position; without one it plays camera-fixed at default volume. Frees on COMPLETE or STOP plus a duration safety net, since interrupted one-shots may never fire COMPLETE.
+ * @param   soundId  Registry id of the sound.
+ * @param   seekSec  Start offset in seconds; default 0.
+ * @param   emitter  Optional {x, y} world position for spatial falloff.
+ * @returns the BaseSound, or null if the id is unknown or the emitter is out of earshot; frees the voice as a side effect.
+ * @calledby widely used — combat/interaction code firing transient SFX: Player, Enemy, Trap, Chest, Door, GameScene, LandingScene, PauseScene
+ * @calls    getSoundDefinition, the cached player position, Phaser's sound manager, and a delayed-call safety-net free
+ */
 export function playOneShot(
   scene: Phaser.Scene,
   soundId: string,
@@ -789,7 +870,16 @@ export function playOneShot(
   return sound;
 }
 
-// the fade primitive: kills any in-flight tween on the sound first, then tweens volume to target over durationMs
+/**
+ * @function    fadeSoundDuration
+ * @description The fade primitive — kills any in-flight tween on the sound, then tweens its volume to target over durationMs.
+ * @param   sound       The voice to fade.
+ * @param   target      Target volume in [0, 1].
+ * @param   durationMs  Fade duration in ms.
+ * @param   onComplete  Optional callback fired when the tween finishes.
+ * @calledby setPlayerStateSoundActive and fadeSound
+ * @calls    the scene tween manager (killTweensOf/add)
+ */
 function fadeSoundDuration(
   scene: Phaser.Scene,
   sound: Phaser.Sound.BaseSound,
@@ -806,7 +896,15 @@ function fadeSoundDuration(
   });
 }
 
-// 1.5s ambience fade — thin wrapper so level-transition call sites stay readable
+/**
+ * @function    fadeSound
+ * @description Ambience-fade wrapper at AMBIENCE_CROSSFADE_MS (1.5s) so level-transition call sites stay readable.
+ * @param   sound       The voice to fade.
+ * @param   target      Target volume in [0, 1].
+ * @param   onComplete  Optional callback fired when the fade finishes.
+ * @calledby setLevelAmbience
+ * @calls    fadeSoundDuration
+ */
 function fadeSound(
   scene: Phaser.Scene,
   sound: Phaser.Sound.BaseSound,

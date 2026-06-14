@@ -10,28 +10,24 @@ import {
 } from '../manualSection';
 
 /**
- * combatSection — builds the manual's "Combat" tab (one animated demo per attack).
- *
- * Lays out a looping animated preview for each attack (sword / magic / gun1 / gun2),
- * each cycling its full combo chain, beside a short how-to with its key chips. The
- * previews are created here and returned in the ManualSection so the overlay can
- * drive them: they run on their own rAF loop because Phaser's animation manager is
- * paused while the menu is open, so the overlay starts/stops them as the tab is
- * shown or hidden. A preview that can't be built degrades to a "preview unavailable"
- * placeholder rather than breaking the row.
- *
- * Inputs:  the scene (for sprite previews), the weapon-demo table, and DOM helpers.
- * Outputs: a ManualSection whose element tree AND list of live previews are returned.
- * @calledby the in-game manual overlay, when assembling its tab pages.
- * @calls    the weapon-demo source, the animated-sprite-preview factory, and the
- *           shared manual DOM/key-chip helpers.
+ * @file ui/manual/sections/combatSection.ts
+ * @description Builds the manual's "Combat" tab — one looping animated preview per attack (sword/magic/gun1/gun2) beside a short how-to with key chips. Previews are returned in the ManualSection so the overlay can drive their own rAF loop (Phaser's anim manager is paused while the menu is open); an unbuildable preview degrades to a "preview unavailable" placeholder.
+ * @module ui/manual/sections
  */
 
-// max stage size (CSS px) that previews are fitted into
+// ── Preview stage size ─────────────────────────────────────────────────────
+// Max stage size (CSS px) that previews are fitted into.
 const PREVIEW_MAX_WIDTH_PX = 520;
 const PREVIEW_MAX_HEIGHT_PX = 128;
 
-// builds the Combat tab: one animated demo row per weapon, collecting previews for the overlay to drive
+/**
+ * @function    buildCombatSection
+ * @description Builds the Combat tab: one animated demo row per weapon, collecting previews for the overlay to drive; a missing preview degrades to a placeholder.
+ * @param   scene  For constructing the sprite previews from loaded textures.
+ * @returns a ManualSection whose element tree AND list of live previews are returned.
+ * @calledby src/ui/ManualOverlay.ts → the TABS registry, built when the overlay assembles its tab pages
+ * @calls    src/ui/manual/combatClips.ts → buildWeaponDemos, the AnimatedSpritePreview factory, and src/ui/manual/manualSection.ts → keyChips/el/paragraph
+ */
 export function buildCombatSection(scene: Phaser.Scene): ManualSection {
   const root = sectionRoot();
   const previews: AnimatedSpritePreview[] = [];

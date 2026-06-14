@@ -125,6 +125,12 @@ import {
   type PlayerSnapshot,
 } from './playerSnapshot';
 
+/**
+ * @file scenes/GameScene.ts
+ * @description Main gameplay scene and world orchestrator — builds the multi-level world from the parsed LDtk project (every level rendered at its world coords, one collision tilemap per level, the A* nav graph, all entities and colliders), ticks player/enemies/doors/traps/interactions each frame, and routes the scene-bus events for saving, shopping, locked doors, boss defeat, and the portal victory warp. The world is rebuilt IN PLACE (teardown then build) for HMR LDtk edits, respawn-from-save, and New Game/Quit; the build is NOT idempotent (teardown must precede a second build), and since Phaser reuses the scene instance across rebuilds, state that must survive a rebuild (saveSlot, boss-key run progress, the HUD rig) is held outside the world lifecycle. Heavy subsystems delegate to per-scene collaborators (GameHud, BossEncounterController, TrapSystem, InteractionManager, EnemyRespawnManager, NavGraph) that this scene wires together.
+ * @module scenes
+ */
+
 interface LevelSlot {
   // LDtk identifier used to pick per-level ambience.
   identifier: string;
@@ -134,6 +140,9 @@ interface LevelSlot {
   pxHei: number;
   rendered: RenderedLevel;
 }
+
+// ── World constants ────────────────────────────────────────────────────────
+// Level-culling padding and the wasp/hive identifiers used to scope teleport targeting and swarm tethering.
 
 // Generous padding so adjacent levels are visible before fast falls reach them.
 const LEVEL_VISIBILITY_PADDING_PX = 512;
@@ -147,36 +156,6 @@ const TELEPORT_TARGET_BLOCKLIST: ReadonlySet<string> = new Set([
 const HIVE_ANCHORED_IDENTIFIER = 'Wasp_spawn';
 const HIVE_BEACON_IDENTIFIER = 'The_hive_spawn';
 
-
-/**
- * GameScene — the main gameplay scene and world orchestrator.
- *
- * Owns the entire run: it builds the multi-level world from the parsed LDtk
- * project (every level rendered at its world coords, one collision tilemap per
- * level, the A* nav graph, all entities and their colliders), ticks the player /
- * enemies / doors / traps / interactions each frame, and routes the scene-bus
- * events that drive saving, shopping, locked doors, boss defeat, and the portal
- * victory warp. The world is rebuilt IN PLACE — tearDownWorld() then buildWorld()
- * — for HMR LDtk edits, respawn-from-save, and New Game/Quit; buildWorld is NOT
- * idempotent (teardown must precede a second build) and Phaser reuses the scene
- * instance across these rebuilds, so per-scene state that must survive a rebuild
- * (saveSlot, boss-key run progress, the HUD rig) is deliberately held outside the
- * world lifecycle. Heavy subsystems are delegated to per-scene collaborators
- * (GameHud, BossEncounterController, TrapSystem, InteractionManager,
- * EnemyRespawnManager, NavGraph) and this scene wires them together.
- *
- * Inputs:  the parsed LDtk project, PreloadScene's landing flag, player input
- *          (ESC key), scene-bus events from entities, and the persistent
- *          run-progress / save state.
- * Outputs: the live world (sprites, colliders, physics/camera bounds), music and
- *          per-level ambience, floating save/locked-door text, and the
- *          pause/shop/landing/victory sub-scenes it launches.
- * @calledby the Phaser scene manager (lifecycle hooks) and the pause menu, which
- *           reaches across the pause boundary to abandon or restart the run.
- * @calls    the audio module, the LDtk parse/render/collision/nav pipeline, the
- *           entity factory, and its delegated HUD / boss / trap / interaction
- *           collaborators.
- */
 export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   private player!: Player;
   // One collision tilemap per level; wired against all player/projectile colliders for seamless transitions.
@@ -241,12 +220,17 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     super({ key: SCENE_KEYS.GAME });
   }
 
-  // Stores whether to show the landing page — skipped on HMR and scene.restart().
+  /** Records whether to show the landing page — skipped on HMR and scene.restart(). */
   init(data: { startLanding?: boolean } = {}): void {
     this.shouldShowLanding = data.startLanding ?? false;
   }
 
-  // Builds the world, starts music, and routes to landing or straight gameplay.
+  /**
+   * @function    create
+   * @description Build the world, start music, and route to the landing page or straight into gameplay; also wires the HMR subscription and the ESC/shutdown bindings.
+   * @calledby Phaser world-build (create) — first boot and scene.restart
+   * @calls    src/scenes/GameScene.ts → buildWorld, positionCameraForLanding; the music player; src/scenes/gameHud.ts → attach
+   */
   create(): void {
     this.buildWorld(parseLdtkProject(ldtkRaw));
     // Idempotent — a respawn won't restart it; deferred past the first-boot audio lock.
@@ -268,7 +252,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.onSceneShutdown, this);
   }
 
-  // Frames the camera for the title screen — player left, START button right.
+  /**
+   * @function    positionCameraForLanding
+   * @description Frame the camera for the title screen — player on the left third, START button on the right, behind the title overlay.
+   * @calledby src/scenes/GameScene.ts → create, restartRun (the landing-page setup)
+   * @calls    src/scenes/GameScene.ts → getLevelBoundsAt and the camera's centerOn
+   */
   private positionCameraForLanding(): void {
     const cam = this.cameras.main;
     const centerX =
@@ -281,7 +270,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     cam.centerOn(centerX, baseCenterY + LANDING_CAMERA_Y_OFFSET_PX);
   }
 
-  // Hands the player control after START fades to black: attaches HUD, starts ambience, then fades the world back in.
+  /**
+   * @function    beginGameplay
+   * @description Hand the player control after START fades to black — clear the landing flag, attach/hide then fade the HUD, set ambience, and after a black-hold re-arm the follow camera and re-enable controls. No-op unless the landing overlay is active.
+   * @calledby src/scenes/LandingScene.ts → the START commit, at full black
+   * @calls    src/scenes/gameHud.ts → attach/hideForLanding/fadeIn, the ambience setter, and the camera/player after a delayed black-hold
+   */
   beginGameplay(): void {
     if (!this.landingActive) return;
     this.landingActive = false;
@@ -302,7 +296,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     });
   }
 
-  // Wipes the run, rebuilds the world, and goes to title or straight gameplay.
+  /**
+   * @function    restartRun
+   * @description Wipe the run, rebuild the world, and route to the title or straight into gameplay — resets boss engagement, run progress, and the victory latch; the HUD is dropped only when returning to the title.
+   * @param   showLanding  True routes back to the title overlay; false drops into gameplay.
+   * @param   fadeIn       True fades the camera up from a death fade-out (LandingScene fades in simultaneously).
+   * @calledby src/scenes/PauseScene.ts → New Game/Quit, src/scenes/VictoryScene.ts → the victory return, src/scenes/GameScene.ts → returnToHomeScreen (no-save death)
+   * @calls    src/scenes/GameScene.ts → tearDownWorld, buildWorld, positionCameraForLanding; the run-progress reset; src/scenes/gameHud.ts → the HUD teardown/attach
+   */
   restartRun(showLanding: boolean, fadeIn = false): void {
     this.anims.resumeAll();
 
@@ -342,7 +343,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     }
   }
 
-  // Opens the pause menu and freezes animations; no-op during the landing overlay.
+  /**
+   * @function    openPauseMenu
+   * @description Pause animations, launch the pause scene, and pause this scene; no-op during the landing overlay.
+   * @calledby Phaser keydown-ESC event (registered in create during gameplay)
+   * @calls    the animation system and Phaser scene launch/pause
+   */
   private openPauseMenu(): void {
     if (this.landingActive) return;
     this.anims.pauseAll();
@@ -350,7 +356,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.scene.pause();
   }
 
-  // Opens the merchant shop overlay and pauses the scene while the player shops.
+  /**
+   * @function    openShop
+   * @description Lazily build the merchant shop overlay, open it for the current level/player, and pause the scene; no-op during landing or if already open.
+   * @param   payload  Which merchant inventory to show ({ kind }).
+   * @calledby SHOP_REQUESTED scene-bus event (registered in wireWorldEvents), fired from a merchant interaction
+   * @calls    src/ui/ShopOverlay.ts → the shop DOM overlay; its onClose resumes animations and the scene
+   */
   private openShop(payload: { kind: ShopKind }): void {
     if (this.landingActive) return;
     if (!this.shopOverlay) {
@@ -372,7 +384,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.scene.pause();
   }
 
-  // Per-frame tick: player → enemies → boss → traps → doors → respawn → interactions → camera → cull → ambience → sounds.
+  /**
+   * @function    update
+   * @description Per-frame tick in fixed order — player, enemies, boss, traps, doors, respawn, interactions, then camera/cull/ambience/spatial-audio; camera-lag clamping is skipped during the landing overlay.
+   * @calledby Phaser per-frame update loop
+   * @calls    each subsystem's per-frame tick (player/enemy/boss/trap/door/respawn/interaction) and the camera/cull/ambience/audio updates
+   */
   update(): void {
     this.player.update();
     this.updateEnemies();
@@ -399,7 +416,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     updateEntitySounds(this.player.x, this.player.y);
   }
 
-  // Crossfades ambience when the player enters a new level; cached to skip no-op frames.
+  /**
+   * @function    updateAmbience
+   * @description Crossfade ambience when the player enters a new level, guarded by the cached last level so unchanged frames are no-ops.
+   * @calledby src/scenes/GameScene.ts → update (per-frame update loop)
+   * @calls    src/scenes/GameScene.ts → getCurrentLevelId and the ambience setter
+   */
   private updateAmbience(): void {
     const levelId = this.getCurrentLevelId();
     if (levelId === null) return;
@@ -408,45 +430,51 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     setLevelAmbience(this, levelId);
   }
 
-  // ── GameHudHost contract ──────────────────────────────────────────────────
+  // ── Host-contract accessors (GameHudHost / BossEncounterHost / EnemyHelperScene / TrapSystemHost) ───
+
+  /** The live player; consumed by the HUD and boss controller. */
   getPlayer(): Player {
     return this.player;
   }
 
-  // The round-fight boss the player is currently engaged with, or null.
+  /** The round-fight boss the player is currently engaged with, or null. */
   getActiveBoss(): Enemy | null {
     return this.activeBoss;
   }
 
-  // Timestamp the arena-escape countdown lapses at, or null when not escaping.
+  /** Timestamp the arena-escape countdown lapses at, or null when not escaping. */
   getEscapeDeadline(): number | null {
     return this.bossController.getEscapeDeadline();
   }
 
-  // BossEncounterHost hook: the controller's fight-reset clears the engagement so
-  // the enemy pass won't re-select the boss until the player re-enters.
+  /** BossEncounterHost hook: the controller's fight-reset clears the engagement so the enemy pass won't re-select the boss until the player re-enters. */
   clearActiveBoss(): void {
     this.activeBoss = null;
   }
 
-  // EnemyHelperScene hook for enemy 'summon' attacks — delegates to the boss
-  // controller, which owns minion spawning/tracking.
+  /** EnemyHelperScene hook for enemy 'summon' attacks — delegates to the boss controller, which owns minion spawning/tracking. */
   summonEnemyAt(identifier: string, x: number, y: number): Enemy | null {
     return this.bossController.summonEnemyAt(identifier, x, y);
   }
 
-  // Highest per-enemy detection level this frame (drives the HUD corners).
+  /** Highest per-enemy detection level this frame (drives the HUD corners). */
   getMaxAlertLevel(): number {
     return this.maxAlertLevel;
   }
 
-  // LDtk identifier of the level containing the player, or null between levels
-  // (mid-jump across a seam). Public: part of the TrapSystemHost contract.
+  /** LDtk identifier of the level containing the player, or null between levels (mid-jump across a seam); part of the TrapSystemHost contract. */
   getCurrentLevelId(): string | null {
     return this.findLevelIdAt(this.player.x, this.player.y);
   }
 
-  // Level identifier containing world point (x, y), or null if between levels.
+  /**
+   * @function    findLevelIdAt
+   * @description LDtk identifier of the level containing world point (x, y), or null when the point lands in no level (a seam) — scans the cached level slots and returns the first rect to contain it.
+   * @param   x, y  A world-pixel point.
+   * @returns the containing level's LDtk identifier, or null.
+   * @calledby src/scenes/GameScene.ts → getCurrentLevelId, src/scenes/trapSystem.ts → update (the TrapSystemHost contract)
+   * @calls    —
+   */
   findLevelIdAt(x: number, y: number): string | null {
     for (const slot of this.levelSlots) {
       if (
@@ -461,7 +489,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     return null;
   }
 
-  // Ticks every enemy's AI and resolves active boss, stealth-off flag, and max alert level in one pass.
+  /**
+   * @function    updateEnemies
+   * @description Tick every enemy's AI and, in one pass, refresh activeBoss (first encountered round-fight boss alive), bossEngaged (any boss in play), and maxAlertLevel for this frame; all three clear when no enemies group exists yet.
+   * @calledby src/scenes/GameScene.ts → update (per-frame update loop)
+   * @calls    each enemy's update and its boss/alert state queries
+   */
   private updateEnemies(): void {
     if (!this.enemies) {
       this.activeBoss = null;
@@ -502,7 +535,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
   }
 
 
-  // Ticks every door's proximity state machine so collider passability is current.
+  /**
+   * @function    updateDoors
+   * @description Advance every door's proximity open/close state machine so collider passability is current; no-op before the world is spawned.
+   * @calledby src/scenes/GameScene.ts → update (per-frame update loop)
+   * @calls    src/entities/Door.ts → update with the player position
+   */
   private updateDoors(): void {
     if (!this.spawned) return;
     const px = this.player.x;
@@ -512,7 +550,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     }
   }
 
-  // Caps vertical camera lag so fast falls can't push the player off screen.
+  /**
+   * @function    clampCameraLag
+   * @description Cap vertical camera lag so fast falls can't push the player off screen — clamps scrollY to within the max vertical lag of the ideal follow position (raw pixels, matching Phaser's own follow math).
+   * @calledby src/scenes/GameScene.ts → update (per-frame update loop), except while the landing overlay frames the camera
+   * @calls    —
+   */
   private clampCameraLag(): void {
     const cam = this.cameras.main;
     // RAW pixels, not zoom-divided — matches Phaser's own follow target calculation.
@@ -525,7 +568,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     );
   }
 
-  // Hides off-screen level containers so Phaser skips their tiles; uses midPoint+displaySize, not scrollX/zoom (which undershoots at zoom 3).
+  /**
+   * @function    cullOffscreenLevels
+   * @description Hide off-screen level containers so Phaser skips their tiles, and pause/resume their glow-flicker tweens — uses midPoint and display size, not scrollX/zoom (which undershoots at zoom 3); the unchanged-visibility early-out also gates the tween pause/resume to real transitions.
+   * @calledby src/scenes/GameScene.ts → update (per-frame update loop)
+   * @calls    each level slot's container visibility and its tweens
+   */
   private cullOffscreenLevels(): void {
     const cam = this.cameras.main;
     const halfDispW = cam.displayWidth * 0.5;
@@ -556,7 +604,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     }
   }
 
-  // Returns true if a solid collision tile exists at world (x, y).
+  /**
+   * @function    isTileSolidAt
+   * @description True if any level's collision layer has a colliding tile at world (x, y).
+   * @param   x, y  A world-pixel point.
+   * @returns whether a solid collision tile exists there.
+   * @calledby src/scenes/trapSystem.ts → update (TrapSystemHost) and src/entities/enemyLeapProbes.ts → the leap probes (EnemyHelperScene)
+   * @calls    each collision layer's getTileAtWorldXY
+   */
   isTileSolidAt(x: number, y: number): boolean {
     for (const layer of this.collisionLayers) {
       const tile = layer.getTileAtWorldXY(x, y);
@@ -565,7 +620,15 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     return false;
   }
 
-  // A* path from foot-point to goal; returns world-px waypoints or null if unreachable.
+  /**
+   * @function    findEnemyPath
+   * @description A* path from a foot-point to a goal, mapping node ids back to world points; null if the nav graph is missing, either endpoint lands off-graph, or no path exists within the expansion budget.
+   * @param   startX, startY  The enemy foot point.
+   * @param   goalX, goalY    The target world point.
+   * @returns an array of world-pixel waypoints, or null.
+   * @calledby src/entities/EnemyNavFollower.ts → grounded enemy navigation routing around walls (EnemyHelperScene)
+   * @calls    src/level/NavGraph.ts → nodeAt and src/level/NavPathfinder.ts → findPath
+   */
   findEnemyPath(
     startX: number,
     startY: number,
@@ -586,7 +649,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     });
   }
 
-  // World rect of the level containing (x, y), or null if between levels.
+  /**
+   * @function    getLevelBoundsAt
+   * @description World rect of the level containing (x, y), or null at a seam — scans the cached level slots for the first rect to contain the point.
+   * @param   x, y  A world-pixel point.
+   * @returns the containing level's { worldX, worldY, pxWid, pxHei }, or null.
+   * @calledby src/scenes/GameScene.ts → positionCameraForLanding, getNearestEnemy, killEnemiesInLevel; src/level/BossEncounterController.ts → arena bounds; src/entities/enemyLeapProbes.ts (EnemyHelperScene)
+   * @calls    —
+   */
   getLevelBoundsAt(
     x: number,
     y: number,
@@ -609,7 +679,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     return null;
   }
 
-  // Raw IntGrid tile index at world (x, y), or 0 if empty — drives surface footstep sounds.
+  /**
+   * @function    getIntGridValueAt
+   * @description Raw IntGrid tile index at world (x, y), or 0 when no tile is present — drives surface footstep sounds.
+   * @param   x, y  A world-pixel point.
+   * @returns the tile index there, or 0.
+   * @calledby src/entities/Player.ts and src/entities/Enemy.ts → the footstep-surface audio path (EnemyHelperScene)
+   * @calls    each collision layer's getTileAtWorldXY
+   */
   getIntGridValueAt(x: number, y: number): number {
     for (const layer of this.collisionLayers) {
       const tile = layer.getTileAtWorldXY(x, y);
@@ -618,7 +695,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     return 0;
   }
 
-  // Body-center of the nearest valid teleport target — same level, line of sight, not blocklisted.
+  /**
+   * @function    getNearestEnemy
+   * @description Body-center of the nearest valid teleport target — same level, in line of sight, not blocklisted; skips dead, off-level, and blocklisted (wasp/hive) targets. Null if the searcher is between levels or nothing qualifies.
+   * @param   x, y  The searcher's world point.
+   * @returns the nearest qualifying enemy's body center, or null.
+   * @calledby src/entities/Player.ts → resolving a teleport-blink target
+   * @calls    src/scenes/GameScene.ts → getLevelBoundsAt, isLineBlocked; each enemy's body center
+   */
   getNearestEnemy(x: number, y: number): { x: number; y: number } | null {
     if (!this.enemies) return null;
     // Scope to the player's level; bail if they're between levels.
@@ -657,7 +741,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     return found ? { x: nearestX, y: nearestY } : null;
   }
 
-  // Calls cb for every live (non-dead) enemy in the world.
+  /**
+   * @function    forEachEnemy
+   * @description Run cb for every live (non-dead) enemy in the world; no-op before the world is built.
+   * @param   cb  Callback run per live enemy.
+   * @calledby src/scenes/GameScene.ts → alertEnemiesToGunshot; src/level/BossEncounterController.ts → enemy-wide sweeps (EnemyHelperScene)
+   * @calls    cb per non-dead enemy in the group
+   */
   forEachEnemy(cb: (enemy: Enemy) => void): void {
     if (!this.enemies) return;
     for (const obj of this.enemies.getChildren()) {
@@ -667,7 +757,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     }
   }
 
-  // Coarse LOS test: samples the segment at tile-width intervals, returns true if any sample hits solid.
+  /**
+   * @function    isLineBlocked
+   * @description Coarse LOS test — samples the segment at tile-width intervals; true if any interior sample lands on a colliding tile, false for a zero-length segment.
+   * @param   x1, y1, x2, y2  The two world-point endpoints.
+   * @returns whether the line of sight is blocked.
+   * @calledby src/scenes/GameScene.ts → getNearestEnemy; src/entities/Enemy.ts → its line-of-sight gates (EnemyHelperScene)
+   * @calls    each collision layer's getTileAtWorldXY at the sampled points
+   */
   isLineBlocked(x1: number, y1: number, x2: number, y2: number): boolean {
     const dx = x2 - x1;
     const dy = y2 - y1;
@@ -687,13 +784,18 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     return false;
   }
 
-  // True while any boss fight is active (resolved each frame in the enemy pass);
-  // every enemy reads this to drop stealth. Cheap field read, one-frame latency.
+  /** True while any boss fight is active (resolved each frame in the enemy pass); every enemy reads this to drop stealth — cheap field read, one-frame latency. */
   isStealthDisabled(): boolean {
     return this.bossEngaged;
   }
 
-  // Spawns a player projectile and notifies all enemies so dodge-reactive ones can respond.
+  /**
+   * @function    spawnProjectile
+   * @description Spawn a depth-set player projectile into the player projectile group and tell every enemy where it fired so dodge-reactive ones can respond.
+   * @param   options  The projectile spawn parameters.
+   * @calledby src/entities/Player.ts → the player's ranged attack
+   * @calls    the Projectile constructor and each enemy's notifyPlayerProjectileFired
+   */
   spawnProjectile(options: ProjectileSpawnOptions): void {
     const projectile = new Projectile(this, options);
     projectile.setDepth(ENTITY_DEPTH);
@@ -707,7 +809,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     }
   }
 
-  // Alerts nearby stealth enemies to the gunshot position — sound carries through walls.
+  /**
+   * @function    alertEnemiesToGunshot
+   * @description Call hearGunshot on every enemy within the hearing radius (squared-distance test, no LOS — sound carries through walls); no-op while stealth is disabled.
+   * @param   x, y  The gunshot world point.
+   * @calledby src/entities/Player.ts → the player firing a gun
+   * @calls    src/scenes/GameScene.ts → forEachEnemy and each enemy's hearGunshot
+   */
   alertEnemiesToGunshot(x: number, y: number): void {
     if (this.isStealthDisabled()) return;
     const radiusSq =
@@ -719,14 +827,26 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     });
   }
 
-  // Spawns an enemy-fired projectile into the scene's tracked group.
+  /**
+   * @function    spawnEnemyProjectile
+   * @description Spawn a depth-set enemy-fired projectile into the separate enemy-projectile group.
+   * @param   options  The enemy-projectile spawn parameters.
+   * @calledby src/entities/Enemy.ts → an enemy's ranged attack (EnemyHelperScene)
+   * @calls    the EnemyProjectile constructor
+   */
   spawnEnemyProjectile(options: EnemyProjectileSpawnOptions): void {
     const projectile = new EnemyProjectile(this, options);
     projectile.setDepth(ENTITY_DEPTH);
     this.enemyProjectiles.add(projectile);
   }
 
-  // Builds the entire world from LDtk — levels, nav, entities, colliders, camera. NOT idempotent; teardown first.
+  /**
+   * @function    buildWorld
+   * @description Build the entire world from LDtk in order — world bounds, levels, nav graph, entity groups, spawned entities, trap system, wired world events and colliders, the follow camera/bounds, and the armed death handler. NOT idempotent; teardown must precede a second build.
+   * @param   project  The parsed LDtk project.
+   * @calledby src/scenes/GameScene.ts → create, restartRun, respawnFromSave, onLdtkChange (always after teardown)
+   * @calls    src/scenes/GameScene.ts → setWorldBoundsFromLevels, renderAllLevels, buildNavGraph, createEntityGroups, collectWorldEntities, spawnAndWireEntities, wireWorldEvents, wireColliders, setupCameraAndBounds, armPlayerDeathHandler
+   */
   private buildWorld(project: LdtkProject): void {
     const bounds = this.setWorldBoundsFromLevels(project);
     const navLevels = this.renderAllLevels(project);
@@ -748,7 +868,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.armPlayerDeathHandler();
   }
 
-  // Union of all level rects → physics world bounds; returns the union for camera setup.
+  /**
+   * @function    setWorldBoundsFromLevels
+   * @description Set the physics world bounds to the union of all level rects and return that union for camera setup.
+   * @param   project  The parsed LDtk project.
+   * @returns the bounding union as { minX, minY, maxX, maxY }.
+   * @calledby src/scenes/GameScene.ts → buildWorld (its first step)
+   * @calls    the physics world's setBounds
+   */
   private setWorldBoundsFromLevels(project: LdtkProject): {
     minX: number;
     minY: number;
@@ -769,7 +896,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     return { minX, minY, maxX, maxY };
   }
 
-  // Renders every level, builds per-level collision tilemaps, and returns IntGrid data for the nav graph.
+  /**
+   * @function    renderAllLevels
+   * @description Render every level, push a LevelSlot and a collision layer per level, and return the per-level NavLevel data for the nav graph; throws if no tileset has a loadable path to back the invisible collision tilemap.
+   * @param   project  The parsed LDtk project.
+   * @returns the per-level NavLevel data.
+   * @calledby src/scenes/GameScene.ts → buildWorld (after the world bounds are set)
+   * @calls    src/level/LevelRenderer.ts → renderLevel, the IntGrid reader, and src/level/LevelCollision.ts → buildIntGridCollision
+   */
   private renderAllLevels(project: LdtkProject): NavLevel[] {
     const tilesetUid = project.defs.tilesets.find((ts) => ts.relPath != null)?.uid;
     if (tilesetUid == null) {
@@ -814,14 +948,18 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     return navLevels;
   }
 
-  // Builds the A* nav graph from IntGrid data.
+  /** Build the A* nav graph from the per-level IntGrid data. */
   private buildNavGraph(navLevels: NavLevel[]): void {
     this.navGraph = new NavGraph(navLevels);
     this.navGraph.buildNodes();
   }
 
-  // Allocates the plain GameObjects.Groups every entity kind is added to (see the
-  // field declarations for why none are physics groups).
+  /**
+   * @function    createEntityGroups
+   * @description Allocate the fresh plain projectile/enemy/enemy-projectile/trap/static/ammo groups every entity kind is added to (plain, not physics — see the field declarations for why a physics group's createCallback would clobber per-body setup).
+   * @calledby src/scenes/GameScene.ts → buildWorld (before entities are spawned)
+   * @calls    the scene's group factory
+   */
   private createEntityGroups(): void {
     this.projectiles = this.add.group();
     this.enemies = this.add.group();
@@ -831,7 +969,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.ammoDrops = this.add.group();
   }
 
-  // Collects all LDtk entity instances for spawning — filters out defeated bosses and off-level player markers.
+  /**
+   * @function    collectWorldEntities
+   * @description Collect the spawnable LDtk entity list (filtering out defeated bosses and off-level player markers), seed the boss controller's spawn sites, and register spatial-audio anchors for sound-emitting decorations.
+   * @param   project  The parsed LDtk project.
+   * @returns the spawnable entity list.
+   * @calledby src/scenes/GameScene.ts → buildWorld (before the entities are spawned)
+   * @calls    the LDtk entity reader, the run-progress defeated-boss check, the boss controller's setSpawnSites, and registerEntitySound
+   */
   private collectWorldEntities(project: LdtkProject): LdtkEntityInstance[] {
     const allEntities = project.levels
       .flatMap(getEntities)
@@ -855,7 +1000,15 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     return allEntities;
   }
 
-  // Spawns all entities, wires enemies/traps/statics into their groups, and registers interactables.
+  /**
+   * @function    spawnAndWireEntities
+   * @description Spawn all entities, add enemies/traps/statics to their groups, resolve and depth-set the player, and register interactables (only key-locked doors interact); throws if no player spawned.
+   * @param   project      The parsed LDtk project.
+   * @param   allEntities  The collected spawnable instances.
+   * @returns the spawned-entities record.
+   * @calledby src/scenes/GameScene.ts → buildWorld (after the entity groups exist)
+   * @calls    src/entities/EntityFactory.ts → spawnEntities; src/scenes/GameScene.ts → attachEnemyToWorld, anchorSwarmerToHome; src/entities/InteractionManager.ts → registerAll
+   */
   private spawnAndWireEntities(
     project: LdtkProject,
     allEntities: LdtkEntityInstance[],
@@ -905,7 +1058,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     return spawned;
   }
 
-  // Subscribes all world-lifetime scene events (save, shop, locked door, boss defeat, portal warp).
+  /**
+   * @function    wireWorldEvents
+   * @description Subscribe this scene's handlers to the world-lifetime scene-bus events (save, shop, locked door, boss defeat, portal warp); tearDownWorld removes the symmetric off() bindings.
+   * @calledby src/scenes/GameScene.ts → buildWorld
+   * @calls    the scene event emitter's on() for each world event
+   */
   private wireWorldEvents(): void {
     this.events.on(SAVE_REQUESTED_EVENT, this.takeSave, this);
     this.events.on(SHOP_REQUESTED_EVENT, this.openShop, this);
@@ -916,7 +1074,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.events.on(PORTAL_WARP_COMPLETE_EVENT, this.onPortalWarpComplete, this);
   }
 
-  // Wires all terrain/door/projectile/trap/ammo colliders and overlaps, tracking each for teardown.
+  /**
+   * @function    wireColliders
+   * @description Register every terrain/door/projectile/trap/ammo collider and overlap and push each onto the tracked list so teardown can dispose them; door colliders use group colliders so respawn-added enemies are covered without re-wiring.
+   * @param   spawned     The spawned entities (for the door list).
+   * @param   trapSystem  The trap system, for its overlap callbacks.
+   * @calledby src/scenes/GameScene.ts → buildWorld (after the trap system is constructed)
+   * @calls    the Arcade physics collider/overlap factory and the trap system's overlap callbacks
+   */
   private wireColliders(
     spawned: SpawnedEntities,
     trapSystem: TrapSystem,
@@ -1047,7 +1212,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     );
   }
 
-  // Sets up the follow camera: zoom, lerp, vertical offset, and world bounds.
+  /**
+   * @function    setupCameraAndBounds
+   * @description Configure the main camera — zoom, player-follow with lerp, vertical offset, and world bounds (roundPixels keeps pixel art crisp).
+   * @param   bounds  The world-rect union from the level pass.
+   * @calledby src/scenes/GameScene.ts → buildWorld (after colliders are wired)
+   * @calls    the camera's zoom/follow/offset/bounds setters
+   */
   private setupCameraAndBounds(bounds: {
     minX: number;
     minY: number;
@@ -1067,7 +1238,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     );
   }
 
-  // Arms the death handler: after a delay, respawns from save or returns to title.
+  /**
+   * @function    armPlayerDeathHandler
+   * @description On player death, schedule a delayed respawn-from-save or, with no save, a return to the home screen; captures the current player so a rebuilt one can't fire the stale handler.
+   * @calledby src/scenes/GameScene.ts → buildWorld (its final step)
+   * @calls    the player's one-time PLAYER_DIED_EVENT, then src/scenes/GameScene.ts → respawnFromSave or returnToHomeScreen
+   */
   private armPlayerDeathHandler(): void {
     const diedPlayer = this.player;
     this.player.once(PLAYER_DIED_EVENT, () => {
@@ -1082,7 +1258,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     });
   }
 
-  // Adds a new enemy to the world: depth, group, audio bindings, and optional respawn tracking.
+  /**
+   * @function    attachEnemyToWorld
+   * @description Add a new enemy to the world — depth, the enemy group, its sound registrations, and (optionally) a respawn enqueue when it later dies; the already-dead guard prevents enqueuing an enemy destroyed by HMR teardown.
+   * @param   enemy            The enemy to attach.
+   * @param   trackForRespawn  False to skip the respawn enqueue (e.g. minions).
+   * @calledby src/scenes/GameScene.ts → spawnAndWireEntities, handleRespawn; src/level/BossEncounterController.ts → reinforcements/copies
+   * @calls    the moving/walk/periodic/sequence sound registrars and the respawn manager
+   */
   attachEnemyToWorld(enemy: Enemy, trackForRespawn = true): void {
     enemy.setDepth(ENTITY_DEPTH);
     this.enemies.add(enemy);
@@ -1099,7 +1282,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     }
   }
 
-  // Tethers a wasp to its nearest hive so it loiters there instead of roaming freely.
+  /**
+   * @function    anchorSwarmerToHome
+   * @description Tether a wasp to its nearest hive spawn (or its own spawn if none) so it loiters there instead of roaming freely; non-wasps are ignored.
+   * @param   enemy  Only wasps are anchored; others are ignored.
+   * @calledby src/scenes/GameScene.ts → spawnAndWireEntities, handleRespawn (after all enemies exist)
+   * @calls    the enemy spawn-point getters and setHomeAnchor
+   */
   private anchorSwarmerToHome(enemy: Enemy): void {
     if (enemy.getIdentifier() !== HIVE_ANCHORED_IDENTIFIER) return;
     const spawn = enemy.getSpawnPoint();
@@ -1122,7 +1311,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     enemy.setHomeAnchor(bestX, bestY);
   }
 
-  // Rouses every wasp anchored to this hive — only the struck hive's swarm, not all wasps.
+  /**
+   * @function    alarmHiveSwarm
+   * @description Raise the home alarm on every wasp anchored to the struck hive's spawn point — only that hive's swarm, matched by anchor position, not all wasps.
+   * @param   hive  The struck hive whose anchor identifies its swarm.
+   * @calledby src/scenes/GameScene.ts → onProjectileHitsEnemy, when a projectile hits a hive
+   * @calls    each matching wasp's raiseHomeAlarm
+   */
   private alarmHiveSwarm(hive: Enemy): void {
     const anchor = hive.getSpawnPoint();
     for (const obj of this.enemies.getChildren()) {
@@ -1135,7 +1330,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     }
   }
 
-  // Fires when a queued respawn clears its time+distance gates — rebuilds and re-wires the enemy.
+  /**
+   * @function    handleRespawn
+   * @description Rebuild and re-wire a queued enemy once its respawn clears the time and distance gates — re-registers sound, world-attaches, and hive-anchors it; no-op if the factory yields nothing.
+   * @param   entry  The pending respawn (identifier, spawn point, iid, loiter path).
+   * @calledby src/level/EnemyRespawnManager.ts → tick (passed as the respawn callback from update)
+   * @calls    src/entities/EntityFactory.ts → respawnEnemyAt; registerEntitySound; src/scenes/GameScene.ts → attachEnemyToWorld, anchorSwarmerToHome
+   */
   private handleRespawn = (entry: PendingRespawn): void => {
     const enemy = respawnEnemyAt(
       this,
@@ -1151,7 +1352,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.anchorSwarmerToHome(enemy);
   };
 
-  // Tears down the world in safe dependency order — must precede every buildWorld call except the first.
+  /**
+   * @function    tearDownWorld
+   * @description Tear down the world in safe dependency order (order matters so callbacks can't fire on dead sprites) — stop the camera follow, clear audio anchors, dispose every collider/layer/level/group/entity, reset the nav graph and per-world collaborators, unsubscribe the world events, and kill any in-flight locked-door message. Must precede every world build except the first.
+   * @calledby src/scenes/GameScene.ts → restartRun, respawnFromSave, onLdtkChange (before each rebuild)
+   * @calls    each collider/layer/group destroy, the boss-controller/interaction/shop teardown, and the symmetric event off() bindings
+   */
   private tearDownWorld(): void {
     this.cameras.main.stopFollow();
 
@@ -1253,7 +1459,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     }
   }
 
-  // Restores a saved player snapshot; falls back to spawn if the saved position is outside the world.
+  /**
+   * @function    restorePlayerSnapshot
+   * @description Restore the player and recenter the camera from a saved snapshot, or leave the fresh LDtk spawn standing if the saved position is outside the (possibly rebuilt) world.
+   * @param   snapshot  The captured player state.
+   * @param   project   The parsed LDtk project, for the in-world check.
+   * @calledby src/scenes/GameScene.ts → respawnFromSave, onLdtkChange (after the world is rebuilt)
+   * @calls    src/scenes/playerSnapshot.ts → restorePlayer, gated by isInsideAnyLevel
+   */
   private restorePlayerSnapshot(
     snapshot: PlayerSnapshot,
     project: LdtkProject,
@@ -1266,7 +1479,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     );
   }
 
-  // Snapshots the player into the save slot and shows a "Game Saved" toast above the crystal.
+  /**
+   * @function    takeSave
+   * @description Store a player snapshot as the save slot and float a "Game Saved" toast above the crystal; no-op if the snapshot fails.
+   * @param   crystal  The save crystal that was activated.
+   * @calledby SAVE_REQUESTED scene-bus event (registered in wireWorldEvents), fired from a save crystal
+   * @calls    src/scenes/playerSnapshot.ts → snapshotPlayer and src/scenes/GameScene.ts → showSaveToastAt
+   */
   private takeSave(crystal: Save): void {
     const snapshot = snapshotPlayer(this.player);
     if (!snapshot) return;
@@ -1274,7 +1493,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.showSaveToastAt(crystal.x, crystal.body.top - SAVE_TOAST_OFFSET_Y_PX);
   }
 
-  // Auto-saves the player state (no crystal) — called after boss kills as a checkpoint.
+  /**
+   * @function    autoSave
+   * @description Auto-save the player state (no crystal) as a checkpoint after a boss kill — stores the snapshot and floats a toast above the player; no-op if the snapshot fails.
+   * @calledby src/scenes/GameScene.ts → onBossDefeated
+   * @calls    src/scenes/playerSnapshot.ts → snapshotPlayer and src/scenes/GameScene.ts → showSaveToastAt
+   */
   private autoSave(): void {
     const snapshot = snapshotPlayer(this.player);
     if (!snapshot || !this.player) return;
@@ -1285,7 +1509,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     );
   }
 
-  // Shows a "Game Saved" text that rises and fades at the given world position.
+  /**
+   * @function    showSaveToastAt
+   * @description Float a LINEAR-filtered "Game Saved" text that rises and fades from the given world position, then destroys itself (LINEAR filtering avoids the global pixel-art jag).
+   * @param   startX, startY  The toast's starting world position.
+   * @calledby src/scenes/GameScene.ts → takeSave, autoSave
+   * @calls    the text factory and the tween system
+   */
   private showSaveToastAt(startX: number, startY: number): void {
     const toast = this.add.text(startX, startY, SAVE_TOAST_TEXT, {
       fontFamily: SAVE_TOAST_FONT_FAMILY,
@@ -1307,7 +1537,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     });
   }
 
-  // Shows (or re-triggers) the "find the key" message; reuses one text object to avoid stacking.
+  /**
+   * @function    showKeyDoorMessage
+   * @description Show (or re-trigger) the screen-bottom "find the key" message that fades in, holds, then fades out and destroys — reuses one text object so a re-trigger refreshes it rather than stacking, killing any in-flight fade first.
+   * @calledby KEY_DOOR_LOCKED scene-bus event (registered in wireWorldEvents), fired from a key-locked door
+   * @calls    the text factory and the tween system
+   */
   private showKeyDoorMessage(): void {
     const view = this.cameras.main.worldView;
     const x = view.centerX;
@@ -1352,7 +1587,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     });
   }
 
-  // Records the boss kill, grants its key directly (so dying before pickup can't soft-lock the door), clears the arena, and auto-saves.
+  /**
+   * @function    onBossDefeated
+   * @description Persist the boss defeat and grant its key directly (so dying before pickup can't soft-lock the door), kill the rest of that level's enemies, and auto-save a checkpoint.
+   * @param   identifier    The defeated boss.
+   * @param   bossX, bossY  Its world position, for the level sweep.
+   * @calledby BOSS_DEFEATED scene-bus event (registered in wireWorldEvents)
+   * @calls    the run-progress recorders, src/scenes/GameScene.ts → killEnemiesInLevel, autoSave
+   */
   private onBossDefeated(
     identifier: string,
     bossX: number,
@@ -1365,7 +1607,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.autoSave();
   }
 
-  // Kills every live enemy in the level at (worldX, worldY) via takeDamage so they animate and drop loot.
+  /**
+   * @function    killEnemiesInLevel
+   * @description Deal lethal, knockback-skipped, environmental damage (via takeDamage, so they animate and drop loot) to every live enemy within the bounds of the level at (worldX, worldY).
+   * @param   worldX, worldY  A point in the target level.
+   * @calledby src/scenes/GameScene.ts → onBossDefeated, to clear the arena
+   * @calls    src/scenes/GameScene.ts → getLevelBoundsAt and each enemy's takeDamage
+   */
   private killEnemiesInLevel(worldX: number, worldY: number): void {
     if (!this.enemies) return;
     const bounds = this.getLevelBoundsAt(worldX, worldY);
@@ -1380,7 +1628,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     }
   }
 
-  // Freezes the world and launches VictoryScene; latched so it can't fire twice.
+  /**
+   * @function    triggerVictory
+   * @description Set the victory latch, freeze the world (pause all animations), launch the victory overlay, and pause this scene; the latch keeps it from firing twice.
+   * @calledby src/scenes/GameScene.ts → onPortalWarpComplete
+   * @calls    the animation system and Phaser scene launch/pause
+   */
   private triggerVictory(): void {
     this.victoryShown = true;
     this.anims.pauseAll();
@@ -1388,23 +1641,43 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     this.scene.pause();
   }
 
-  // Disables player input while the portal warp clip plays.
+  /**
+   * @function    onPortalWarpStarted
+   * @description Lock player controls while the portal warp clip plays.
+   * @calledby PORTAL_WARP_STARTED scene-bus event (registered in wireWorldEvents)
+   * @calls    the player's setControlsEnabled
+   */
   private onPortalWarpStarted(): void {
     this.player.setControlsEnabled(false);
   }
 
-  // Hides the player sprite and body once the portal swallows them.
+  /**
+   * @function    onPortalWarpVanish
+   * @description Hide the player sprite and body once the portal swallows them.
+   * @calledby PORTAL_WARP_VANISH scene-bus event (registered in wireWorldEvents)
+   * @calls    the player's vanishForWarp
+   */
   private onPortalWarpVanish(): void {
     this.player.vanishForWarp();
   }
 
-  // Triggers victory when the warp clip ends; latch prevents double-launch.
+  /**
+   * @function    onPortalWarpComplete
+   * @description Launch the victory flow once the warp clip ends; the victory latch prevents a double-launch.
+   * @calledby PORTAL_WARP_COMPLETE scene-bus event (registered in wireWorldEvents)
+   * @calls    src/scenes/GameScene.ts → triggerVictory
+   */
   private onPortalWarpComplete(): void {
     if (this.victoryShown) return;
     this.triggerVictory();
   }
 
-  // No-save death path: fades the world to black then rebuilds to the landing screen.
+  /**
+   * @function    returnToHomeScreen
+   * @description No-save death path — fade the camera out and, at full black, rebuild the run to the title with a fade-in.
+   * @calledby src/scenes/GameScene.ts → armPlayerDeathHandler, when there is no save slot
+   * @calls    the camera fade-out and, on completion, src/scenes/GameScene.ts → restartRun
+   */
   private returnToHomeScreen(): void {
     const cam = this.cameras.main;
     cam.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
@@ -1413,7 +1686,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     cam.fadeOut(LANDING_FADE_OUT_MS, 0, 0, 0);
   }
 
-  // Rebuild-from-save death path: teardown → rebuild → restore snapshot at full HP.
+  /**
+   * @function    respawnFromSave
+   * @description Rebuild-from-save death path — reparse LDtk, teardown, rebuild, then restore the snapshot at full HP; falls back to scene.restart if the slot is missing or the reparse/rebuild throws.
+   * @calledby src/scenes/GameScene.ts → armPlayerDeathHandler, when a save slot exists
+   * @calls    the LDtk reparse, src/scenes/GameScene.ts → tearDownWorld, buildWorld, restorePlayerSnapshot
+   */
   private respawnFromSave(): void {
     const snapshot = this.saveSlot;
     if (!snapshot) {
@@ -1453,8 +1731,15 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     );
   }
 
-  // True if (x, y) lands inside any level's rect — the restore path uses it to
-  // decide whether a saved position still fits the (possibly rebuilt) world.
+  /**
+   * @function    isInsideAnyLevel
+   * @description True if (x, y) lands inside any level's rect — scans the project's level rects.
+   * @param   x, y     A world-pixel point.
+   * @param   project  The parsed LDtk project to test against.
+   * @returns whether the point falls within any level.
+   * @calledby src/scenes/GameScene.ts → restorePlayerSnapshot, deciding whether a saved position still fits the (possibly rebuilt) world
+   * @calls    —
+   */
   private isInsideAnyLevel(
     x: number,
     y: number,
@@ -1473,7 +1758,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     return false;
   }
 
-  // HMR handler: snapshots player, loads new tilesets, tears down, rebuilds, restores — aborts if parse or load fails.
+  /**
+   * @function    onLdtkChange
+   * @description HMR handler — snapshot the player, load new tilesets, teardown, rebuild, restore; on a parse/load failure the old world keeps running, while a post-teardown build failure leaves a logged partial state. Mid-write truncated reads are skipped silently.
+   * @param   rawJson  The freshly written LDtk project JSON.
+   * @calledby src/level/HotReloadBus.ts → the LDtk hot-reload subscription (registered in create), when the project file changes in dev
+   * @calls    the LDtk parse, src/level/TilesetRegistry.ts → loadTilesetsAtRuntime, src/scenes/GameScene.ts → tearDownWorld, buildWorld, restorePlayerSnapshot
+   */
   private onLdtkChange = async (rawJson: string): Promise<void> => {
     let project: LdtkProject;
     try {
@@ -1524,7 +1815,12 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     }
   };
 
-  // Full teardown for state outside the world lifecycle: hot-reload unsub, keys, nav, sounds, HUD, boss.
+  /**
+   * @function    onSceneShutdown
+   * @description Full teardown for state outside the world lifecycle — unsubscribe hot-reload, remove the ESC handler, clear audio anchors and nav, tear down the HUD/boss/escape state, and kill any in-flight locked-door message.
+   * @calledby Phaser SHUTDOWN event (registered once in create)
+   * @calls    the hot-reload unsub, src/scenes/gameHud.ts → destroyForSceneShutdown, the boss-controller teardown, and the tween/text destroy
+   */
   private onSceneShutdown(): void {
     if (this.hotReloadUnsub) {
       this.hotReloadUnsub();
@@ -1544,7 +1840,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
     }
   }
 
-  // Bursts a player projectile against terrain with rock-impact SFX.
+  /**
+   * @function    onProjectilePlatformImpact
+   * @description Burst a player projectile against terrain with rock-impact SFX.
+   * @param   projectile  The Arcade collision object; acted on only if a Projectile.
+   * @calledby Phaser physics collide (registered as the player-projectile / terrain and impassable-door collider in wireColliders)
+   * @calls    the one-shot audio player and the projectile's onImpact
+   */
   private onProjectilePlatformImpact: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback =
     (projectile) => {
       if (projectile instanceof Projectile) {
@@ -1553,7 +1855,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       }
     };
 
-  // Bursts a player projectile against a trap like terrain — trap stays intact.
+  /**
+   * @function    onProjectileHitsTrap
+   * @description Burst a player projectile against a trap like terrain — the trap takes no damage; already-exploded projectiles are skipped.
+   * @param   projectileObj, trapObj  The Arcade overlap pair; ignored unless a live Projectile and Trap.
+   * @calledby Phaser physics overlap (registered as the player-projectile / trap overlap in wireColliders)
+   * @calls    the one-shot audio player and the projectile's onImpact
+   */
   private onProjectileHitsTrap: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback =
     (projectileObj, trapObj) => {
       if (!(projectileObj instanceof Projectile)) return;
@@ -1564,7 +1872,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       projectileObj.onImpact();
     };
 
-  // Damages an enemy hit by a player projectile; passes through during teleport-blink or round-break; alarms hive swarm.
+  /**
+   * @function    onProjectileHitsEnemy
+   * @description Damage an enemy hit by a player projectile, alarm the hive swarm on a hive hit, and burst the projectile; dead/teleport-blinking/round-break enemies are passed through.
+   * @param   projectileObj, enemyObj  The Arcade overlap pair; ignored unless a live Projectile and Enemy.
+   * @calledby Phaser physics overlap (registered as the player-projectile / enemy overlap in wireColliders)
+   * @calls    the audio player, the enemy's takeDamage, src/scenes/GameScene.ts → alarmHiveSwarm, and the projectile's onImpact
+   */
   private onProjectileHitsEnemy: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback =
     (projectileObj, enemyObj) => {
       if (!(projectileObj instanceof Projectile)) return;
@@ -1581,7 +1895,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       projectileObj.onImpact();
     };
 
-  // Bursts an enemy projectile against terrain (no SFX).
+  /**
+   * @function    onEnemyProjectilePlatformImpact
+   * @description Burst an enemy projectile against terrain (no SFX).
+   * @param   projectile  The Arcade collision object; acted on only if an EnemyProjectile.
+   * @calledby Phaser physics collide (registered as the enemy-projectile / terrain and impassable-door collider in wireColliders)
+   * @calls    the projectile's onImpact
+   */
   private onEnemyProjectilePlatformImpact: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback =
     (projectile) => {
       if (projectile instanceof EnemyProjectile) {
@@ -1589,7 +1909,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       }
     };
 
-  // Hurts the player on enemy projectile contact, then bursts the projectile.
+  /**
+   * @function    onEnemyProjectileHitsPlayer
+   * @description Hurt the player (flagged as a projectile source) on enemy projectile contact, then burst the projectile; already-exploded projectiles are skipped.
+   * @param   projectileObj, playerObj  The Arcade overlap pair; ignored unless a live EnemyProjectile and Player.
+   * @calledby Phaser physics overlap (registered as the enemy-projectile / player overlap in wireColliders)
+   * @calls    the player's hurt and the projectile's onImpact
+   */
   private onEnemyProjectileHitsPlayer: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback =
     (projectileObj, playerObj) => {
       if (!(projectileObj instanceof EnemyProjectile)) return;
@@ -1605,7 +1931,13 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       projectileObj.onImpact();
     };
 
-  // Player picks up a drop — waits for capacity if ammo/heart is full; other kinds consumed immediately.
+  /**
+   * @function    onPlayerPicksUpAmmo
+   * @description Apply a drop and destroy it — leaves it in place when at capacity (ammo/heart full); other kinds are consumed immediately.
+   * @param   playerObj, ammoObj  The Arcade overlap pair; ignored unless a live Player and AmmoDrop.
+   * @calledby Phaser physics overlap (registered as the player / ammo-drop overlap in wireColliders)
+   * @calls    the player's canPickUp gate and addPickup, then the drop's destroy
+   */
   // TODO: playOneShot(this, 'pickup') once the audio registry has a pickup entry.
   private onPlayerPicksUpAmmo: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback =
     (playerObj, ammoObj) => {
@@ -1617,7 +1949,14 @@ export class GameScene extends Phaser.Scene implements AmmoDropSpawnerScene {
       ammoObj.destroy();
     };
 
-  // Spawns a pickup drop at (x, y) — implements AmmoDropSpawnerScene structurally; keep signature in sync.
+  /**
+   * @function    spawnAmmoDrop
+   * @description Add a new AmmoDrop to the ammo-drops group at (x, y) — implements AmmoDropSpawnerScene structurally; keep the signature in sync with that interface.
+   * @param   kind  The pickup kind.
+   * @param   x, y  The spawn world position.
+   * @calledby src/entities/Chest.ts and src/entities/Enemy.ts → loot drops (the AmmoDropSpawnerScene contract)
+   * @calls    the AmmoDrop constructor
+   */
   spawnAmmoDrop(kind: PickupKind, x: number, y: number): void {
     const drop = new AmmoDrop(this, x, y, kind);
     this.ammoDrops.add(drop);

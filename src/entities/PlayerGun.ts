@@ -12,25 +12,22 @@ import {
 } from '../sprites/characterLoader';
 
 /**
- * PlayerGun — the gun overlay sprite layered on the player body in gunslinger modes.
- *
- * Purely visual: no physics body. The owning Player drives its position and
- * rotation every frame and toggles its visibility (shown when the body plays a
- * no_gun animation, hidden when the body plays a baked-gun animation). It owns
- * the grip-pivot convention — rotation pivots on the gun's grip pixel, not its
- * center, and the sprite mirrors vertically in the left aim half-plane so the
- * trigger always points down. Renders one depth above the player body.
- *
- * Inputs:  scene, spawn x/y, the gunslinger mode (which spritesheet); per-frame
- *          owner position/facing/scale and the cursor world position.
- * Outputs: a rotated, depth-sorted overlay sprite tracking the player's hand.
- * @calledby the player entity, when it enters a gunslinger mode and each frame after.
- * @calls    the gun-overlay anim-key builder and the per-anim sprite-anchor resolver.
+ * @file entities/PlayerGun.ts
+ * @description Purely visual gun overlay sprite for gunslinger modes (no physics body). The owning Player drives its position/rotation every frame and toggles its visibility (shown over no_gun body art, hidden over baked-gun art). Owns the grip-pivot convention — rotation pivots on the gun's grip pixel, not its center, and the sprite mirrors vertically in the left aim half-plane so the trigger always points down. Renders one depth above the player body.
+ * @module entities
  */
 export class PlayerGun extends Phaser.GameObjects.Sprite {
   private gunMode: GunslingerProjectileMode;
 
-  // build the overlay sprite for a gunslinger mode; throws if the idle texture is missing
+  /**
+   * @function    constructor
+   * @description Build the overlay sprite for a gunslinger mode, setting the grip-pixel pivot and the above-body depth; throws if the idle texture is missing.
+   * @param   scene  Owning Phaser scene.
+   * @param   x, y   Spawn position (world px).
+   * @param   mode   Which gun spritesheet to render.
+   * @calledby src/entities/Player.ts → ensurePlayerGunForMode, when the player first enters a gunslinger mode
+   * @calls    the gun-overlay anim-key builder and the Phaser add/play setup
+   */
   constructor(
     scene: Phaser.Scene,
     x: number,
@@ -59,18 +56,30 @@ export class PlayerGun extends Phaser.GameObjects.Sprite {
     this.play(idleKey);
   }
 
-  // apply the per-anim display scale on each ANIMATION_START
+  /**
+   * @function    applyOverlayScale
+   * @description Apply the per-anim display scale resolved from the anchor data.
+   * @param   animation  The anim that just started.
+   * @calledby Phaser ANIMATION_START event (registered in the constructor)
+   * @calls    the per-anim sprite-anchor resolver
+   */
   private applyOverlayScale(animation: Phaser.Animations.Animation): void {
     const { displayScale } = getSpriteAnchor(animation.key, 0, 0);
     this.setScale(displayScale);
   }
 
-  // The gunslinger mode (which spritesheet) this overlay is currently rendering.
+  /** The gunslinger mode (which spritesheet) this overlay is currently rendering. */
   getMode(): GunslingerProjectileMode {
     return this.gunMode;
   }
 
-  // swap to a different gun spritesheet; if mid-fire, replays attack1 on the new sheet
+  /**
+   * @function    setMode
+   * @description Swap to a different gun spritesheet; replays attack1 on the new sheet if the overlay was mid-fire on the old one, else idles. No-op if already in that mode.
+   * @param   mode  The gun spritesheet to switch to.
+   * @calledby src/entities/Player.ts → ensurePlayerGunForMode, when the equipped gun changes
+   * @calls    the gun-overlay anim-key builder and src/entities/PlayerGun.ts → playOverlay
+   */
   setMode(mode: GunslingerProjectileMode): void {
     if (mode === this.gunMode) return;
     this.gunMode = mode;
@@ -83,7 +92,14 @@ export class PlayerGun extends Phaser.GameObjects.Sprite {
     this.playOverlay(wasFiring ? 'attack1' : 'idle');
   }
 
-  // play idle (ignoreIfPlaying) or attack1 (always restart); durationMs overrides the anim length
+  /**
+   * @function    playOverlay
+   * @description Play idle (ignoreIfPlaying) or attack1 (always restart); an optional durationMs overrides the stored anim length so the fire clip matches the player's fire cadence.
+   * @param   kind        'idle' or 'attack1'.
+   * @param   durationMs  Optional play-duration override (ms).
+   * @calledby src/entities/Player.ts → startAttackAnim / endLockedAction / syncGunOverlayForBodyAnim, and src/entities/PlayerGun.ts → setMode
+   * @calls    the gun-overlay anim-key builder and the Phaser sprite animation play
+   */
   playOverlay(kind: 'idle' | 'attack1', durationMs?: number): void {
     const key = gunOverlayAnimKey(this.gunMode, kind);
     if (durationMs !== undefined) {
@@ -99,7 +115,16 @@ export class PlayerGun extends Phaser.GameObjects.Sprite {
     }
   }
 
-  // snap the overlay to the player's grip and rotate it to aim at the cursor
+  /**
+   * @function    syncToOwner
+   * @description Snap the overlay to the player's grip pivot and rotate it to aim at the cursor, mirroring vertically when aiming left so the trigger always points toward the ground.
+   * @param   ownerX, ownerY              Player world position.
+   * @param   ownerFlipX                  Player facing (true = facing left).
+   * @param   ownerScale                  Player display scale, applied to the pivot offset.
+   * @param   cursorWorldX, cursorWorldY  Aim target in world space.
+   * @calledby src/entities/Player.ts → syncPlayerGun, each frame while a gun overlay is shown
+   * @calls    Math.atan2 and the sprite position/flip/rotation setters only
+   */
   syncToOwner(
     ownerX: number,
     ownerY: number,

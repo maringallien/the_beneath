@@ -2,22 +2,9 @@ import type { Enemy } from './Enemy';
 import type { EnemyProjectileSpawnOptions } from './EnemyProjectile';
 
 /**
- * enemyHelperScene — the read/spawn surface an Enemy needs from its scene.
- *
- * A structural interface so Enemy doesn't import GameScene directly (avoids an
- * Enemy <-> GameScene circular dependency); the gameplay scene implements every
- * member. Bundles the collision/nav probes, projectile and minion spawning, the
- * enemy-iteration callback, and the fight-wide stealth flag that the enemy AI
- * reaches back into the world for.
- *
- * Inputs:  the implementing scene supplies these capabilities; callers pass
- *          world coords, spawn options, identifiers, and visitor callbacks.
- * Outputs: spawns (projectiles/minions), collision/nav/level query results,
- *          and the boss-fight stealth flag.
- * @calledby the enemy AI, when it spawns, probes terrain, routes, scans peers,
- *           or checks whether stealth is suppressed during a boss fight.
- * @calls    the implementing scene, which owns the physics, nav graph, and
- *           enemy group these members read and mutate.
+ * @file entities/enemyHelperScene.ts
+ * @description The read/spawn surface an Enemy needs from its scene — a structural interface so Enemy never imports GameScene directly (avoids an Enemy↔GameScene cycle); the gameplay scene implements every member. Bundles the collision/nav probes, projectile and minion spawning, the enemy-iteration callback, and the fight-wide stealth flag the AI reaches back into the world for; the implementing scene owns the physics, nav graph, and enemy group these members read and mutate.
+ * @module entities
  */
 export interface EnemyHelperScene {
   spawnEnemyProjectile(options: EnemyProjectileSpawnOptions): void;

@@ -15,19 +15,9 @@ import {
 import type { PreviewAttach, PreviewClipSpec } from '../animatedSpritePreview';
 
 /**
- * combatClips — builds the manual's Combat-tab weapon demos.
- *
- * For each attack (sword combo, teleport strike, magic, the two guns) it produces
- * a looping animation (a list of clips for AnimatedSpritePreview) plus the
- * player-facing copy and key chips. Clip data is derived from the sprite registry
- * and combat constants — combo orders, gun grip offsets, and damage/cost numbers
- * all come from the same sources the gameplay uses, so the manual never drifts
- * from how the attacks really work.
- *
- * Inputs:  the sprite/animation registry and combat tuning constants.
- * Outputs: a list of WeaponDemo descriptors (data only; no scene/DOM side effects).
- * @calledby the manual overlay, when assembling the Combat tab.
- * @calls    the sprite-loader key/frame helpers that mirror the live attack setup.
+ * @file ui/manual/combatClips.ts
+ * @description Builds the Combat-tab weapon demos — for each attack (sword combo, teleport strike, magic, the two guns) a looping clip list for AnimatedSpritePreview plus player-facing copy and key chips. Clip data (combo orders, gun grip offsets, damage/cost numbers) is derived from the sprite registry and combat constants so the manual never drifts from real gameplay.
+ * @module ui/manual
  */
 
 export type WeaponDemoId = 'sword' | 'teleport' | 'magic' | 'gun1' | 'gun2';
@@ -44,18 +34,19 @@ export interface WeaponDemo {
   readonly clips: ReadonlyArray<PreviewClipSpec>;
 }
 
-// no hold between swings so the combo flows; brief rest only at the loop seam
+// ── Combo timing ───────────────────────────────────────────────────────────
+// Hold frames between combo swings: zero so the chain flows, with a brief rest only at the loop seam.
 const COMBO_HOLD = 0;
 const COMBO_LOOP_HOLD = 6;
 
-// read display scale from registry so gun overlay offsets match PlayerGun exactly
+/** Display scale read from the registry so gun-overlay offsets match PlayerGun exactly. */
 function bodyScale(): number {
   return getAnimationFrameInfo('gunslinger_body_idle')?.displayScale ?? 0.89;
 }
 
 const GUNSLINGER_BODY_IDLE_KEY = 'gunslinger_body_idle';
 
-// gun overlay attachment mirroring PlayerGun.syncToOwner at a neutral aim angle
+/** Gun-overlay attachment mirroring PlayerGun.syncToOwner at a neutral aim angle. */
 function gunAttach(): PreviewAttach {
   return {
     offsetX: GUN_OVERLAY_PIVOT_OFFSET_X,
@@ -67,7 +58,7 @@ function gunAttach(): PreviewAttach {
   };
 }
 
-// One swing of the sword combo: a single full-size attack sheet, held briefly.
+/** One swing of the sword combo: a single full-size attack sheet, held briefly. */
 function swordSwing(step: number, hold: number): PreviewClipSpec {
   return {
     layers: [{ textureKey: `sword_master_attack${step}` }],
@@ -75,7 +66,7 @@ function swordSwing(step: number, hold: number): PreviewClipSpec {
   };
 }
 
-// one step of the magic combo — magicAttackAnimKey maps step→sheet in cast order
+/** One step of the magic combo — magicAttackAnimKey maps step→sheet in cast order. */
 function magicSwing(step: number, hold: number): PreviewClipSpec {
   return {
     layers: [{ textureKey: magicAttackAnimKey(step) }],
@@ -83,7 +74,14 @@ function magicSwing(step: number, hold: number): PreviewClipSpec {
   };
 }
 
-// two-clip idle→fire loop for a gun preview, layering the overlay over the body like PlayerGun does
+/**
+ * @function    gunClips
+ * @description Two-clip idle-then-fire loop for a gun preview, layering the overlay over the body like PlayerGun does.
+ * @param   mode  Which gunslinger weapon: gun1 or gun2.
+ * @returns a two-element clip list (idle beat then fire) for the preview.
+ * @calledby src/ui/manual/combatClips.ts → buildWeaponDemos, per gun
+ * @calls    src/ui/manual/combatClips.ts → gunAttach and src/sprites/characterLoader.ts → gunOverlayAnimKey
+ */
 function gunClips(mode: 'gunslinger_gun1' | 'gunslinger_gun2'): PreviewClipSpec[] {
   const attach = gunAttach();
   const idle: PreviewClipSpec = {
@@ -103,7 +101,13 @@ function gunClips(mode: 'gunslinger_gun1' | 'gunslinger_gun2'): PreviewClipSpec[
   return [idle, fire];
 }
 
-// builds all Combat-tab weapon demos with clip loops, key chips, and copy drawn from combat constants
+/**
+ * @function    buildWeaponDemos
+ * @description Builds all Combat-tab weapon demos with clip loops, key chips, and copy drawn from combat constants. Reads the sprite registry and combat tuning constants; data only, no scene/DOM side effects.
+ * @returns the ordered list of WeaponDemo descriptors.
+ * @calledby src/ui/manual/sections/combatSection.ts → buildCombatSection
+ * @calls    src/ui/manual/combatClips.ts → swordSwing, magicSwing, gunClips
+ */
 export function buildWeaponDemos(): ReadonlyArray<WeaponDemo> {
   // The click combo is the five regular swings (attack1–5). attack6 is NOT part
   // of it — it's the separate teleport strike below — so it's excluded here.

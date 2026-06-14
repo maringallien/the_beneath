@@ -4,24 +4,9 @@ import { Player } from '../entities/Player';
 import { Trap, type TrapDamageSide } from '../entities/Trap';
 
 /**
- * trapSystem — per-world trap triggering and the trap damage handlers.
- *
- * Owns the per-frame pass that arms/disarms each Trap from the player's
- * position and the Arcade overlap callbacks that turn trap contact into damage.
- * Two damage timings coexist: instant traps hurt on overlap, while snap and
- * ejector traps DEFER damage to a midpoint animation event (the telegraph), so a
- * victim who jumps clear before the midpoint escapes. The shared "victim above
- * the trap" gate excludes side-by-side overlaps so only step-on / drop-onto hits
- * land. Extracted from GameScene; the references it holds are per-build, so it is
- * rebuilt with each world.
- *
- * Inputs:  the host scene services, the player, the enemies group, and the
- *          world's trap list; per-frame player position and trap animation events.
- * Outputs: drives each Trap's trigger state and applies damage to the player and
- *          enemies (environmental hits flagged sourceIsPlayer:false).
- * @calledby the gameplay scene — built at world load, ticked each frame, and
- *           wired into the player/enemy↔trap overlaps and the damage-frame event.
- * @calls    each Trap's trigger/state API and the player/enemy damage paths.
+ * @file scenes/trapSystem.ts
+ * @description Per-world trap triggering and damage handlers — arms/disarms each Trap from the player's position; instant traps hurt on overlap while snap/ejector traps defer the hit to a midpoint animation frame, so a victim who escapes the danger zone before that frame is spared. Extracted from GameScene and rebuilt with each world.
+ * @module scenes
  */
 
 // World tile size in px; used for the spike-ejector's same-tile check.
@@ -42,6 +27,7 @@ export class TrapSystem {
   private readonly enemies: Phaser.GameObjects.Group;
   private readonly traps: ReadonlyArray<Trap>;
 
+  /** Stores the per-world host, player, enemy group, and trap list. */
   constructor(
     host: TrapSystemHost,
     player: Player,
@@ -54,7 +40,13 @@ export class TrapSystem {
     this.traps = traps;
   }
 
-  // Binds the midpoint damage-frame event on every deferred-damage trap (snap + ejector).
+  /**
+   * @function    attachDamageFrameListeners
+   * @description Subscribe the deferred-damage handler to the midpoint damage-frame event on every snap/ejector trap.
+   * @param   damageFrameEvent  The trap animation-midpoint event name to listen for.
+   * @calledby src/scenes/GameScene.ts → world build, right after the trap system is constructed
+   * @calls    each deferred-damage trap's event emitter
+   */
   attachDamageFrameListeners(damageFrameEvent: string): void {
     for (const trap of this.traps) {
       if (trap.hasDeferredDamage()) {
@@ -63,7 +55,12 @@ export class TrapSystem {
     }
   }
 
-  // Arms or disarms every trap each frame based on player position.
+  /**
+   * @function    update
+   * @description Arm or disarm every trap each frame from the player's position — swaying swords run their own fall machine, overhead ejectors use the damage zone or body, and ground ejectors use a same-tile check.
+   * @calledby Phaser per-frame update loop (via src/scenes/GameScene.ts → update)
+   * @calls    each trap's swaying-sword/ejector state API and the host's level/solid-tile probes; destroyed sprites are skipped defensively
+   */
   update(): void {
     const pb = this.player.body;
     const grounded = pb.blocked.down || pb.touching.down;
@@ -129,7 +126,14 @@ export class TrapSystem {
     }
   }
 
-  // Player↔trap overlap: instant hurts for falling sword; snap traps arm here but bite at the midpoint.
+  /**
+   * @function    onPlayerHitsTrap
+   * @description Player–trap overlap: instant traps hurt immediately (and a falling sword bypasses the usual center-above gate); snap traps arm here but bite at the midpoint; deferred ejectors no-op, the midpoint event decides.
+   * @param   playerObj  Arcade overlap object; ignored unless a live Player.
+   * @param   trapObj    Arcade overlap object; ignored unless a Trap.
+   * @calledby Phaser physics overlap (registered as the player–trap collider in world build)
+   * @calls    src/entities/Player.ts → hurt and the trap's direct-contact trigger
+   */
   onPlayerHitsTrap: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback = (
     playerObj,
     trapObj,
@@ -164,7 +168,14 @@ export class TrapSystem {
     playerObj.hurt(trapObj.getDamage(), trapObj.x, trapObj.y);
   };
 
-  // Enemy↔trap overlap: mirrors onPlayerHitsTrap; hits flagged environmental so trap kills don't show the HP bar.
+  /**
+   * @function    onEnemyHitsTrap
+   * @description Enemy–trap overlap: mirrors the player handler, with hits flagged environmental (sourceIsPlayer:false) so trap kills don't flash the HP bar.
+   * @param   enemyObj  Arcade overlap object; ignored unless a live, non-hurt Enemy.
+   * @param   trapObj   Arcade overlap object; ignored unless a Trap.
+   * @calledby Phaser physics overlap (registered as the enemy–trap collider in world build)
+   * @calls    src/entities/Enemy.ts → takeDamage and the trap's direct-contact trigger
+   */
   onEnemyHitsTrap: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback = (
     enemyObj,
     trapObj,
@@ -201,7 +212,14 @@ export class TrapSystem {
     });
   };
 
-  // Applies deferred trap damage at the animation midpoint, re-checking overlap so escapers take nothing.
+  /**
+   * @function    onTrapDamageFrame
+   * @description Apply deferred trap damage at the animation midpoint, re-checking overlap so anyone who escaped takes nothing; enemy hits are flagged environmental.
+   * @param   trap  The firing Trap.
+   * @param   side  Optional firing side for directional traps; undefined = omnidirectional.
+   * @calledby src/entities/Trap.ts → TRAP_DAMAGE_FRAME_EVENT, emitted at a deferred trap's midpoint
+   * @calls    src/entities/Player.ts → hurt and src/entities/Enemy.ts → takeDamage for victims still in the zone
+   */
   onTrapDamageFrame = (trap: Trap, side?: TrapDamageSide): void => {
     const damage = trap.getDamage();
     if (
@@ -222,7 +240,16 @@ export class TrapSystem {
     }
   };
 
-  // Returns true if the victim is on the firing side, or if the trap is non-directional.
+  /**
+   * @function    matchesTrapSide
+   * @description True when the victim is on the trap's firing side, or always true for a non-directional trap.
+   * @param   victim  Player or enemy sprite under test.
+   * @param   trap    The firing trap.
+   * @param   side    Firing side, or undefined for omnidirectional.
+   * @returns true when no side is given, else whether the victim's center is on that side.
+   * @calledby src/scenes/trapSystem.ts → onTrapDamageFrame, per candidate victim
+   * @calls    reads the victim and trap body centers only
+   */
   private matchesTrapSide(
     victim: Phaser.Physics.Arcade.Sprite,
     trap: Trap,
@@ -234,7 +261,15 @@ export class TrapSystem {
     return side === 'left' ? vCenterX < tCenterX : vCenterX > tCenterX;
   }
 
-  // Returns true if the victim is inside this trap's kind-specific danger zone at the damage frame.
+  /**
+   * @function    isInTrapDamageZone
+   * @description True when the victim is inside this trap's kind-specific danger zone at the damage frame — ground ejectors use a grounded same-tile check; others use the configured damage zone (preferred, can extend past the body) or a center-above overlap fallback.
+   * @param   victim  Player or enemy sprite under test.
+   * @param   trap    The firing trap.
+   * @returns whether the victim is within the trap's danger zone.
+   * @calledby src/scenes/trapSystem.ts → onTrapDamageFrame, per candidate victim
+   * @calls    the trap's damage-zone bounds; falls back to the host's physics overlap test
+   */
   private isInTrapDamageZone(
     victim: Phaser.Physics.Arcade.Sprite,
     trap: Trap,

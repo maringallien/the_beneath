@@ -13,29 +13,9 @@ import type {
 } from './entityRegistryTypes';
 
 /**
- * entityRegistryLoader — loads and validates entityRegistry.json into typed
- * configs at module load, and serves the frozen result by lookup.
- *
- * The heart of boot-time registry validation. A nest of hand-rolled validators
- * (over the shared validate primitives) turns the raw JSON into the typed
- * AnimatedEntityConfig tree, and the module-scope IIFEs at the bottom run them
- * once at import so an authoring mistake fails the boot loudly — naming the
- * exact JSON path — instead of misbehaving at first spawn (much later in the
- * lifecycle). The DROP_KINDS / ATTACK_TYPES allowlists and every domain rule
- * (per-type field requirements, animation-key cross-checks, range/combo
- * relationships) live here, next to the schema they describe; only the
- * type/range primitives live in ../shared/validate. A recurring contract:
- * every animation key referenced by a field must exist in that entity's own
- * animations map, and a clip that must play to completion (wake, death, any
- * attack wind-up/strike) must be one-shot (loops: false) — a looping clip would
- * trap the entity in 'attack' state and never fire its recover/cleanup path.
- *
- * Inputs:  entityRegistry.json (imported) and the shared validate primitives.
- * Outputs: a frozen typed registry plus lookup helpers and the entity anim-key
- *          namespacing helpers; throws at load on any invalid entry.
- * @calledby the entity spawn / factory and animation code, looking up a config,
- *           behavior, trap, or anim by identifier or full key.
- * @calls    the shared validate primitives, field by field, for each entry.
+ * @file entities/entityRegistryLoader.ts
+ * @description Loads and validates entityRegistry.json into typed configs at module load, then serves the frozen result by lookup. The heart of boot-time registry validation: a nest of hand-rolled validators (over the shared validate primitives) turns the raw JSON into the typed AnimatedEntityConfig tree, and the module-scope IIFEs at the bottom run them once at import so an authoring mistake fails the boot loudly — naming the exact JSON path — instead of misbehaving at first spawn. The DROP_KINDS / ATTACK_TYPES allowlists and every domain rule (per-type field requirements, animation-key cross-checks, range/combo relationships) live here next to the schema they describe; only the type/range primitives live in ../shared/validate. A recurring contract: every animation key referenced by a field must exist in that entity's own animations map, and a clip that must play to completion (wake, death, any attack wind-up/strike) must be one-shot (loops: false) — a looping clip would trap the entity in 'attack' state and never fire its recover/cleanup path.
+ * @module entities
  */
 
 // namespaces entity anim keys so they can't collide with player keys
@@ -46,7 +26,15 @@ interface ParsedEntry {
   readonly config: AnimatedEntityConfig;
 }
 
-// validate one registry entry into a typed config; throws at load if anything is wrong
+/**
+ * @function    validateEntry
+ * @description Validate one registry entry into a typed config; throws at load if anything is wrong, including the mutually-exclusive behavior/trap rule and defaultAnimation existence.
+ * @param   identifier  LDtk id, used in error paths.
+ * @param   raw         The parsed JSON node.
+ * @returns a typed AnimatedEntityConfig; throws naming the bad JSON path on any miss.
+ * @calledby src/entities/entityRegistryLoader.ts → the module-load PARSED_ENTRIES loop, once per registry entry
+ * @calls    the validate primitives plus validateAnim / validateBehavior / validateTrap / validateDrops
+ */
 function validateEntry(
   identifier: string,
   raw: unknown,
@@ -103,7 +91,15 @@ function validateEntry(
   };
 }
 
-// validate the drops array into typed drop-event configs
+/**
+ * @function    validateDrops
+ * @description Validate the drops array into typed drop-event configs.
+ * @param   identifier  LDtk id for error paths.
+ * @param   raw         The parsed drops value.
+ * @returns a readonly AnimatedEntityDropConfig array; throws if not a non-empty array.
+ * @calledby src/entities/entityRegistryLoader.ts → validateEntry, when an entry carries a drops block
+ * @calls    the non-empty-array primitive, then validateDropEvent for each item
+ */
 function validateDrops(
   identifier: string,
   raw: unknown,
@@ -131,7 +127,16 @@ const DROP_KINDS = [
   'key_heart',
 ] as const;
 
-// validate one drop event: chancePct in [0,100] and a non-empty weighted kinds table
+/**
+ * @function    validateDropEvent
+ * @description Validate one drop event: chancePct in [0,100] and a non-empty weighted kinds table.
+ * @param   identifier  LDtk id.
+ * @param   index       Drop index for error paths.
+ * @param   raw         The parsed event.
+ * @returns a typed AnimatedEntityDropConfig; throws on out-of-range chance or a bad kind/weight.
+ * @calledby src/entities/entityRegistryLoader.ts → validateDrops, once per drop event
+ * @calls    the validate primitives, including the DROP_KINDS allowlist check
+ */
 function validateDropEvent(
   identifier: string,
   index: number,
@@ -161,7 +166,15 @@ function validateDropEvent(
   return { chancePct, kinds };
 }
 
-// validate a trap block: positive damage, optional snap anim, optional damage-zone rect
+/**
+ * @function    validateTrap
+ * @description Validate a trap block: positive damage, optional snap anim, optional damage-zone rect.
+ * @param   identifier  LDtk id for error paths.
+ * @param   raw         The parsed trap value.
+ * @returns a typed AnimatedEntityTrapConfig; throws on a non-object, bad damage, or malformed direct-contact anim / damage-zone rect.
+ * @calledby src/entities/entityRegistryLoader.ts → validateEntry, when an entry carries a trap block
+ * @calls    the validate primitives for the damage and damage-zone fields
+ */
 function validateTrap(
   identifier: string,
   raw: unknown,
@@ -198,7 +211,16 @@ function validateTrap(
   return { damage, directContactAnimation, damageZone };
 }
 
-// validate an enemy behavior block — health required, every anim key cross-checked, all cross-field rules enforced
+/**
+ * @function    validateBehavior
+ * @description Validate an enemy behavior block — health required, every anim key cross-checked, all cross-field rules enforced.
+ * @param   identifier  LDtk id.
+ * @param   raw         The parsed behavior value.
+ * @param   animations  This entry's validated anim map, for key cross-checks.
+ * @returns a typed AnimatedEntityBehaviorConfig; throws on a missing/bad field, an unknown anim key, a wake clip that loops, or a stealth/encounter rule miss.
+ * @calledby src/entities/entityRegistryLoader.ts → validateEntry, when an entry carries a behavior block
+ * @calls    the validate primitives, optionalAnimKey / requireAnimKeyExists, and validateAttack
+ */
 function validateBehavior(
   identifier: string,
   raw: unknown,
@@ -499,7 +521,16 @@ const ATTACK_TYPES = [
   'summon',
 ] as const;
 
-// validate one attack config — type-driven field requirements, anim key cross-checks, placement guards
+/**
+ * @function    validateAttack
+ * @description Validate one attack config — type-driven field requirements, anim key cross-checks, placement guards.
+ * @param   identifier  LDtk id.
+ * @param   raw         The parsed attack value.
+ * @param   animations  This entry's validated anim map.
+ * @returns a typed AnimatedEntityAttackConfig; throws on the wrong fields for the attack type, an out-of-range/looping damage-frame clip, or a misplaced type-only field.
+ * @calledby src/entities/entityRegistryLoader.ts → validateBehavior, for the single attack and each attackPool entry
+ * @calls    the validate primitives, requireAnimKeyExists / optionalAnimKey, and the local hitbox parsers
+ */
 function validateAttack(
   identifier: string,
   raw: unknown,
@@ -1100,7 +1131,16 @@ function validateAttack(
   };
 }
 
-// check that an anim key string exists in this entity's animations map; throws with the available keys on miss
+/**
+ * @function    requireAnimKeyExists
+ * @description Check that an anim key string exists in this entity's animations map; throws with the available keys on miss.
+ * @param   ctx, field  Error-path context and field name.
+ * @param   animKey     The unknown value to check.
+ * @param   animations  This entry's validated anim map.
+ * @returns the validated key string; throws (listing the available keys) if absent/unknown.
+ * @calledby src/entities/entityRegistryLoader.ts → validateBehavior / validateAttack / optionalAnimKey, for every required animation-key field
+ * @calls    — (a string + map-membership check)
+ */
 function requireAnimKeyExists(
   ctx: string,
   field: string,
@@ -1120,7 +1160,16 @@ function requireAnimKeyExists(
   return animKey;
 }
 
-// undefined when absent, otherwise the same existence-checked key as requireAnimKeyExists
+/**
+ * @function    optionalAnimKey
+ * @description Undefined when absent, otherwise the same existence-checked key as requireAnimKeyExists.
+ * @param   ctx, field  Error-path context and field name.
+ * @param   animKey     The unknown value, may be undefined.
+ * @param   animations  This entry's validated anim map.
+ * @returns the validated key string, or undefined when the field was absent.
+ * @calledby src/entities/entityRegistryLoader.ts → validateBehavior / validateAttack, for every optional animation-key field
+ * @calls    requireAnimKeyExists when the field is present
+ */
 function optionalAnimKey(
   ctx: string,
   field: string,
@@ -1131,7 +1180,16 @@ function optionalAnimKey(
   return requireAnimKeyExists(ctx, field, animKey, animations);
 }
 
-// validate one animation spec: file, frameWidth/Height/Count, loops (defaults true), optional anchor/scale
+/**
+ * @function    validateAnim
+ * @description Validate one animation spec: file, frameWidth/Height/Count, loops (defaults true), optional anchor/scale.
+ * @param   identifier  LDtk id.
+ * @param   animKey     This clip's key.
+ * @param   raw         The parsed anim value.
+ * @returns a typed AnimatedEntityAnimConfig (loops defaults true unless explicitly false); throws on a missing file or non-positive frame dimensions/count.
+ * @calledby src/entities/entityRegistryLoader.ts → validateEntry, once per animation in the entry's animations map
+ * @calls    the validate primitives for each anim field
+ */
 function validateAnim(
   identifier: string,
   animKey: string,

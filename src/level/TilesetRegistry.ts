@@ -17,39 +17,32 @@ import type {
 } from '../ldtk/types';
 
 /**
- * TilesetRegistry — the texture-key contract and tileset preload path for LDtk levels.
- *
- * Owns the deterministic uid→Phaser-key scheme that decouples preload from render,
- * the collection of which tilesets a level (or the whole project) actually uses,
- * and the loaders that bring those PNGs into the scene texture cache. Tilesets are
- * loaded as spritesheets so individual tiles are addressable by frame index.
- * Collection walks both tile layers and entity-tile decorations (whose tilesets
- * are independent of any layer), while excluding non-rendered marker entities
- * whose preview tile may point at a tileset that doesn't exist here — so a level
- * never throws "references tileset uid=… but no def" over a marker preview.
- *
- * Inputs:  a parsed LDtk project/level, a scene, and tileset defs (uid, relPath,
- *          grid size, padding, spacing).
- * Outputs: stable texture keys; spritesheet loads into the scene texture cache;
- *          throws on a level that references a tileset with no def or no relPath.
- * @calledby the level preload and render paths, plus the HMR reload path.
- * @calls    the LDtk parse helpers and the scene's spritesheet loader.
+ * @file level/TilesetRegistry.ts
+ * @description The texture-key contract + tileset preload path; deterministic uid→Phaser-key scheme decoupling preload from render; collects which tilesets a level/project uses (walks tile layers AND entity-tile decorations, excluding non-rendered markers whose preview tile may point at a missing tileset); loads them as spritesheets so tiles are frame-addressable.
+ * @module level
  */
 
-// Deterministic Phaser texture key for a tileset uid (shared by preload + render).
+/** Deterministic Phaser texture key for a tileset uid (shared by preload + render). */
 export function tilesetTextureKey(uid: number): string {
   return `ldtkTileset_${uid}`;
 }
 
-// LDtk relPath (project-root-relative, e.g. "public/...") → runtime URL. Vite
-// serves public/ at the document root, so strip that prefix.
+/** LDtk relPath (project-root-relative, e.g. "public/...") → runtime URL; Vite serves public/ at the document root, so strip that prefix. */
 function relPathToUrl(relPath: string): string {
   return relPath.startsWith('public/')
     ? '/' + relPath.slice('public/'.length)
     : '/' + relPath;
 }
 
-// Collects the deduplicated tileset defs used by a level's tile layers and entity decorations.
+/**
+ * @function    collectTilesetsForLevel
+ * @description Collects the deduplicated tileset defs used by a level's tile layers and entity decorations.
+ * @param   project  Parsed LDtk, for the tileset defs.
+ * @param   level    The level to scan.
+ * @returns the deduplicated tileset defs the level needs; throws if a referenced uid has no def or a def has no relPath.
+ * @calledby src/level/TilesetRegistry.ts → collectTilesetsForAllLevels (same file; no external caller)
+ * @calls    the LDtk parse helpers for renderable tile layers and entity decorations
+ */
 export function collectTilesetsForLevel(
   project: LdtkProject,
   level: LdtkLevel,
@@ -86,7 +79,14 @@ export function collectTilesetsForLevel(
   return out;
 }
 
-// Aggregates deduplicated tileset defs across all project levels for a full up-front preload.
+/**
+ * @function    collectTilesetsForAllLevels
+ * @description Aggregates deduplicated tileset defs across all project levels for a full up-front preload.
+ * @param   project  Parsed LDtk with all levels.
+ * @returns the deduplicated tileset defs used anywhere in the project; throws via the per-level scan on a bad reference.
+ * @calledby src/scenes/PreloadScene.ts and src/scenes/GameScene.ts → boot/preload flow that loads every tileset up front
+ * @calls    the per-level tileset collection, deduplicating by uid across levels
+ */
 export function collectTilesetsForAllLevels(
   project: LdtkProject,
 ): LdtkTilesetDef[] {
@@ -102,7 +102,14 @@ export function collectTilesetsForAllLevels(
   return out;
 }
 
-// Queues tilesets as spritesheets in the scene loader, skipping any already cached.
+/**
+ * @function    preloadTilesets
+ * @description Queues tilesets as spritesheets in the scene loader, skipping any already cached.
+ * @param   scene     Its loader/texture cache.
+ * @param   tilesets  Defs to queue: uid, relPath, grid size, padding, spacing.
+ * @calledby src/scenes/PreloadScene.ts and src/level/LevelRenderer.ts → scene preload phase, before the loader runs
+ * @calls    the rel-path-to-URL mapper and the scene's spritesheet loader
+ */
 export function preloadTilesets(
   scene: Phaser.Scene,
   tilesets: ReadonlyArray<LdtkTilesetDef>,
@@ -120,7 +127,15 @@ export function preloadTilesets(
   }
 }
 
-// Loads any tilesets not already cached (HMR path); resolves when done or immediately if all cached.
+/**
+ * @function    loadTilesetsAtRuntime
+ * @description Loads any tilesets not already cached (HMR path); resolves when done or immediately if all cached.
+ * @param   scene     Its loader/texture cache.
+ * @param   tilesets  Candidate defs.
+ * @returns a Promise that resolves once the uncached tilesets finish loading (immediately if none), rejecting with a path-hint message on a load error.
+ * @calledby src/scenes/GameScene.ts → HMR reload path, when a live world rebuild may reference new tilesets
+ * @calls    the rel-path-to-URL mapper, the scene's spritesheet loader, and its complete/loaderror events
+ */
 export function loadTilesetsAtRuntime(
   scene: Phaser.Scene,
   tilesets: ReadonlyArray<LdtkTilesetDef>,

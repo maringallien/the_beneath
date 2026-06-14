@@ -15,26 +15,9 @@ import { TechShop } from './TechShop';
 import { Trap } from './Trap';
 
 /**
- * EntityFactory — turns LDtk entity instances into live game objects.
- *
- * The FACTORIES table is the single source of truth for "LDtk identifier →
- * spawn": hand-written SPECIAL_FACTORIES for gameplay entities (player, doors,
- * chests, saves, merchants, portal) merged with an auto-generated AnimatedEntity
- * factory for every registry identifier (behavior → Enemy, trap → Trap, neither
- * → static decoration). On collision a special factory wins. spawnEntities walks
- * a level's instances and sorts the results into pre-typed lists so GameScene
- * wires colliders/interactions once at build time without per-frame instanceof;
- * destroyEntities is its symmetric teardown. Two placement helpers
- * (pivotCenter / floorAlignedSpawnPosition) reconcile LDtk's pivot-anchored
- * coordinates with Phaser's centered sprite origin so spawns land where the
- * editor shows them.
- *
- * Inputs:  LDtk entity instances (pivot, size, world coords, level id, loiter
- *          path) and the entity registry (animation/physics/behavior config).
- * Outputs: constructed game objects sorted into SpawnedEntities; a DYNAMIC_
- *          ENTITY_IDENTIFIERS set; a single rebuilt Enemy from respawnEnemyAt.
- * @calledby world build at level load, HMR/world teardown, and enemy respawn.
- * @calls    the entity constructors and the registry lookup/listing helpers.
+ * @file entities/EntityFactory.ts
+ * @description LDtk → live game objects. The FACTORIES table is the single source of truth for "identifier → spawn": hand-written SPECIAL_FACTORIES for gameplay entities (player, doors, chests, saves, merchants, portal) merged with an auto-generated factory for every registry identifier (behavior → Enemy, trap → Trap, neither → static decoration); a special factory wins on collision. spawnEntities walks a level's instances and sorts results into pre-typed buckets so GameScene wires colliders/interactions once at build time without per-frame instanceof; destroyEntities is the symmetric teardown. Two placement helpers (pivotCenter / floorAlignedSpawnPosition) reconcile LDtk's pivot-anchored coords with Phaser's centered sprite origin so spawns land where the editor shows them.
+ * @module entities
  */
 export type EntityFactoryFn = (
   scene: Phaser.Scene,
@@ -47,7 +30,14 @@ const SPECIAL_FACTORIES: Readonly<Record<string, EntityFactoryFn>> = {
     const { x, y } = pivotCenter(instance);
     return new Player(scene, x, y);
   },
-  // key-locked when the level appears in LOCKED_DOOR_KEYS; plain proximity door otherwise
+  /**
+   * @function    Door_spawn
+   * @description Key-locked when the level appears in LOCKED_DOOR_KEYS; plain proximity door otherwise.
+   * @param   instance  LDtk door instance; its __levelId selects the required key, if any.
+   * @returns a new Door, locked to a key id or freely openable.
+   * @calledby src/entities/EntityFactory.ts → spawnEntities (a Door_spawn instance during a level's spawn walk)
+   * @calls    pivotCenter, the per-level LOCKED_DOOR_KEYS lookup, and the Door constructor
+   */
   Door_spawn: (scene, instance) => {
     const { x, y } = pivotCenter(instance);
     const requiredKey = instance.__levelId
@@ -69,7 +59,14 @@ const SPECIAL_FACTORIES: Readonly<Record<string, EntityFactoryFn>> = {
     const { x, y } = pivotCenter(instance);
     return new Chest(scene, x, y, 'Chest2_spawn', instance.iid);
   },
-  // gravity:false, so uses floorAlignedSpawnPosition to match the pivotY=1 LDtk placement
+  /**
+   * @function    Tech_shop_spawn
+   * @description gravity:false, so uses floorAlignedSpawnPosition to match the pivotY=1 LDtk placement.
+   * @param   instance  LDtk tech-shop instance.
+   * @returns a new TechShop at its floor-aligned (or plain pivot-center) position.
+   * @calledby src/entities/EntityFactory.ts → spawnEntities (a Tech_shop_spawn instance during a level's spawn walk)
+   * @calls    getEntityRegistryEntry for its config, then floorAlignedSpawnPosition (or pivotCenter) and the TechShop constructor
+   */
   Tech_shop_spawn: (scene, instance) => {
     const config = getEntityRegistryEntry('Tech_shop_spawn');
     const { x, y } = config
@@ -81,7 +78,14 @@ const SPECIAL_FACTORIES: Readonly<Record<string, EntityFactoryFn>> = {
     const { x, y } = pivotCenter(instance);
     return new MushroomMerchant(scene, x, y);
   },
-  // gravity:false victory exit; floorAlignedSpawnPosition honors the LDtk pivot
+  /**
+   * @function    Portal_spawn
+   * @description gravity:false victory exit; floorAlignedSpawnPosition honors the LDtk pivot.
+   * @param   instance  LDtk portal instance.
+   * @returns a new Portal at its floor-aligned (or plain pivot-center) position.
+   * @calledby src/entities/EntityFactory.ts → spawnEntities (a Portal_spawn instance during a level's spawn walk)
+   * @calls    getEntityRegistryEntry for its config, then floorAlignedSpawnPosition (or pivotCenter) and the Portal constructor
+   */
   Portal_spawn: (scene, instance) => {
     const config = getEntityRegistryEntry('Portal_spawn');
     const { x, y } = config
@@ -143,7 +147,15 @@ export interface SpawnedEntities {
   others: ReadonlyArray<Phaser.GameObjects.GameObject>;
 }
 
-// spawn all level entities and sort them into the typed SpawnedEntities buckets
+/**
+ * @function    spawnEntities
+ * @description Spawn all level entities and sort them into the typed SpawnedEntities buckets; warns once on identifiers with no factory.
+ * @param   scene      Owning Phaser scene.
+ * @param   instances  The level's LDtk entity instances.
+ * @returns a SpawnedEntities record with each object routed to its typed bucket.
+ * @calledby src/scenes/GameScene.ts → building (or HMR-rebuilding) a level's world after its instances are parsed
+ * @calls    the matching FACTORIES entry per instance, then runtime instanceof checks to bin each result; throws if a second Player spawns
+ */
 export function spawnEntities(
   scene: Phaser.Scene,
   instances: ReadonlyArray<LdtkEntityInstance>,
@@ -213,7 +225,14 @@ export function spawnEntities(
   };
 }
 
-// destroy every spawned object; preservePlayer keeps the Player instance across HMR/world rebuilds
+/**
+ * @function    destroyEntities
+ * @description Destroy every spawned object's Phaser resources; preservePlayer keeps the Player instance across HMR/world rebuilds.
+ * @param   spawned  A SpawnedEntities record to tear down.
+ * @param   options  preservePlayer spares the player instance.
+ * @calledby src/scenes/GameScene.ts → tearing a level's world down on HMR or before rebuilding/leaving a level
+ * @calls    each spawned object's own destroy; skips the player when preservePlayer is set
+ */
 export function destroyEntities(
   spawned: SpawnedEntities,
   options: { preservePlayer?: boolean } = {},
@@ -257,8 +276,15 @@ export function pivotCenter(e: LdtkEntityInstance): { x: number; y: number } {
   };
 }
 
-// like pivotCenter but aligns the sprite edge matching the LDtk pivot, so floor/wall/ceiling
-// anchored entities land exactly where the editor shows them rather than floating or sinking
+/**
+ * @function    floorAlignedSpawnPosition
+ * @description Like pivotCenter but aligns the sprite edge matching the LDtk pivot, so floor/wall/ceiling-anchored entities land where the editor shows them rather than floating or sinking.
+ * @param   instance  LDtk instance (pivot, box size, world coords).
+ * @param   config    Its registry config (frame size, scale, anchors).
+ * @returns a corrected world {x, y}; falls back to plain pivot-center when no default animation exists.
+ * @calledby src/entities/EntityFactory.ts → the FACTORIES factories placing a registry-driven or pivot-anchored entity (shops, portals, ceiling/floor spawns)
+ * @calls    pivotCenter, then per-pivot edge math (spawnAnchorY override, bottom-anchor, top-anchor)
+ */
 function floorAlignedSpawnPosition(
   instance: LdtkEntityInstance,
   config: AnimatedEntityConfig,
@@ -290,7 +316,18 @@ function floorAlignedSpawnPosition(
   return { x: x + correctionX, y: y + correctionY };
 }
 
-// rebuild a single Enemy at the given (already floor-aligned) coords; null if the identifier lost its behavior
+/**
+ * @function    respawnEnemyAt
+ * @description Rebuild a single Enemy at the given (already floor-aligned) coords; null if the identifier lost its behavior.
+ * @param   identifier      Registry identifier.
+ * @param   x, y            World coords (already floor-aligned).
+ * @param   iid             The instance iid.
+ * @param   loiterPath      Optional loiter path, or null.
+ * @param   spawnOverrides  Optional spawn overrides (e.g. harmless boss copies).
+ * @returns a fresh Enemy, or null when the identifier has no behavior entry in the registry.
+ * @calledby src/scenes/GameScene.ts and src/level/BossEncounterController.ts → respawning a defeated/despawned enemy (or spawning boss copies) into the active level
+ * @calls    getEntityRegistryEntry to confirm a behavior, then the Enemy constructor
+ */
 export function respawnEnemyAt(
   scene: Phaser.Scene,
   identifier: string,

@@ -7,19 +7,12 @@ import {
 } from '../manualSection';
 
 /**
- * basicsSection — builds the manual's "Basics" tab (objective + core gameplay loop).
- *
- * Assembles the intro paragraph, the descend → fight → collect → unlock → upgrade →
- * survive loop (driven by the LOOP_STEPS table below), and a closing pointer to the
- * other tabs. Deliberately short — just enough to orient a new player before they
- * read Controls and Combat.
- *
- * Inputs:  the static LOOP_STEPS copy below and the shared manual DOM helpers.
- * Outputs: a detached ManualSection element tree (no animated previews).
- * @calledby the in-game manual overlay, when assembling its tab pages.
- * @calls    the shared manual DOM/section helpers to build the element tree.
+ * @file ui/manual/sections/basicsSection.ts
+ * @description Builds the manual's "Basics" tab — intro paragraph, the descend/fight/collect/unlock/upgrade/survive loop (driven by LOOP_STEPS), and a closing pointer to the other tabs; deliberately short, just enough to orient a new player.
+ * @module ui/manual/sections
  */
 
+// ── Loop steps ─────────────────────────────────────────────────────────────
 // The ordered gameplay-loop steps rendered in the tab (title + one-line detail).
 const LOOP_STEPS: ReadonlyArray<{ title: string; detail: string }> = [
   {
@@ -59,7 +52,13 @@ const LOOP_STEPS: ReadonlyArray<{ title: string; detail: string }> = [
   },
 ];
 
-// builds the Basics tab: welcome lead, the gameplay loop list, and a pointer to other tabs
+/**
+ * @function    buildBasicsSection
+ * @description Builds the Basics tab: welcome lead, the gameplay loop list, and a pointer to other tabs. Reads the static LOOP_STEPS copy.
+ * @returns a detached ManualSection element tree (no animated previews).
+ * @calledby src/ui/ManualOverlay.ts → the TABS registry, built when the overlay assembles its tab pages
+ * @calls    src/ui/manual/manualSection.ts → sectionRoot, paragraph, titledBlock, el
+ */
 export function buildBasicsSection(): ManualSection {
   const root = sectionRoot();
 

@@ -8,23 +8,9 @@ import {
 import type { AnimatedEntityConfig } from './entityRegistryTypes';
 
 /**
- * AnimatedEntity — the registry-driven base sprite for every animated entity.
- *
- * Turns "this LDtk identifier is animated" into "a Phaser sprite running an
- * animation" by reading the entityRegistry JSON, so per-entity behavior lives
- * in data instead of N hand-written subclasses. The baseline just plays an
- * animation in place at the LDtk-placed position (no input, combat, or overlays
- * of its own); Door, Enemy, and friends subclass it for behavior. Owns the
- * anchor-and-body wiring — on every ANIMATION_START it re-derives origin, scale,
- * and physics-body size/offset from the sprite's per-anim anchor, the invariant
- * that keeps the body aligned to the art across anim swaps and facing flips.
- *
- * Inputs:  scene, spawn x/y, an LDtk identifier resolved against the registry
- *          (config: animations, physicsBody, gravity, defaultAnimation).
- * Outputs: a depth-sorted animated sprite with a correctly anchored body.
- * @calledby the entity factory at level load, and subclass constructors via super.
- * @calls    the entity-registry lookup, the per-anim sprite-anchor resolver, and
- *           Phaser's animation/physics systems.
+ * @file entities/AnimatedEntity.ts
+ * @description Registry-driven base sprite: turns "this LDtk identifier is animated" into a Phaser sprite running an animation by reading the entityRegistry JSON, so per-entity behavior lives in data instead of N hand-written subclasses. The baseline just plays an anim in place at the LDtk position (no input, combat, or overlays); Door, Enemy, Chest, Trap subclass it. Owns the anchor-and-body wiring — on every ANIMATION_START it re-derives origin, scale, and physics-body size/offset from the sprite's per-anim anchor, the invariant that keeps the body aligned to the art across anim swaps and facing flips.
+ * @module entities
  */
 export class AnimatedEntity extends Phaser.Physics.Arcade.Sprite {
   declare body: Phaser.Physics.Arcade.Body;
@@ -32,7 +18,15 @@ export class AnimatedEntity extends Phaser.Physics.Arcade.Sprite {
   private readonly identifier: string;
   protected readonly config: AnimatedEntityConfig;
 
-  // looks up the registry entry, sets up physics/animation, and starts the default anim at a random phase
+  /**
+   * @function    constructor
+   * @description Look up the registry entry, wire physics/animation, and start the default anim at a random phase so identical entities (e.g. a row of crows) don't animate in lockstep; throws if the entry or its texture is missing.
+   * @param   scene       Owning Phaser scene.
+   * @param   x, y        Spawn position (world px).
+   * @param   identifier  LDtk identifier resolved against the registry.
+   * @calledby src/entities/EntityFactory.ts → the auto-generated decoration factory, and subclass constructors via super
+   * @calls    src/entities/entityRegistryLoader.ts → getEntityRegistryEntry / entityAnimFullKey, and Phaser's add/physics/animation systems
+   */
   constructor(scene: Phaser.Scene, x: number, y: number, identifier: string) {
     const config = getEntityRegistryEntry(identifier);
     if (!config) {
@@ -74,7 +68,14 @@ export class AnimatedEntity extends Phaser.Physics.Arcade.Sprite {
     this.anims.setProgress(Math.random());
   }
 
-  // plays a logical (un-namespaced) anim key; returns false and no-ops if absent
+  /**
+   * @function    playLogical
+   * @description Play a logical (un-namespaced) anim key, resolving it to the entity-prefixed full key; no-ops if the key isn't in config.
+   * @param   animKey  Logical animation name from the registry entry.
+   * @returns true if the anim existed and was played, false otherwise.
+   * @calledby widely used — Door, Enemy, Trap, Save, Portal, Player driving their own animation state transitions
+   * @calls    src/entities/entityRegistryLoader.ts → entityAnimFullKey, then the Phaser sprite animation play
+   */
   playLogical(animKey: string): boolean {
     if (!(animKey in this.config.animations)) return false;
     const fullKey = entityAnimFullKey(this.identifier, animKey);
@@ -82,12 +83,18 @@ export class AnimatedEntity extends Phaser.Physics.Arcade.Sprite {
     return true;
   }
 
-  // This entity's LDtk identifier (its registry key).
+  /** This entity's LDtk identifier (its registry key). */
   getIdentifier(): string {
     return this.identifier;
   }
 
-  // flips the sprite and re-applies the body anchor so it stays correct after a facing change
+  /**
+   * @function    setFacing
+   * @description Flip the sprite and re-apply the body anchor so it stays correct after a facing change; no-ops if already facing that way.
+   * @param   faceLeft  True to face left / mirror the sprite.
+   * @calledby src/entities/Enemy.ts, src/entities/Player.ts, src/scenes/playerSnapshot.ts → turning the entity to track a target or movement
+   * @calls    src/entities/AnimatedEntity.ts → applyAnimationAnchor for the current animation
+   */
   setFacing(faceLeft: boolean): void {
     if (this.flipX === faceLeft) return;
     this.setFlipX(faceLeft);
@@ -97,7 +104,13 @@ export class AnimatedEntity extends Phaser.Physics.Arcade.Sprite {
     }
   }
 
-  // re-derives origin, scale, and body offset from the new anim's anchor data — must run on every anim swap and flip
+  /**
+   * @function    applyAnimationAnchor
+   * @description Re-derive origin, scale, and body size/offset from the new anim's anchor data — the invariant that keeps the physics body aligned to the art; must run on every anim swap and facing flip.
+   * @param   animation  The Phaser animation whose anchor data to apply.
+   * @calledby Phaser ANIMATION_START event (registered in the constructor), and setFacing on a flip
+   * @calls    src/sprites/characterLoader.ts → getSpriteAnchor, then the sprite/body setters
+   */
   private applyAnimationAnchor(animation: Phaser.Animations.Animation): void {
     const { width: bodyW, height: bodyH } = this.config.physicsBody;
     const {

@@ -1,19 +1,7 @@
 /**
- * HotReloadBus — a tiny pub/sub that bridges Vite HMR to the scene lifecycle.
- *
- * Decouples HMR's module-scoped accept callback from Phaser's scene-scoped
- * lifecycle: the HMR layer publishes a new raw LDtk JSON string, and subscribers
- * (typically a single live scene) re-run their world-build pipeline. A trailing
- * debounce collapses the burst of file-change events some editors/file-systems
- * emit per save (write-temp-then-rename, multiple flushes) so one save triggers
- * exactly one rebuild. Subscriber exceptions are isolated so one bad handler
- * can't poison the others or kill the bus. Dev-only by nature.
- *
- * Inputs:  raw LDtk JSON strings from the HMR accept callback; subscriber fns.
- * Outputs: debounced fan-out of the latest JSON to every live subscriber.
- * @calledby the Vite HMR module-update path (publish) and a scene wiring up its
- *           live-reload handler (subscribe).
- * @calls    each registered subscriber with the newest raw JSON.
+ * @file level/HotReloadBus.ts
+ * @description Tiny pub/sub bridging Vite HMR to the scene lifecycle — the HMR layer publishes a raw LDtk JSON string and subscribers (typically one live scene) re-run their world-build pipeline; a trailing debounce collapses the per-save burst some editors/file-systems emit (write-temp-then-rename, multiple flushes) into exactly one rebuild; subscriber exceptions are isolated so one bad handler can't poison the others or kill the bus; dev-only by nature.
+ * @module level
  */
 
 const RELOAD_DEBOUNCE_MS = 120;
@@ -24,7 +12,12 @@ const handlers = new Set<LdtkUpdateHandler>();
 let pendingRaw: string | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-// Fires the pending JSON to all subscribers; each runs in its own try/catch so one bad handler can't block others.
+/**
+ * @function    flush
+ * @description Fires the pending JSON to all subscribers; each runs in its own try/catch so one bad handler can't block others; no-op when nothing is pending.
+ * @calledby src/level/HotReloadBus.ts → publishLdtkUpdate (via the debounce timer, once the rapid-save burst settles)
+ * @calls    each registered subscriber, with a dev-only error log on a thrown handler
+ */
 function flush(): void {
   if (pendingRaw === null) return;
   const raw = pendingRaw;
@@ -42,7 +35,13 @@ function flush(): void {
   }
 }
 
-// Publishes a new LDtk JSON string, restarting the debounce so rapid saves collapse into one flush.
+/**
+ * @function    publishLdtkUpdate
+ * @description Publishes a new LDtk JSON string, restarting the debounce so rapid saves collapse into one flush; stores the JSON and (re)arms the debounce timer.
+ * @param   rawJson  The latest raw LDtk JSON string.
+ * @calledby src/ldtk/ldtkData.ts → the Vite HMR module-update path, when an LDtk source change is accepted
+ * @calls    the timer machinery, which eventually fans out via flush
+ */
 export function publishLdtkUpdate(rawJson: string): void {
   pendingRaw = rawJson;
   if (debounceTimer !== null) {
@@ -51,7 +50,14 @@ export function publishLdtkUpdate(rawJson: string): void {
   debounceTimer = setTimeout(flush, RELOAD_DEBOUNCE_MS);
 }
 
-// Registers a subscriber and returns its unsubscribe function (call on scene teardown).
+/**
+ * @function    subscribeLdtkUpdate
+ * @description Registers a subscriber and returns its unsubscribe function (call on scene teardown).
+ * @param   handler  A fn receiving the newest raw LDtk JSON on each flush.
+ * @returns an unsubscribe fn that removes the handler from the subscriber set.
+ * @calledby src/scenes/GameScene.ts → a scene wiring up its live-reload handler at setup
+ * @calls    set add/delete on the subscriber registry; no further delegation
+ */
 export function subscribeLdtkUpdate(handler: LdtkUpdateHandler): () => void {
   handlers.add(handler);
   return () => {

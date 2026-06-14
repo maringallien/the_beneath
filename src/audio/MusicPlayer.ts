@@ -3,24 +3,9 @@ import { getSoundDefinition } from './soundRegistryLoader';
 import { getMusicVolume, onMusicVolumeChange } from './musicSettings';
 
 /**
- * MusicPlayer — owns the game's single looping soundtrack.
- *
- * Unlike ambience/SFX (owned by SoundManager, driven by level transitions or
- * world proximity), the music is one persistent track that plays for the whole
- * session, gated only by the music VOLUME preference (the OPTIONS volume bar) —
- * muting the music leaves ambience and SFX untouched. Like SoundManager, the
- * BaseSound lives on Phaser's game-scoped sound manager (scene.sound is one
- * shared instance across every scene), so it survives scene.restart (respawn)
- * and the landing→gameplay handoff without restarting. All state is held at
- * module scope as the single source of truth.
- *
- * Inputs:  a scene + sound id to play; the live music-volume preference; the
- *          browser audio-unlock gesture.
- * Outputs: drives a Phaser BaseSound (play/volume/teardown) and a volume-fade
- *          tween; subscribes to the volume preference.
- * @calledby the gameplay scene's startup/handoff paths, asserting the soundtrack.
- * @calls    the sound-definition lookup, Phaser's game-global sound manager and
- *           tween manager, and the music-volume preference store.
+ * @file audio/MusicPlayer.ts
+ * @description Owns the game's single looping soundtrack — one persistent track for the whole session, gated only by the music VOLUME preference (muting it leaves ambience/SFX untouched). Its BaseSound lives on Phaser's game-scoped sound manager, so it survives scene.restart (respawn) and the landing→gameplay handoff without restarting; all state is module-scope. Driven by the gameplay scene's startup/handoff; reads the sound-definition lookup, Phaser's game-global sound + tween managers, and the music-volume store.
+ * @module audio
  */
 
 // swell-in on page load; slider adjustments snap so the bar feels immediate
@@ -40,7 +25,14 @@ let started = false;
 let subscribed = false;
 let unlockArmed = false;
 
-// asserts the soundtrack; idempotent for the same id, replaces on a different id; defers if audio context is still locked
+/**
+ * @function    playMusic
+ * @description Asserts the soundtrack; idempotent for the same id, replaces on a different id, and defers if the audio context is still locked.
+ * @param   scene    The active Phaser scene whose tweens drive the swell (scene.sound is game-global regardless).
+ * @param   soundId  Registry id of the track to play.
+ * @calledby src/scenes/GameScene.ts → gameplay startup and the landing→gameplay handoff, when the soundtrack should be (re)asserted
+ * @calls    getSoundDefinition, then applyState — the reconciler that starts/raises/snaps playback against the volume preference
+ */
 export function playMusic(scene: Phaser.Scene, soundId: string): void {
   musicScene = scene;
   ensureSubscribed();
@@ -61,7 +53,13 @@ export function playMusic(scene: Phaser.Scene, soundId: string): void {
   applyState(true);
 }
 
-// reconciles playback against volume+unlock state; arms UNLOCKED listener while locked; muted track stays alive at volume 0
+/**
+ * @function    applyState
+ * @description Reconciles playback against the volume + unlock state — arms the UNLOCKED listener while locked; a muted track stays alive at volume 0 so unmute resumes cleanly.
+ * @param   swell  True to fade volume in (first activation), false to snap (slider/pause-menu path).
+ * @calledby playMusic, the volume-change subscription, and the UNLOCKED-listener callback
+ * @calls    getMusicVolume, armUnlockListener, and setMusicVolumeNow
+ */
 function applyState(swell: boolean): void {
   if (music === null || musicScene === null || currentTrackId === null) return;
   const volume = getMusicVolume();
@@ -87,7 +85,14 @@ function applyState(swell: boolean): void {
   }
 }
 
-// sets track volume; tweens when fade=true and scene is active, snaps otherwise (slider/pause-menu path)
+/**
+ * @function    setMusicVolumeNow
+ * @description Sets the track volume — tweens when fade is true and the scene is active, snaps otherwise (slider / pause-menu path).
+ * @param   target  Target volume in [0, 1].
+ * @param   fade    True to tween over MUSIC_FADE_MS, false to set instantly.
+ * @calledby applyState
+ * @calls    the scene tween manager, or setVolume on the concrete WebAudioSound
+ */
 function setMusicVolumeNow(target: number, fade: boolean): void {
   if (music === null || musicScene === null) return;
   musicScene.tweens.killTweensOf(music);
@@ -103,14 +108,24 @@ function setMusicVolumeNow(target: number, fade: boolean): void {
   }
 }
 
-// subscribes once to volume changes so the slider tracks live; unsubscribe intentionally dropped (lives for the session)
+/**
+ * @function    ensureSubscribed
+ * @description Subscribes once to volume changes so the slider tracks live; the unsubscribe is intentionally dropped (the track lives for the session).
+ * @calledby playMusic
+ * @calls    onMusicVolumeChange (which re-runs applyState on each change)
+ */
 function ensureSubscribed(): void {
   if (subscribed) return;
   subscribed = true;
   onMusicVolumeChange(() => applyState(false));
 }
 
-// arms a one-shot UNLOCKED listener that swells in the track on the first user gesture; guarded against stacking
+/**
+ * @function    armUnlockListener
+ * @description Arms a one-shot UNLOCKED listener that swells the track in on the first user gesture; guarded against stacking.
+ * @calledby applyState, while the audio context is still locked
+ * @calls    the scene sound manager's one-shot UNLOCKED handler, which re-runs applyState
+ */
 function armUnlockListener(): void {
   if (unlockArmed || musicScene === null) return;
   unlockArmed = true;
@@ -120,7 +135,12 @@ function armUnlockListener(): void {
   });
 }
 
-// stops/destroys the current track when switching to a different id; prevents leaking the old BaseSound
+/**
+ * @function    teardownCurrent
+ * @description Stops and destroys the current track when switching to a different id; prevents leaking the old BaseSound.
+ * @calledby playMusic, when soundId differs from the current track
+ * @calls    the scene tween + sound managers (killTweensOf/stop/destroy)
+ */
 function teardownCurrent(): void {
   if (music === null) return;
   if (musicScene !== null) musicScene.tweens.killTweensOf(music);

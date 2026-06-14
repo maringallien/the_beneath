@@ -1,20 +1,7 @@
 /**
- * musicSettings — the persistent music-volume preference and its pub/sub.
- *
- * Owns the soundtrack volume as module state (the single source of truth across
- * the app), driven by the OPTIONS-panel volume bar. Gates the soundtrack ONLY —
- * ambience and SFX are unaffected. Volume 0 means muted; the speaker icon and
- * the M-key shortcut flip between 0 and the last audible level. The value is
- * mirrored to localStorage so it survives reloads, and a notify list lets the
- * soundtrack follow the slider live without polling. All localStorage access is
- * wrapped in try/catch (it can throw under private-browsing quotas or disabled
- * storage) and falls back to the in-memory value.
- *
- * Inputs:  the OPTIONS volume bar / mute shortcut; localStorage on load.
- * Outputs: the current volume, an enabled boolean, and change notifications.
- * @calledby the OPTIONS UI (set/toggle) and the soundtrack player (read +
- *           subscribe for its live target level).
- * @calls    localStorage for persistence and the registered change listeners.
+ * @file audio/musicSettings.ts
+ * @description Persistent music-volume preference and its pub/sub, held as module state (single source of truth), driven by the OPTIONS volume bar. Gates the soundtrack ONLY (ambience/SFX unaffected); volume 0 = muted, the speaker icon and M-key flip 0 ↔ last-audible. Mirrored to localStorage (try/catch falls back to in-memory under private-browsing/quota), and a listener list lets the soundtrack track the slider live without polling.
+ * @module audio
  */
 
 const VOLUME_KEY = 'the_beneath.musicVolume';
@@ -53,16 +40,23 @@ function readPersistedVolume(): number {
   }
 }
 
+/** Current music volume in [0, 1]. */
 export function getMusicVolume(): number {
   return musicVolume;
 }
 
-// true when the track is audible (volume > 0); drives the speaker-icon state
+/** True when the track is audible (volume > 0); drives the speaker-icon state. */
 export function isMusicEnabled(): boolean {
   return musicVolume > 0;
 }
 
-// sets, persists, and broadcasts the music volume; no-ops when unchanged; remembers non-zero levels for unmute
+/**
+ * @function    setMusicVolume
+ * @description Sets, persists, and broadcasts the music volume; no-ops when unchanged; remembers non-zero levels for a later unmute.
+ * @param   value  Target volume; clamped to [0, 1], non-finite → 0.
+ * @calledby src/ui/ManualOverlay.ts → the OPTIONS volume bar as the player drags it, and toggleMusicMuted below
+ * @calls    the clamp helper, localStorage persistence, and each subscribed change listener (so the live soundtrack tracks the slider)
+ */
 export function setMusicVolume(value: number): void {
   const next = clamp01(value);
   if (next === musicVolume) return;
@@ -76,7 +70,13 @@ export function setMusicVolume(value: number): void {
   for (const listener of listeners) listener(musicVolume);
 }
 
-// toggles mute; unmutes to the last audible level (or default); returns the new enabled state
+/**
+ * @function    toggleMusicMuted
+ * @description Toggles mute — drops to 0 when audible, otherwise restores the last audible level (or the default if none was remembered).
+ * @returns the new enabled state (true = now audible); drives a volume change and its broadcast as a side effect.
+ * @calledby src/ui/ManualOverlay.ts → the OPTIONS speaker icon and the M-key mute shortcut
+ * @calls    setMusicVolume, which persists and notifies subscribers
+ */
 export function toggleMusicMuted(): boolean {
   if (musicVolume > 0) {
     setMusicVolume(0);
@@ -86,7 +86,14 @@ export function toggleMusicMuted(): boolean {
   return musicVolume > 0;
 }
 
-// subscribes to volume changes; returns an unsubscribe function
+/**
+ * @function    onMusicVolumeChange
+ * @description Subscribes a listener to volume changes.
+ * @param   listener  Callback invoked with the new volume on each change.
+ * @returns an unsubscribe function that removes the listener.
+ * @calledby src/audio/MusicPlayer.ts → ensureSubscribed, so the soundtrack follows the slider live without polling
+ * @calls    —
+ */
 export function onMusicVolumeChange(listener: MusicVolumeListener): () => void {
   listeners.add(listener);
   return () => {

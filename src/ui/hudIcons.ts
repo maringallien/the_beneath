@@ -1,19 +1,7 @@
 /**
- * hudIcons — modern, monochrome HUD icon set authored as inline SVG.
- *
- * The player HUD renders these instead of the old pixel-art / procedural texture
- * icons, so the glyphs are crisp at any size and fully styled from CSS: every
- * shape is painted with `currentColor`, so the surrounding rule controls colour
- * (white = active, translucent = depleted) and opacity with no per-icon state.
- * Glyph geometry is the path data below; a builder emits a fresh <svg> per call
- * (DOM nodes can't be shared between mount points). The underlying game textures
- * (coin / heart / orb / hud_ammo) stay registered for the shop and world drops;
- * only the HUD stops referencing them.
- *
- * Inputs:  an icon name + a CSS class string per build.
- * Outputs: freshly-created SVG/DOM nodes; no shared or retained state.
- * @calledby the player HUD overlay, building its resource/weapon glyph rows.
- * @calls    only the DOM API (createElementNS, attribute setters).
+ * @file ui/hudIcons.ts
+ * @description Modern monochrome HUD icon set authored as inline SVG, every shape painted with currentColor so CSS controls colour/opacity with no per-icon state; a builder emits a fresh <svg> per call since DOM nodes can't be shared between mount points.
+ * @module ui
  */
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -85,7 +73,14 @@ const ICON_SHAPES: Record<Exclude<HudIconName, 'coin'>, readonly Shape[]> = {
   sword: [{ tag: 'path', d: SWORD_D }],
 };
 
-// Appends one shape to the svg as a currentColor path or circle.
+/**
+ * @function    appendShape
+ * @description Append one shape to the svg as a currentColor path, or a filled disc / stroked ring circle.
+ * @param   svg    Target shell to append into.
+ * @param   shape  A path or a filled/stroked circle primitive.
+ * @calledby src/ui/hudIcons.ts → createHudIcon, while assembling a glyph from its static shape table
+ * @calls    the DOM createElementNS and attribute setters only
+ */
 function appendShape(svg: SVGSVGElement, shape: Shape): void {
   if (shape.tag === 'path') {
     const path = document.createElementNS(SVG_NS, 'path');
@@ -109,7 +104,7 @@ function appendShape(svg: SVGSVGElement, shape: Shape): void {
   svg.appendChild(circle);
 }
 
-// Creates a blank aria-hidden svg shell with the 24×24 viewBox and the given CSS class.
+/** Create a blank aria-hidden svg shell with the 24×24 viewBox and the given CSS class. */
 function baseSvg(className: string): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg');
   svg.setAttribute('viewBox', VIEW_BOX);
@@ -122,7 +117,13 @@ function baseSvg(className: string): SVGSVGElement {
 let coinMaskSeq = 0;
 const COIN_STAMP_FONT =
   'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-// Draws a solid disc with a "$" knocked out via SVG mask so it reads as a struck coin.
+/**
+ * @function    appendStampedCoin
+ * @description Draw a solid disc with a "$" knocked out via SVG mask so it reads as a struck coin; bumps the per-call mask-id counter so each instance has a unique mask.
+ * @param   svg  Target shell to receive the masked disc.
+ * @calledby src/ui/hudIcons.ts → createHudIcon, for the 'coin' glyph specifically
+ * @calls    the DOM createElementNS and attribute setters to define the mask
+ */
 function appendStampedCoin(svg: SVGSVGElement): void {
   coinMaskSeq += 1;
   const maskId = `hud-coin-mask-${coinMaskSeq}`;
@@ -160,7 +161,15 @@ function appendStampedCoin(svg: SVGSVGElement): void {
   svg.appendChild(disc);
 }
 
-// Returns a fresh svg glyph (new node per call — DOM nodes can't be shared between mount points).
+/**
+ * @function    createHudIcon
+ * @description Return a fresh svg glyph (new node per call — DOM nodes can't be shared between mount points).
+ * @param   name       Which glyph to draw.
+ * @param   className  CSS class to put on the <svg>.
+ * @returns a newly created <svg> element painted with the glyph's shapes.
+ * @calledby widely used — src/ui/PlayerHudOverlay.ts and src/ui/manual/manualSection.ts, when building a resource/weapon icon row
+ * @calls    src/ui/hudIcons.ts → appendStampedCoin for 'coin', otherwise appendShape per shape
+ */
 export function createHudIcon(name: HudIconName, className: string): SVGSVGElement {
   const svg = baseSvg(className);
   if (name === 'coin') {
@@ -171,7 +180,13 @@ export function createHudIcon(name: HudIconName, className: string): SVGSVGEleme
   return svg;
 }
 
-// Builds a two-layer (empty + fill) heart; narrowing the clip span's width shows 0–100% fill from the left.
+/**
+ * @function    createFillableHeart
+ * @description Build a two-layer (empty + fill) heart; narrowing the clip span's width shows 0-100% fill from the left.
+ * @returns a { root, clip } pair — root the mountable element, clip's width drives the fill fraction.
+ * @calledby src/ui/PlayerHudOverlay.ts → buildLeftPanel, building the row of HP hearts
+ * @calls    src/ui/hudIcons.ts → createHudIcon twice (empty + fill layer) and DOM element creation
+ */
 export function createFillableHeart(): {
   readonly root: HTMLSpanElement;
   readonly clip: HTMLSpanElement;

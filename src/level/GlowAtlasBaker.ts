@@ -10,30 +10,12 @@ import type { LdtkTilesetDef } from '../ldtk/types';
 import { tilesetTextureKey } from './TilesetRegistry';
 
 /**
- * GlowAtlasBaker — one-shot pre-bake of a per-tileset "glow" texture used to
- * give bright foreground pixels a soft emissive halo.
- *
- * At preload, for each tileset it reads the source PNG, finds every pixel whose
- * luminance clears FOREGROUND_GLOW_LUMINANCE_THRESHOLD, and paints an additive
- * radial halo at that position into a sibling canvas registered under a suffixed
- * texture key. The glow canvas matches the source dimensions and re-slices the
- * SAME frame grid (frameWidth/height/margin/spacing), so glow frame `t` lines up
- * one-to-one with source frame `t` — the renderer can request a glow image by the
- * same frame index. It also records which frame indices actually contain a bright
- * pixel, at module scope, so the renderer can skip frames that would bake empty.
- * INVARIANT: the texture-key suffix scheme and the frame-grid math here must stay
- * in sync with what the renderer assumes.
- *
- * Inputs:  the scene's texture cache and an LDtk tileset def (uid, grid, padding,
- *          spacing); reads the already-loaded source tileset image.
- * Outputs: a registered LINEAR-filtered glow canvas texture with per-tile frames,
- *          plus the module-scope bright-frame index; returns whether one was made.
- * @calledby the preload/level-setup pass, once per tileset before rendering.
- * @calls    the Canvas 2D API for pixel reads and halo compositing, and Phaser's
- *           texture cache to register the result.
+ * @file level/GlowAtlasBaker.ts
+ * @description One-shot pre-bake of a per-tileset "glow" texture giving bright foreground pixels a soft emissive halo; reads source PNG, finds pixels over FOREGROUND_GLOW_LUMINANCE_THRESHOLD, paints additive radial halos into a sibling canvas under a suffixed key; re-slices the SAME frame grid so glow frame t lines up with source frame t; records which frame indices actually contain a bright pixel (module scope) so the renderer skips empty frames; INVARIANT: suffix scheme + frame-grid math must stay in sync with the renderer.
+ * @module level
  */
 
-// Texture key for a tileset's sibling glow atlas; suffix must stay in sync with the renderer.
+/** Texture key for a tileset's sibling glow atlas; suffix must stay in sync with the renderer. */
 export function glowAtlasTextureKey(tilesetUid: number): string {
   return tilesetTextureKey(tilesetUid) + FOREGROUND_GLOW_TEXTURE_SUFFIX;
 }
@@ -41,15 +23,22 @@ export function glowAtlasTextureKey(tilesetUid: number): string {
 // Per-atlas set of frame indices containing a bright pixel; used by the renderer to skip empty glow tiles.
 const brightFrameSets = new Map<string, ReadonlySet<number>>();
 
-// Frame indices that contain a bright pixel for this glow texture key (undefined
-// if the tileset was never baked / had none).
+/** Frame indices that contain a bright pixel for this glow texture key (undefined if the tileset was never baked / had none). */
 export function getBrightFrames(
   glowKey: string,
 ): ReadonlySet<number> | undefined {
   return brightFrameSets.get(glowKey);
 }
 
-// Bakes the glow atlas for one tileset: paints a radial halo per bright pixel into a sibling canvas texture. Idempotent.
+/**
+ * @function    bakeGlowAtlasForTileset
+ * @description Bakes the glow atlas for one tileset: paints a radial halo per bright pixel into a sibling canvas texture; registers a LINEAR-filtered glow canvas, its frames, and the bright-frame index. Idempotent.
+ * @param   scene  For its texture cache.
+ * @param   def    LDtk tileset def: uid, grid size, padding, spacing.
+ * @returns true if a glow texture now exists; false (no bake) when the source is missing, zero-sized, has no read context, or contains no bright pixels.
+ * @calledby src/scenes/PreloadScene.ts → preload/level-setup pass, once per tileset before rendering
+ * @calls    the Canvas 2D API for pixel reads and halo compositing, the halo painter and frame registrar, and the texture cache to register the result
+ */
 export function bakeGlowAtlasForTileset(
   scene: Phaser.Scene,
   def: LdtkTilesetDef,
@@ -144,7 +133,19 @@ export function bakeGlowAtlasForTileset(
   return true;
 }
 
-// Stamps a soft radial halo at (cx, cy) using the source pixel's color and the falloff curve.
+/**
+ * @function    paintHalo
+ * @description Stamps a soft radial halo at (cx, cy) using the source pixel's color and the falloff curve; fills one radial-gradient disc into the context.
+ * @param   ctx     Output 2D context, additive blend.
+ * @param   cx      Canvas px center X.
+ * @param   cy      Canvas px center Y.
+ * @param   radius  Halo px.
+ * @param   r       Source pixel red (0-255).
+ * @param   g       Source pixel green (0-255).
+ * @param   b       Source pixel blue (0-255).
+ * @calledby src/level/GlowAtlasBaker.ts → bakeGlowAtlasForTileset, once per bright source pixel
+ * @calls    the Canvas 2D radial-gradient and arc-fill API
+ */
 function paintHalo(
   ctx: CanvasRenderingContext2D,
   cx: number,
@@ -168,7 +169,17 @@ function paintHalo(
   ctx.fill();
 }
 
-// Registers per-tile frames on the glow texture in the same row-major order the spritesheet loader uses.
+/**
+ * @function    registerGlowFrames
+ * @description Registers per-tile frames on the glow texture in the same row-major order the spritesheet loader uses; adds one frame per fully-fitting tile cell so glow frame indices match source frame indices.
+ * @param   scene       Texture cache.
+ * @param   textureKey  The glow texture.
+ * @param   width       Canvas px width.
+ * @param   height      Canvas px height.
+ * @param   def         Tileset def: grid size, padding, spacing.
+ * @calledby src/level/GlowAtlasBaker.ts → bakeGlowAtlasForTileset, right after the glow canvas is registered
+ * @calls    the texture's per-frame add API; pure grid arithmetic otherwise
+ */
 function registerGlowFrames(
   scene: Phaser.Scene,
   textureKey: string,

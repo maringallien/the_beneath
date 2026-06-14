@@ -2,24 +2,26 @@ import Phaser from 'phaser';
 import type { IntGridData } from '../ldtk/parseLdtk';
 
 /**
- * LevelCollision — builds the invisible per-level collision tilemap from IntGrid.
- *
- * Turns an LDtk IntGrid CSV into an undrawn Phaser tilemap layer whose solidity
- * mirrors the grid. Deliberately separate from the visual renderer so it doesn't
- * inherit Tilemap's grid-locked, one-tile-per-cell constraints when LDtk auto-
- * rules emit off-grid or stacked decorations. Layer tile indices are the raw
- * IntGrid values, so surface-aware callers can read them back per tile.
- *
- * Inputs:  the scene, an IntGrid (CSV + dims), a tileset key, a world offset.
- * Outputs: a hidden TilemapLayer with collision set, positioned in world space.
- * @calledby the world-build pipeline, once per level during scene setup.
- * @calls    Phaser's tilemap factory (make/addTilesetImage/createLayer).
+ * @file level/LevelCollision.ts
+ * @description Builds the invisible per-level collision tilemap from IntGrid; turns the LDtk IntGrid CSV into an undrawn Phaser tilemap layer whose solidity mirrors the grid; deliberately separate from the visual renderer so it doesn't inherit Tilemap's grid-locked one-tile-per-cell constraints; layer tile indices are the raw IntGrid values so surface-aware callers can read them back.
+ * @module level
  */
 
 // Sentinel index for empty cells; Phaser then returns null for tile lookups there.
 const EMPTY_TILE_INDEX = -1;
 
-// Builds an invisible collision TilemapLayer from the IntGrid CSV; non-zero values are solid and carry their raw value for surface-aware callers.
+/**
+ * @function    buildIntGridCollision
+ * @description Builds an invisible collision TilemapLayer from the IntGrid CSV; non-zero values are solid and carry their raw value for surface-aware callers.
+ * @param   scene              The scene.
+ * @param   intGrid            CSV + cWid/cHei/gridSize.
+ * @param   tilesetTextureKey  The tileset texture key.
+ * @param   worldOffsetX       World px X offset (default 0).
+ * @param   worldOffsetY       World px Y offset (default 0).
+ * @returns a hidden, collision-enabled TilemapLayer positioned at the world offset; throws if the tileset or layer can't be created.
+ * @calledby src/scenes/GameScene.ts → world build, once per level during scene setup
+ * @calls    Phaser's tilemap factory (make / addTilesetImage / createLayer) and exclude-based collision setup
+ */
 export function buildIntGridCollision(
   scene: Phaser.Scene,
   intGrid: IntGridData,

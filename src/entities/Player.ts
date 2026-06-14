@@ -184,8 +184,15 @@ const DEATH_KEYS: ReadonlySet<string> = fullKeysForLogical('death');
 // to schedule a restart after the death animation has had time to play.
 export const PLAYER_DIED_EVENT = 'player-died';
 
-// Resolves a mode+logical animation key at module load, throwing if absent —
-// a missing required animation is a registry bug, not a recoverable state.
+/**
+ * @function    requireAnimKey
+ * @description Resolve a mode+logical animation key at module load, throwing if absent — a missing required animation is a registry bug, not a recoverable state.
+ * @param   mode     Character mode id.
+ * @param   logical  Logical animation key.
+ * @returns the resolved full animation key string; throws if the registry has no such key.
+ * @calledby module-load constant setup pinning a known-required animation key (TELEPORT_ANIM_KEY)
+ * @calls    src/sprites/characterLoader.ts → animKey, then the Error constructor on a miss
+ */
 function requireAnimKey(
   mode: CharacterModeId,
   logical: LogicalAnimationKey,
@@ -240,32 +247,9 @@ interface LedgeTrigger {
 type ArcadeBody = Phaser.Physics.Arcade.Body | Phaser.Physics.Arcade.StaticBody;
 
 /**
- * Player — the player-controlled avatar: movement, combat, and resources.
- *
- * Owns the whole player feel. Movement is a souls-like platformer kit — run,
- * jump (with jump-cut + fall-bonus gravity), dash, roll, wall-slide, and
- * ledge-climb — layered over a small locked-action state machine
- * (attack/dash/roll/block/climb/hurt/dead) that gates input while an action
- * plays. Combat spans three weapon families switched by mouse-wheel
- * (MODE_ORDER): the sword_master melee combo (with a magic stance, a roll-attack,
- * and a teleport finisher), and two gunslinger overlay modes that fire
- * projectiles. Tracks every player resource (health, gun1/gun2 ammo, magic orbs,
- * stamina, coins, healing items), enforces their caps (base + run-progress
- * upgrades), and runs hurt/block/fall-damage/death. Animation drives both the
- * visual state and audio: a logical-key animation system plus frame-indexed
- * sound triggers. The locked-action machine is the spine — almost every branch
- * keys off `lockedAction` and `currentVisualState`.
- *
- * Inputs:  keyboard (WASD/F/G/Q/Shift/Space) and mouse (LMB attack, RMB block,
- *          wheel mode-swap, cursor aim); per-frame scene update; structural scene
- *          interfaces for projectile spawn, nearest-enemy, and IntGrid lookups.
- * Outputs: the player sprite + its physics body, projectiles, sword damage to
- *          enemies, one-shot + state-loop audio, the optional gun overlay, and
- *          the PLAYER_DIED_EVENT.
- * @calledby the gameplay scene — constructed at level load, ticked each frame,
- *           and queried by the HUD, shop, interaction, and save/respawn systems.
- * @calls    the audio one-shot/state-loop players, the movement-audio module, the
- *           gun overlay, the run-progress store, and the scene's spawn/query seams.
+ * @file entities/Player.ts
+ * @description The player-controlled avatar — owns the whole player feel: a souls-like movement kit (run, jump with jump-cut + fall-bonus gravity, dash, roll, wall-slide, ledge-climb) over a small locked-action state machine (attack/dash/roll/block/climb/hurt/dead) that gates input while an action plays. Combat spans three mouse-wheel-switched weapon families (MODE_ORDER): the sword_master melee combo (magic stance, roll-attack, teleport finisher) and two gunslinger overlay modes that fire projectiles. Tracks every resource (health, gun1/gun2 ammo, magic orbs, stamina, coins, heal items) and enforces caps (base + run-progress upgrades), and runs hurt/block/fall-damage/death. Animation drives both visual state and audio (logical-key anims + frame-indexed sound triggers); lockedAction + currentVisualState are the spine almost every branch keys off. Reads keyboard + mouse and a per-frame tick; emits the sprite/body, projectiles, sword damage, audio, the optional gun overlay, and PLAYER_DIED_EVENT.
+ * @module entities
  */
 export class Player extends Phaser.Physics.Arcade.Sprite {
   declare body: Phaser.Physics.Arcade.Body;
@@ -333,7 +317,14 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   // When false, update bails early and pointer/wheel handlers no-op (landing-page freeze).
   private controlsEnabled = true;
 
-  // Wires physics, keys, listeners, and movement-audio; throws on missing textures or registry gaps.
+  /**
+   * @function    constructor
+   * @description Wire physics, keys, input/anim/post-update listeners, and movement-audio; throws on missing textures or registry gaps.
+   * @param   scene  Owning Phaser scene.
+   * @param   x, y   Spawn position (world px).
+   * @calledby src/entities/EntityFactory.ts → the player factory when a level's world is built
+   * @calls    Phaser physics/input setup, src/entities/playerProjectileConfig.ts → buildProjectileFireConfigs, the PlayerMovementAudio constructor, and the initial idle animation
+   */
   constructor(scene: Phaser.Scene, x: number, y: number) {
     const initialIdleKey = animKey('sword_master', 'idle');
     if (!initialIdleKey || !scene.textures.exists(initialIdleKey)) {
@@ -435,17 +426,24 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.playLogical('idle');
   }
 
-  // The active weapon mode (sword_master / gunslinger_gun1 / gunslinger_gun2).
+  // ── Mode + control accessors ─────────────────────────────────────────────
+  /** The active weapon mode (sword_master / gunslinger_gun1 / gunslinger_gun2). */
   getCurrentMode(): CharacterModeId {
     return this.currentMode;
   }
 
-  // True while the magic sword stance is active (F toggles; clears when wheeling to a gun).
+  /** True while the magic sword stance is active (F toggles; clears when wheeling to a gun). */
   isMagicMode(): boolean {
     return this.magicMode;
   }
 
-  // Freezes all input and zeroes velocity; re-enabling restores normal play next frame.
+  /**
+   * @function    setControlsEnabled
+   * @description Freeze all input and zero velocity; re-enabling restores normal play next frame.
+   * @param   enabled  False to freeze, true to resume.
+   * @calledby src/scenes/GameScene.ts → the landing-page freeze and cutscene/transition seams that suspend player control
+   * @calls    the velocity setter when freezing; otherwise just flips the gate
+   */
   setControlsEnabled(enabled: boolean): void {
     this.controlsEnabled = enabled;
     if (!enabled) {
@@ -453,13 +451,24 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     }
   }
 
-  // Hides the sprite and disables the body for the victory warp — no way back, run ends.
+  /**
+   * @function    vanishForWarp
+   * @description Hide the sprite and disable the body for the victory warp — no way back, run ends.
+   * @calledby src/scenes/GameScene.ts → the portal victory warp once the player commits to the level-13 exit
+   * @calls    the sprite visibility and body-enable toggles only
+   */
   vanishForWarp(): void {
     this.setVisible(false);
     this.body.enable = false;
   }
 
-  // Programmatic mode swap (used by HMR restore); skips wheel cooldown and the floor re-snap.
+  /**
+   * @function    setCurrentMode
+   * @description Programmatic mode swap (used by save/HMR restore); skips the wheel cooldown and the floor re-snap. Clears magic stance when leaving sword_master and re-syncs the gun + anim. No-op if already in that mode.
+   * @param   mode  The character mode to switch to.
+   * @calledby src/scenes/playerSnapshot.ts → save/HMR restore reapplying a previously-active weapon mode
+   * @calls    src/entities/Player.ts → ensurePlayerGunForMode and applyModeChangeAnimation
+   */
   setCurrentMode(mode: CharacterModeId): void {
     if (mode === this.currentMode) return;
     this.currentMode = mode;
@@ -470,14 +479,20 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.applyModeChangeAnimation();
   }
 
-  // Per-frame driver: state machine → fall-damage → movement audio, in that order.
+  // ── Per-frame update ─────────────────────────────────────────────────────
+  /**
+   * @function    update
+   * @description Per-frame driver: state machine then fall-damage then movement audio, in that order.
+   * @calledby Phaser per-frame update loop (via src/scenes/GameScene.ts → update)
+   * @calls    src/entities/Player.ts → updateInner and updateFallDamage, then src/entities/playerMovementAudio.ts → update
+   */
   update(): void {
     this.updateInner();
     this.updateFallDamage();
     this.movementAudio.update(this.buildMovementAudioInput());
   }
 
-  // Packs this frame's physics/state into the struct the movement-audio rig expects.
+  /** Packs this frame's physics/state into the struct the movement-audio rig expects. */
   private buildMovementAudioInput(): MovementAudioInput {
     return {
       deltaMs: this.scene.game.loop.delta,
@@ -493,7 +508,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     };
   }
 
-  // Samples the IntGrid tile directly underfoot for footstep sound selection.
+  /** Samples the IntGrid tile directly underfoot for footstep sound selection. */
   private probeFootSurface(): number {
     const sceneWithIntGrid = this.scene as unknown as IntGridQueryScene;
     return sceneWithIntGrid.getIntGridValueAt(
@@ -502,7 +517,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     );
   }
 
-  // Main per-frame input/state machine: locked-action branch, then free movement, jump, wall-slide.
+  /**
+   * @function    updateInner
+   * @description Main per-frame input/state machine: locked-action branch first, then free movement, jump, and wall-slide; sets velocity/facing/visual-state and may transition into a locked action.
+   * @calledby src/entities/Player.ts → update, ahead of fall-damage and audio
+   * @calls    tickStaminaRegen, the fly-mode/heal/aim handlers, the action starters (startDash/startRoll/startBlock/startClimb), and updateVisualState
+   */
   private updateInner(): void {
     if (!this.controlsEnabled) {
       // Landing-page freeze: zero X and bail; gravity left on so the player settles to the floor.
@@ -717,8 +737,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.updateVisualState();
   }
 
-  // True during the sword_master roll-attack (the slide-on-velocity swing).
-  // Roll-attack exists only in sword_master; gunslinger attack1 is not one.
+  /** True during the sword_master roll-attack (the slide-on-velocity swing); gunslinger attack1 is not one. */
   private isRollAttackInProgress(): boolean {
     return (
       this.currentMode === 'sword_master' &&
@@ -726,7 +745,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     );
   }
 
-  // True when the current mode is either gun (drives the gun-overlay combat path).
+  /** True when the current mode is either gun (drives the gun-overlay combat path). */
   private isGunslingerMode(): boolean {
     return (
       this.currentMode === 'gunslinger_gun1' ||
@@ -734,7 +753,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     );
   }
 
-  // Steps through MODE_ORDER by ±1; re-snaps feet when grounded so the body doesn't jump.
+  /**
+   * @function    tryAdvanceMode
+   * @description Step through MODE_ORDER by ±1, swapping the weapon mode, starting the wheel cooldown, and re-snapping the body so the feet stay planted when grounded. No-op while a locked action runs or at the list ends.
+   * @param   direction  +1 forward / -1 back through MODE_ORDER.
+   * @calledby src/entities/Player.ts → the wheel handler, on a scroll requesting the next/previous weapon mode
+   * @calls    ensurePlayerGunForMode, applyModeChangeAnimation, and the inverse body-position math
+   */
   private tryAdvanceMode(direction: 1 | -1): void {
     if (this.lockedAction !== null) return;
     const currentIndex = MODE_ORDER.indexOf(this.currentMode);
@@ -764,14 +789,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     }
   }
 
-  // Replays the current visual state's animation in the (new) mode's art, so a
-  // weapon swap keeps the same pose. Called after any mode change.
+  /** Replays the current visual state's anim in the new mode's art so a weapon swap keeps the same pose. */
   private applyModeChangeAnimation(): void {
     const logical = this.visualStateToLogical(this.currentVisualState);
     this.playLogical(logical);
   }
 
-  // Maps visual state to the logical anim key for a mode swap; locked states all collapse to idle.
+  /** Maps visual state to the logical anim key for a mode swap; locked states all collapse to idle. */
   private visualStateToLogical(
     state: PlayerVisualState,
   ): LogicalAnimationKey {
@@ -793,7 +817,15 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     }
   }
 
-  // Resolves and plays the mode-specific animation key, syncing the gun overlay; returns false if absent.
+  /**
+   * @function    playLogical
+   * @description Resolve and play the mode-specific animation key, syncing the gun overlay; returns false when the current mode has no such key.
+   * @param   logical  Logical animation key.
+   * @param   options  ignoreIfPlaying flag plus optional repeat/duration overrides.
+   * @returns true if the animation played; false when the current mode has no such key.
+   * @calledby widely used — every state transition and visual-state update that shows a body pose
+   * @calls    the Phaser sprite animation play (with derived frameRate when a duration is given) and src/entities/Player.ts → syncGunOverlayForBodyAnim
+   */
   private playLogical(
     logical: LogicalAnimationKey,
     options: {
@@ -827,7 +859,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     return true;
   }
 
-  // Routes LMB to the right attack: queue combo, roll-attack, teleport (Space), or fresh start.
+  // ── Combat / attacks ─────────────────────────────────────────────────────
+  /**
+   * @function    handleAttackInput
+   * @description Route an LMB press to the right attack: queue a combo follow-up, a roll-attack, a teleport (Space), or a fresh swing.
+   * @calledby src/entities/Player.ts → the attack pointer handler, on a left-mouse-button press while controls are enabled
+   * @calls    startAttackAnim, the scene's nearest-enemy query (teleport gate), and tryConsumeGunslingerAmmo
+   */
   private handleAttackInput(): void {
     if (this.lockedAction === 'attack') {
       if (
@@ -871,7 +909,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.startAttackAnim(this.attackCounter);
   }
 
-  // Ticks stamina regen once per frame; paused during a dash so back-to-back dashes can't exploit it.
+  /**
+   * @function    tickStaminaRegen
+   * @description Tick stamina regen once per frame, refilling whole pips up to the cap; paused during a dash so back-to-back dashes can't exploit it.
+   * @calledby src/entities/Player.ts → updateInner, before reading dash input
+   * @calls    only field math on the regen accumulator and stamina count
+   */
   private tickStaminaRegen(): void {
     if (this.lockedAction === 'dash') return;
     if (this.stamina >= MAX_STAMINA) {
@@ -891,7 +934,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     }
   }
 
-  // Deducts one shot's ammo; returns false if the mag is dry so the caller can abort silently.
+  /**
+   * @function    tryConsumeGunslingerAmmo
+   * @description Deduct one shot's ammo so the caller can abort silently on an empty mag.
+   * @returns true if a shot was paid for (or no ammo applies); false when the active gun's magazine is empty.
+   * @calledby src/entities/Player.ts → handleAttackInput, before starting a gunslinger shot
+   * @calls    only field math on the per-gun ammo counts
+   */
   private tryConsumeGunslingerAmmo(): boolean {
     if (this.currentMode === 'gunslinger_gun1') {
       if (this.gun1Ammo < AMMO_COST_PER_SHOT) return false;
@@ -906,19 +955,23 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     return true;
   }
 
-  // First combo step for the current mode (sword_master opens at COMBO_FIRST_STEP;
-  // gunslinger has a single attack, step 1).
+  /** First combo step for the current mode (sword_master opens at COMBO_FIRST_STEP; gunslinger has a single attack, step 1). */
   private getFirstComboStep(): number {
     return this.currentMode === 'sword_master' ? COMBO_FIRST_STEP : 1;
   }
 
-  // Last combo step for the current mode (sword_master combos up to MAX_COMBO_STEP;
-  // gunslinger caps at its single attack, step 1).
+  /** Last combo step for the current mode (sword_master combos up to MAX_COMBO_STEP; gunslinger caps at its single attack, step 1). */
   private getMaxComboStep(): number {
     return this.currentMode === 'sword_master' ? MAX_COMBO_STEP : 1;
   }
 
-  // Queues the next combo swing after a brief hold so each hit feels discrete; the finisher fires immediately.
+  /**
+   * @function    scheduleChainedSwing
+   * @description Queue the next combo swing after a brief hold so each hit reads as discrete; the finisher (MAX_COMBO_STEP) fires immediately.
+   * @param   step  The combo step to play next.
+   * @calledby src/entities/Player.ts → onAnimationComplete and onAnimationUpdate, when a queued swing is accepted (anim-complete or cancel-stage)
+   * @calls    cancelChainedSwingTimer, startAttackAnim, and a scene delayed-call for the inter-swing gap
+   */
   private scheduleChainedSwing(step: number): void {
     this.cancelChainedSwingTimer();
     if (step === MAX_COMBO_STEP) {
@@ -936,8 +989,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     );
   }
 
-  // Cancels any pending chained-swing timer and clears the pending flag, so an
-  // interrupt (hurt/death/mode-swap) can't fire a queued follow-up swing.
+  /**
+   * @function    cancelChainedSwingTimer
+   * @description Cancel any pending chained-swing timer and clear the pending flag, so an interrupt (hurt/death/mode-swap) can't fire a queued follow-up swing.
+   * @calledby src/entities/Player.ts → any interrupt aborting a queued combo (scheduleChainedSwing, cancelTransientState, endLockedAction, endTeleportHoverAndFall, toggleFlyMode)
+   * @calls    the Phaser timer-event remove; no further delegation
+   */
   private cancelChainedSwingTimer(): void {
     if (this.chainedSwingTimer) {
       this.chainedSwingTimer.remove(false);
@@ -946,7 +1003,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.chainedSwingPending = false;
   }
 
-  // Single entry for every attack; pays magic cost, locks the action, and plays the right anim.
+  /**
+   * @function    startAttackAnim
+   * @description Single entry for every attack: pays any magic cost, sets the attack lock, resets per-swing hit/trigger state, and plays the body or gun-overlay anim.
+   * @param   step  The combo/attack step to play.
+   * @calledby src/entities/Player.ts → handleAttackInput and scheduleChainedSwing, for every swing/shot
+   * @calls    playLogical / the magic-attack play (sword) or the gun overlay play (gunslinger), and the velocity setter
+   */
   private startAttackAnim(step: number): void {
     // Pay the per-swing magic cost; fall back to a regular swing when the meter
     // can't pay so the combo keeps flowing. Re-entered per chained swing.
@@ -989,7 +1052,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.playLogical(logical);
   }
 
-  // Starts a dash, spends one stamina bar, and resets the regen timer.
+  // ── Movement abilities (dash / roll / block / climb) ─────────────────────
+  /**
+   * @function    startDash
+   * @description Start a dash — lock into the dash state, set dash velocity, play the timed dash anim, spend one stamina bar, and reset the regen timer.
+   * @calledby src/entities/Player.ts → updateInner, on a Shift press when dash is available and stamina allows
+   * @calls    resolveFacingDirection, the dash-duration playLogical, and the velocity/stamina setters
+   */
   private startDash(): void {
     const direction = this.resolveFacingDirection();
     this.lockedAction = 'dash';
@@ -1001,7 +1070,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.staminaRegenAccumMs = 0;
   }
 
-  // Locks into a roll, capturing direction now so a cursor flip mid-roll doesn't change the trajectory.
+  /**
+   * @function    startRoll
+   * @description Lock into a roll, pinning the direction now so a cursor flip mid-roll can't change the trajectory; plays the roll sound + anim and sets initial velocity (held at zero for the gunslinger wind-up).
+   * @calledby src/entities/Player.ts → updateInner, on an S press while grounded or an S cancel out of a grounded sword swing
+   * @calls    resolveFacingDirection, the roll one-shot sound, and the roll playLogical
+   */
   private startRoll(): void {
     const direction = this.resolveFacingDirection();
     this.lockedAction = 'roll';
@@ -1019,7 +1093,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.playLogical('roll');
   }
 
-  // Raises the block guard; held as long as RMB is down, ends the frame it releases.
+  /**
+   * @function    startBlock
+   * @description Raise the block guard — lock into the block state, stop horizontal motion, and play the block-idle loop; held while RMB is down, ends the frame it releases.
+   * @calledby src/entities/Player.ts → updateInner, on a held right-mouse-button while grounded and block is available
+   * @calls    the velocity setter and the block-idle playLogical
+   */
   private startBlock(): void {
     this.lockedAction = 'block';
     this.currentVisualState = 'block';
@@ -1027,7 +1106,14 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.playLogical('block_idle');
   }
 
-  // Probes for a climbable ledge just past the leading edge: wall at head height, clear air above.
+  /**
+   * @function    findLedgeWall
+   * @description Probe for a climbable ledge just past the leading edge: wall at head height with clear air above.
+   * @param   wallDirection  Which side the player is pressing into (-1 left / +1 right).
+   * @returns a LedgeTrigger (direction, wall top, edge X) when a grabbable ledge is found; null otherwise.
+   * @calledby src/entities/Player.ts → updateInner, in the airborne wall-contact branch deciding whether to start a ledge climb
+   * @calls    two physics overlap-rect probes (clear air above, solid wall below the head)
+   */
   private findLedgeWall(wallDirection: MoveDirection): LedgeTrigger | null {
     const PROBE_WIDTH = 4;
     const PROBE_HEIGHT = 4;
@@ -1061,7 +1147,14 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     };
   }
 
-  // Checks next-frame predicted position for a ledge edge — catches fast arcs that skip wall contact.
+  /**
+   * @function    findGrazingWall
+   * @description Check the next-frame predicted position for a ledge edge — catches fast arcs that skip wall contact.
+   * @param   direction  Horizontal travel direction (-1 / +1).
+   * @returns a LedgeTrigger when the predicted box would clip a grabbable ledge edge; null otherwise.
+   * @calledby src/entities/Player.ts → updateInner, in the airborne branch when rising and moving but not yet wall-touching
+   * @calls    a physics overlap-rect probe at the integrated next-frame position
+   */
   private findGrazingWall(direction: MoveDirection): LedgeTrigger | null {
     const dt = this.scene.game.loop.delta / 1000;
     const dx = this.body.velocity.x * dt;
@@ -1091,7 +1184,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     return null;
   }
 
-  // Locks the climb, suspends gravity, and snaps the body flush onto the ledge.
+  /**
+   * @function    startClimb
+   * @description Lock the climb — zero velocity, disable gravity, face the wall, and snap the body flush onto the ledge.
+   * @param   trigger  The LedgeTrigger describing direction, wall top, and edge X.
+   * @calledby src/entities/Player.ts → updateInner, when findLedgeWall/findGrazingWall confirms a climbable edge
+   * @calls    the ledge-climb playLogical and the inverse body-position math
+   */
   private startClimb(trigger: LedgeTrigger): void {
     this.lockedAction = 'climb';
     this.currentVisualState = 'climb';
@@ -1114,14 +1213,20 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.setPosition(newSpriteX, newSpriteY);
   }
 
-  // Direction a dash/roll commits to: pressed A/D if any, else the current facing.
+  // ── Animation / visual state ─────────────────────────────────────────────
+  /** Direction a dash/roll commits to: pressed A/D if any, else the current facing. */
   private resolveFacingDirection(): 1 | -1 {
     if (this.keyA.isDown && !this.keyD.isDown) return -1;
     if (this.keyD.isDown && !this.keyA.isDown) return 1;
     return this.flipX ? -1 : 1;
   }
 
-  // Sets the body's locomotion animation from physics state; pauses fall on frame 0 while rising.
+  /**
+   * @function    updateVisualState
+   * @description Set the body's locomotion animation from physics state — pick idle/run/fall/wall_slide and play it, freezing the fall frame on frame 0 while ascending.
+   * @calledby src/entities/Player.ts → updateInner, at the end of the free-movement branch
+   * @calls    playLogical and the anim pause/resume + setFrame for the rising-fall hold
+   */
   private updateVisualState(): void {
     const onFloor = this.body.blocked.down || this.body.touching.down;
     const vx = this.body.velocity.x;
@@ -1164,7 +1269,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
 
   }
 
-  // Handles each animation finishing: advances combos, ends locks, snaps post-climb body position.
+  /**
+   * @function    onAnimationComplete
+   * @description Route an animation finishing: advance a queued combo, settle/end block, end dash/roll/hurt locks, freeze death, or re-anchor after a ledge climb.
+   * @param   animation  The Phaser animation that just completed.
+   * @calledby Phaser ANIMATION_COMPLETE event (registered in the constructor)
+   * @calls    scheduleChainedSwing, endLockedAction, the block-idle replay, and the inverse body math after a ledge climb
+   */
   private onAnimationComplete(animation: Phaser.Animations.Animation): void {
     const key = animation.key;
     if (ATTACK_KEYS.has(key)) {
@@ -1227,7 +1338,14 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     }
   }
 
-  // Per-frame hook: fires audio triggers, drives the teleport blink/hover, and cancels into the next combo.
+  /**
+   * @function    onAnimationUpdate
+   * @description Per-frame anim hook: fire once-per-play audio triggers, run the teleport appear/hover→fall handoff, and advance a queued combo at the cancel stage.
+   * @param   animation  Current Phaser animation.
+   * @param   frame      The frame just shown.
+   * @calledby Phaser ANIMATION_UPDATE event (registered in the constructor)
+   * @calls    src/audio → playOneShot, applyTeleport / endTeleportHoverAndFall, and scheduleChainedSwing
+   */
   private onAnimationUpdate(
     animation: Phaser.Animations.Animation,
     frame: Phaser.Animations.AnimationFrame,
@@ -1277,7 +1395,14 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     }
   }
 
-  // Gun overlay's per-frame hook: fires audio triggers and spawns the projectile on the fire frame.
+  /**
+   * @function    onGunOverlayUpdate
+   * @description Gun overlay's per-frame hook: fire once-per-play audio triggers and spawn exactly one projectile at the configured fire frame. No-op outside an active gunslinger attack.
+   * @param   animation  Current overlay animation.
+   * @param   frame      The frame just shown.
+   * @calledby Phaser ANIMATION_UPDATE event on the gun overlay (registered in ensurePlayerGunForMode)
+   * @calls    src/audio → playOneShot and src/entities/Player.ts → spawnProjectile
+   */
   private onGunOverlayUpdate(
     animation: Phaser.Animations.Animation,
     frame: Phaser.Animations.AnimationFrame,
@@ -1308,7 +1433,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.firedProjectile = true;
   }
 
-  // Ends the attack lock when the gun overlay's fire animation finishes.
+  /**
+   * @function    onGunOverlayComplete
+   * @description End the attack lock when the gun overlay's fire animation finishes. No-op unless this is the active gun's fire overlay.
+   * @param   animation  The overlay animation that completed.
+   * @calledby Phaser ANIMATION_COMPLETE event on the gun overlay (registered in ensurePlayerGunForMode)
+   * @calls    src/entities/Player.ts → endLockedAction
+   */
   private onGunOverlayComplete(
     animation: Phaser.Animations.Animation,
   ): void {
@@ -1322,7 +1453,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.endLockedAction();
   }
 
-  // Blinks to just above the nearest enemy and freezes there; no-op if the target already died.
+  /**
+   * @function    applyTeleport
+   * @description Blink to just above the nearest enemy and freeze there for the hover (gravity off, velocity zeroed); no-op if the target already died.
+   * @calledby src/entities/Player.ts → onAnimationUpdate, once the teleport appear frame is reached
+   * @calls    the scene's nearest-enemy query and the position/gravity/velocity setters
+   */
   private applyTeleport(): void {
     const scene = this.scene as unknown as NearestEnemyScene;
     const target = scene.getNearestEnemy(this.x, this.y);
@@ -1333,7 +1469,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.setVelocity(0, 0);
   }
 
-  // Ends the teleport hover: clears locks/flags, re-enables gravity, and drops into the fall anim.
+  /**
+   * @function    endTeleportHoverAndFall
+   * @description End the teleport hover: clear all attack/teleport flags, re-enable gravity, and drop into the fall anim.
+   * @calledby src/entities/Player.ts → onAnimationUpdate, at the hover-end frame
+   * @calls    cancelChainedSwingTimer and the fall playLogical
+   */
   private endTeleportHoverAndFall(): void {
     this.cancelChainedSwingTimer();
     this.lockedAction = null;
@@ -1347,7 +1488,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.playLogical('fall');
   }
 
-  // Spawns a projectile from the visible muzzle toward the cursor and alerts nearby enemies.
+  /**
+   * @function    spawnProjectile
+   * @description Spawn a projectile from the visible muzzle toward the cursor and raise a gunshot alert at the player's position.
+   * @param   config  The active gun's fire config (mode, speed, damage).
+   * @calledby src/entities/Player.ts → onGunOverlayUpdate, on the fire frame during a gunslinger shot
+   * @calls    the scene's spawnProjectile and alertEnemiesToGunshot seams
+   */
   private spawnProjectile(config: ProjectileFireConfig): void {
     const pointer = this.scene.input.activePointer;
     const cursorX = pointer?.worldX ?? this.x;
@@ -1376,7 +1523,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     spawner.alertEnemiesToGunshot(this.x, this.y);
   }
 
-  // Scans the forward hitbox each swing frame; hits each enemy once and plays one impact sound.
+  /**
+   * @function    applySwordHits
+   * @description Scan the forward hitbox on the strike frames, dealing one-shot-per-enemy sword damage and playing a single impact SFX per swing. Sword swings only.
+   * @calledby src/entities/Player.ts → updateInner, in the locked-attack branch
+   * @calls    a physics overlap-rect over dynamic bodies, src/entities/Enemy.ts → takeDamage, and the slash one-shot sound
+   */
   private applySwordHits(): void {
     if (this.lockedAction !== 'attack') return;
     if (this.isGunslingerMode()) return;
@@ -1448,30 +1600,37 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     }
   }
 
-  // Current hit points (live, not max).
+  // ── Resources / stats / pickups ──────────────────────────────────────────
+  /** Current hit points (live, not max). */
   getHealth(): number {
     return this.health;
   }
 
-  // Maximum hit points (fixed).
+  /** Maximum hit points (fixed). */
   getMaxHealth(): number {
     return PLAYER_MAX_HEALTH;
   }
 
-  // Current stamina bars (consumed by dashing, regen over time).
+  /** Current stamina bars (consumed by dashing, regen over time). */
   getStamina(): number {
     return this.stamina;
   }
-  // Maximum stamina bars (fixed).
+  /** Maximum stamina bars (fixed). */
   getMaxStamina(): number {
     return MAX_STAMINA;
   }
 
-  // Current carried magic orbs (spent per magic swing).
+  /** Current carried magic orbs (spent per magic swing). */
   getMagic(): number {
     return this.magic;
   }
-  // Live magic cap: base plus each purchased Orb Pouch tier; derived so upgrades survive respawn.
+  /**
+   * @function    getMaxMagic
+   * @description Live magic cap: base plus the uneven per-tier capacity steps of each purchased Orb Pouch tier owned; derived so upgrades survive respawn.
+   * @returns the current magic cap.
+   * @calledby src/entities/Player.ts → magic clamping on pickup/restore, and src/scenes/gameHud.ts → the HUD reading the live cap
+   * @calls    src/state/runProgress.ts → hasUpgrade per Orb Pouch tier
+   */
   getMaxMagic(): number {
     let max = BASE_MAX_MAGIC;
     MAGIC_UPGRADE_LEVELS.forEach((levelId, tier) => {
@@ -1482,44 +1641,49 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     return max;
   }
 
-  // Current pistol (gun1) ammo.
+  /** Current pistol (gun1) ammo. */
   getGun1Ammo(): number {
     return this.gun1Ammo;
   }
-  // Live pistol cap: base plus the Ammo Storage upgrades bought this run (one
-  // upgrade raises both guns). Derived for the same reason as getMaxMagic.
+  /** Live pistol cap: base plus the Ammo Storage upgrades bought this run (one upgrade raises both guns); derived like getMaxMagic. */
   getMaxGun1Ammo(): number {
     return BASE_MAX_GUN1_AMMO + countUpgrades('ammo') * GUN1_CAPACITY_UPGRADE_STEP;
   }
 
-  // Current shotgun (gun2) ammo.
+  /** Current shotgun (gun2) ammo. */
   getGun2Ammo(): number {
     return this.gun2Ammo;
   }
-  // Live shotgun cap: base plus the same Ammo Storage upgrade count as gun1.
+  /** Live shotgun cap: base plus the same Ammo Storage upgrade count as gun1. */
   getMaxGun2Ammo(): number {
     return BASE_MAX_GUN2_AMMO + countUpgrades('ammo') * GUN2_CAPACITY_UPGRADE_STEP;
   }
 
-  // Current gold coin count.
+  /** Current gold coin count. */
   getCoins(): number {
     return this.coins;
   }
-  // Coin HUD digit-budget sentinel (not a real cap — see player constants).
+  /** Coin HUD digit-budget sentinel (not a real cap — see player constants). */
   getMaxCoins(): number {
     return MAX_COINS;
   }
 
-  // Current carried healing items.
+  /** Current carried healing items. */
   getHealItems(): number {
     return this.healItems;
   }
-  // Maximum carried healing items.
+  /** Maximum carried healing items. */
   getMaxHealItems(): number {
     return MAX_HEAL_ITEMS;
   }
 
-  // Restores resource fields from a snapshot, clamping each to the current live cap.
+  /**
+   * @function    applyRestoredState
+   * @description Restore resource fields from a snapshot, clamping each into [0, its live cap], and reset the stamina regen accumulator.
+   * @param   state  Snapshot of health, gun1/gun2 ammo, magic, stamina, and optional coins/healItems.
+   * @calledby src/scenes/playerSnapshot.ts → save/respawn restoring resources after a checkpoint or HMR reload
+   * @calls    the live-cap getters and Phaser's clamp helper
+   */
   applyRestoredState(state: {
     health: number;
     gun1Ammo: number;
@@ -1543,7 +1707,14 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.staminaRegenAccumMs = 0;
   }
 
-  // Grants a pickup's resource clamped at cap; boss keys record an unlock instead of adding a number.
+  /**
+   * @function    addPickup
+   * @description Grant a pickup's resource clamped at cap; boss keys record an unlock instead of adding a number.
+   * @param   kind    The pickup kind.
+   * @param   amount  Units to grant; ignored for key kinds.
+   * @calledby src/scenes/GameScene.ts → collecting a world pickup, and src/entities/Player.ts → tryPurchase granting a shop resource
+   * @calls    the live-cap getters and src/state/runProgress.ts → recordKeyCollected
+   */
   addPickup(kind: PickupKind, amount: number): void {
     if (kind === 'gun1') {
       this.gun1Ammo = Math.min(this.getMaxGun1Ammo(), this.gun1Ammo + amount);
@@ -1565,8 +1736,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     }
   }
 
-  // Current count for a pickup-kind resource (boss keys alias coins, which the
-  // shop never sells). Lets the shop dim rows the buyer is already maxed on.
+  /** Current count for a pickup-kind resource (boss keys alias coins); lets the shop dim rows the buyer is already maxed on. */
   getResourceValue(kind: PickupKind): number {
     if (kind === 'gun1') return this.gun1Ammo;
     if (kind === 'gun2') return this.gun2Ammo;
@@ -1575,7 +1745,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     return this.coins;
   }
 
-  // Cap for a pickup-kind resource (the live derived cap for ammo/magic).
+  /** Cap for a pickup-kind resource (the live derived cap for ammo/magic). */
   getResourceMax(kind: PickupKind): number {
     if (kind === 'gun1') return this.getMaxGun1Ammo();
     if (kind === 'gun2') return this.getMaxGun2Ammo();
@@ -1584,7 +1754,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     return MAX_COINS;
   }
 
-  // True if the player can actually benefit from this pickup right now (not at cap).
+  /** True if the player can actually benefit from this pickup right now (not at cap). */
   canPickUp(kind: PickupKind): boolean {
     if (kind === 'gun1' || kind === 'gun2' || kind === 'heal') {
       return this.getResourceValue(kind) < this.getResourceMax(kind);
@@ -1592,7 +1762,14 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     return true;
   }
 
-  // Atomic shop buy: charges coins and records upgrades or grants resources; returns false if rejected.
+  /**
+   * @function    tryPurchase
+   * @description Atomic shop buy: charge coins and either record an upgrade or grant a resource.
+   * @param   item  A ShopItem: an upgrade with an id, or a resource pickup with kind + grant amount + price.
+   * @returns true if the purchase went through; false on insufficient coins, an already-owned upgrade, or a maxed resource.
+   * @calledby src/ui/ShopOverlay.ts → confirming a buy
+   * @calls    src/state/runProgress.ts → recordUpgradePurchased, addPickup, and the resource value/cap getters
+   */
   tryPurchase(item: ShopItem): boolean {
     if (this.coins < item.price) return false;
     if (item.kind === 'upgrade') {
@@ -1609,13 +1786,18 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     return true;
   }
 
-  // True if this run owns the given capacity upgrade — lets the shop show an
-  // OWNED (sold-out) state, mirroring the MAX state on a fully-stocked resource.
+  /** True if this run owns the given capacity upgrade — lets the shop show an OWNED (sold-out) state, mirroring MAX on a fully-stocked resource. */
   ownsUpgrade(id: string): boolean {
     return hasUpgrade(id);
   }
 
-  // Spends one heal item on Q; refuses mid-action, empty, full, or cooldown (souls-like discipline).
+  /**
+   * @function    tryUseHealingItem
+   * @description Spend one heal item on Q; refuses mid-action, empty, full, or on cooldown (souls-like discipline).
+   * @returns true if a heal was spent; false when locked, on cooldown, out of items, or already at full health.
+   * @calledby src/entities/Player.ts → updateInner, on a Q press
+   * @calls    the heal one-shot sound and field math on health/items/cooldown
+   */
   tryUseHealingItem(): boolean {
     if (this.lockedAction !== null) return false;
     if (this.scene.time.now < this.healItemCooldownUntil) return false;
@@ -1632,18 +1814,27 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     return true;
   }
 
-  // True once the player has entered the dead state.
+  // ── Damage / death ───────────────────────────────────────────────────────
+  /** True once the player has entered the dead state. */
   isDead(): boolean {
     return this.lockedAction === 'dead';
   }
 
-  // True while any locked action owns input — the gate that suspends hold-E
-  // progress so the player can't swing and open a chest at once.
+  /** True while any locked action owns input — the gate that suspends hold-E so the player can't swing and open a chest at once. */
   isInteractionBlocked(): boolean {
     return this.lockedAction !== null;
   }
 
-  // Applies a hit: block negates front hits, back-attacks land; lethal hits enter dead state.
+  /**
+   * @function    hurt
+   * @description Apply a hit — block negates a front hit, back-attacks land; deducts health, plays the grunt, applies knockback + i-frames, and enters hurt or dead state. No-op while dead or invulnerable.
+   * @param   damage   HP to remove.
+   * @param   sourceX  Attacker X, for facing and knockback direction.
+   * @param   _sourceY  Unused (kept for the hurt-caller signature).
+   * @param   options  Hurt source (melee / projectile), selecting the grunt variant.
+   * @calledby src/entities/Enemy.ts and src/scenes/trapSystem.ts / GameScene.ts → an enemy or trap hit landing on the player
+   * @calls    the hurt one-shot sound, the velocity setters, enterDeadState on a lethal hit, and the take-hit/block animations
+   */
   hurt(
     damage: number,
     sourceX: number,
@@ -1691,7 +1882,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.playLogical('take_hit');
   }
 
-  // Tracks peak fall speed and deals damage on landing if it crossed the safe threshold.
+  /**
+   * @function    updateFallDamage
+   * @description Track peak descent speed while airborne and apply scaled damage on touchdown past the safe speed.
+   * @calledby src/entities/Player.ts → update, after the state machine
+   * @calls    applyFallDamage when a hard landing exceeds the safe threshold; resets the peak otherwise
+   */
   private updateFallDamage(): void {
     if (
       this.lockedAction === 'dead' ||
@@ -1718,7 +1914,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     if (damage > 0) this.applyFallDamage(damage);
   }
 
-  // Applies landing damage without knockback or block; respects the existing i-frame window.
+  /**
+   * @function    applyFallDamage
+   * @description Apply landing damage without knockback or block, respecting the existing i-frame window; deducts health, plays the grunt, sets i-frames, and enters hurt or dead state.
+   * @param   damage  HP to remove from the hard landing.
+   * @calledby src/entities/Player.ts → updateFallDamage, when a landing crosses the damage threshold
+   * @calls    the hurt one-shot sound, enterDeadState on a lethal landing, and the take-hit animation
+   */
   private applyFallDamage(damage: number): void {
     if (this.scene.time.now < this.invulnerableUntil) return;
     this.health = Math.max(0, this.health - damage);
@@ -1734,7 +1936,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.playLogical('take_hit');
   }
 
-  // Locks to 'dead', plays the death anim and boom SFX, and fires the died event for the scene.
+  /**
+   * @function    enterDeadState
+   * @description Lock to 'dead', play the death anim + boom SFX, and emit PLAYER_DIED_EVENT for the scene.
+   * @calledby src/entities/Player.ts → hurt / applyFallDamage, when health reaches zero
+   * @calls    cancelTransientState, the death playLogical, the boom one-shot, and the event emitter (PLAYER_DIED_EVENT)
+   */
   private enterDeadState(): void {
     this.cancelTransientState();
     this.lockedAction = 'dead';
@@ -1744,7 +1951,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.emit(PLAYER_DIED_EVENT);
   }
 
-  // Clears all in-flight action flags and restores gravity; also kills the wall-slide sound loop.
+  /**
+   * @function    cancelTransientState
+   * @description Reset all in-flight attack/teleport/projectile flags, re-enable gravity, and silence the wall-slide loop.
+   * @calledby src/entities/Player.ts → any interrupt before a new state (hurt, enterDeadState, applyFallDamage, the roll/jump cancel out of an attack)
+   * @calls    cancelChainedSwingTimer and the wall-slide state-sound toggle
+   */
   private cancelTransientState(): void {
     this.cancelChainedSwingTimer();
     this.queuedAttack = false;
@@ -1756,7 +1968,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     setPlayerStateSoundActive(this.scene, 'wallSlide', false);
   }
 
-  // Releases the locked action; for a gunslinger shot it only re-arms the overlay, not the body.
+  /**
+   * @function    endLockedAction
+   * @description Release the locked action and combo flags, returning the body to idle — but for a gunslinger shot it only re-idles the overlay, leaving the body's locomotion alone.
+   * @calledby src/entities/Player.ts → the animation-complete handlers and any state that finishes a locked action
+   * @calls    cancelChainedSwingTimer, the gun overlay idle play, and the idle playLogical
+   */
   private endLockedAction(): void {
     const wasGunslingerAttack =
       this.lockedAction === 'attack' && this.isGunslingerMode();
@@ -1775,7 +1992,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.playLogical('idle', { ignoreIfPlaying: true });
   }
 
-  // Re-anchors origin, scale, and physics body size/offset for the animation that just started.
+  /**
+   * @function    applyAnimationAnchor
+   * @description Re-anchor origin, scale, and physics body size/offset for the just-started animation, resolved against the current flipX.
+   * @param   animation  The animation that just started.
+   * @calledby Phaser ANIMATION_START event (registered in the constructor) and src/entities/Player.ts → setFacing on a flip
+   * @calls    src/sprites/characterLoader.ts → getSpriteAnchor and the origin/scale/body setters
+   */
   private applyAnimationAnchor(animation: Phaser.Animations.Animation): void {
     const {
       originX,
@@ -1798,7 +2021,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.body.setOffset(bodyOffsetX, bodyOffsetY);
   }
 
-  // Debug: G toggles no-gravity/no-collision WASD flight for panning across LDtk levels.
+  /**
+   * @function    toggleFlyMode
+   * @description Debug: G toggles no-gravity/no-collision WASD flight for panning across LDtk levels, clearing all action/wall-slide state on entry/exit.
+   * @calledby src/entities/Player.ts → updateInner, on a G press
+   * @calls    cancelChainedSwingTimer, the wall-slide state-sound toggle, and the idle playLogical
+   */
   private toggleFlyMode(): void {
     this.flyMode = !this.flyMode;
     if (this.flyMode) {
@@ -1824,7 +2052,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     }
   }
 
-  // One frame of 4-directional WASD flight at constant speed; run anim while moving, idle while still.
+  /**
+   * @function    updateFlyMode
+   * @description One frame of 4-directional WASD flight at constant speed — sets velocity, faces travel direction, and plays run while moving or idle while still.
+   * @calledby src/entities/Player.ts → updateInner, while fly mode is active
+   * @calls    the velocity/facing setters and the run/idle playLogical
+   */
   private updateFlyMode(): void {
     let vx = 0;
     let vy = 0;
@@ -1843,7 +2076,14 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     }
   }
 
-  // Flips the sprite and re-anchors the physics body; no-op if already facing that way.
+  // ── Facing + gun rig ─────────────────────────────────────────────────────
+  /**
+   * @function    setFacing
+   * @description Flip the sprite and re-apply the current animation's anchor so the body offset mirrors correctly; no-op if already facing that way.
+   * @param   faceLeft  True to face left.
+   * @calledby src/entities/Player.ts → movement, dash/roll/climb starts, updateAimFacing, and fly mode; also src/scenes/playerSnapshot.ts → restore
+   * @calls    the flip setter and applyAnimationAnchor for the current animation
+   */
   setFacing(faceLeft: boolean): void {
     if (this.flipX === faceLeft) return;
     this.setFlipX(faceLeft);
@@ -1853,8 +2093,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     }
   }
 
-  // Gunslinger-only: face the body toward the cursor (even while standing still)
-  // so the body's flip never disagrees with the gun overlay's 360° aim.
+  /**
+   * @function    updateAimFacing
+   * @description Gunslinger-only: face the body toward the cursor (even while standing still) so the body's flip never disagrees with the gun overlay's 360-degree aim. No-op outside a gun mode or without a pointer.
+   * @calledby src/entities/Player.ts → updateInner, before movement, while in a gun mode
+   * @calls    setFacing
+   */
   private updateAimFacing(): void {
     if (!this.isGunslingerMode()) return;
     const pointer = this.scene.input.activePointer;
@@ -1862,7 +2106,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.setFacing(pointer.worldX < this.x);
   }
 
-  // Creates, swaps, or destroys the gun overlay to match the current mode; idempotent.
+  /**
+   * @function    ensurePlayerGunForMode
+   * @description Create, swap, or destroy the gun overlay to match the current mode (idempotent) — wired for gun modes, gone for sword_master.
+   * @calledby src/entities/Player.ts → tryAdvanceMode and setCurrentMode, on every mode change
+   * @calls    the PlayerGun constructor + its anim-update/complete listener hookup, src/entities/PlayerGun.ts → setMode, and destroyPlayerGun
+   */
   private ensurePlayerGunForMode(): void {
     if (
       this.currentMode === 'gunslinger_gun1' ||
@@ -1894,15 +2143,26 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     }
   }
 
-  // Destroys the gun overlay if present (so it never lingers as an invisible
-  // sprite during sword_master play) and clears the handle.
+  /**
+   * @function    destroyPlayerGun
+   * @description Destroy the gun overlay if present (so it never lingers as an invisible sprite during sword_master play) and null the handle.
+   * @calledby src/entities/Player.ts → ensurePlayerGunForMode (switching to sword_master) and the constructor's destroy cleanup
+   * @calls    the overlay's destroy; no-ops when no overlay exists
+   */
   private destroyPlayerGun(): void {
     if (!this.playerGun) return;
     this.playerGun.destroy();
     this.playerGun = null;
   }
 
-  // Shows/hides the gun overlay to match the body art; re-arms idle only when not mid-shot.
+  /**
+   * @function    syncGunOverlayForBodyAnim
+   * @description Show the gun overlay over gunslinger-body art (re-idling it unless attacking) and hide it otherwise. No-op when no overlay exists.
+   * @param   bodyAnimKey  The body animation key just played.
+   * @param   _logical     Unused logical key (kept for the call signature).
+   * @calledby src/entities/Player.ts → playLogical, after every body animation play
+   * @calls    src/sprites/characterLoader.ts → getAnimationSourceMode and the overlay visibility + idle play
+   */
   private syncGunOverlayForBodyAnim(
     bodyAnimKey: string,
     _logical: LogicalAnimationKey,
@@ -1919,7 +2179,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     }
   }
 
-  // Snaps the gun overlay to the hand pivot and aims it at the cursor; runs post-physics to avoid lag.
+  /**
+   * @function    syncPlayerGun
+   * @description Snap the gun overlay to the hand pivot and aim it at the cursor; runs post-physics to avoid trailing the player by a frame. No-op when no overlay exists.
+   * @calledby Phaser POST_UPDATE event (registered in the constructor), after physics resolves the player's position
+   * @calls    src/entities/PlayerGun.ts → syncToOwner
+   */
   private syncPlayerGun(): void {
     if (!this.playerGun) return;
     const pointer = this.scene.input.activePointer;

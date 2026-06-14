@@ -84,93 +84,115 @@ export type EnemyState =
   | 'hurt'
   | 'dead';
 
-// Knockback applied on hurt. Smaller than the player's because enemies are
-// typically smaller/lighter; tweak per-entity later if it feels wrong.
+// ── Hurt / knockback ───────────────────────────────────────────────────────
+// Hurt knockback is lighter than the player's (enemies are smaller/lighter); HURT_DURATION_MS is a
+// uniform flinch window so a missing or short take_hit clip still shows feedback.
 const ENEMY_HURT_KNOCKBACK_X = 80;
 const ENEMY_HURT_KNOCKBACK_Y = -120;
-// uniform hurt window so a missing or short take_hit animation doesn't skip the flinch feedback
 const HURT_DURATION_MS = 250;
-// only multi-tile drops (≥3 tiles free-fall at 800 px/s² gravity) cross this threshold; short hops don't register
+
+// ── Fall damage ────────────────────────────────────────────────────────────
+// Only multi-tile drops (≥3 tiles of free-fall at 800 px/s²) clear the velocity threshold; impact
+// damage scales linearly with the excess descent speed.
 const FALL_DAMAGE_VELOCITY_THRESHOLD = 350;
 const FALL_DAMAGE_PER_VELOCITY = 1 / 30;
-// fallback encounter sting radius — roughly one screen-width, the "stepping into the arena" feel
+
+// ── Encounter / wake fallbacks ─────────────────────────────────────────────
+// Fallbacks when the registry leaves them unset: encounter-sting radius is ~one screen-width ("entering
+// the arena"); the dormant wake range is tighter so a sleeper wakes when plainly in view, not from afar.
 const DEFAULT_ENCOUNTER_RADIUS = 300;
-// fallback dormant wake range — under one screen-width so the bot wakes when plainly in view, not from across the arena
 const DEFAULT_DORMANT_WAKE_RANGE = 220;
-// Summon spawn placement: minions appear flanking the caster, alternating
-// sides and stepping outward so a spawned pair doesn't stack on one pixel.
+
+// ── Summon placement ───────────────────────────────────────────────────────
+// Minions appear flanking the caster, alternating sides and stepping outward so a spawned pair never
+// stacks on one pixel.
 const SUMMON_SPAWN_OFFSET_X = 28;
 const SUMMON_SPAWN_SPACING_X = 22;
-// clears a 2-tile wall with a small buffer (v=√(2·g·h), g=800, h≈40px → -260)
+
+// ── Grounded locomotion (jump / leap) ──────────────────────────────────────
+// Jump velocity clears a 2-tile wall with buffer (v=√(2·g·h), g=800, h≈40px). Leap horizontal speed is
+// floored to the player's run so slow enemies still clear the same gaps.
 const ENEMY_JUMP_VELOCITY = -260;
-// minimum horizontal speed for any gap-leap — floored to the player's run speed so slow enemies still clear the same gaps
 const ENEMY_LEAP_HORIZONTAL_SPEED = PLAYER_RUN_SPEED;
-// how long a wedged chaser can make no headway before it shows the idle pose instead of running in place
+
+// ── Chase movement-tracking & up-leap ──────────────────────────────────────
+// Walk/idle-pose swap is driven by real displacement: a wedged chaser shows idle after the still-grace
+// window, and the move epsilon stops wall-pinned jitter from refreshing the "moving" timestamp. Up-leaps
+// need a minimum height advantage and the overhang-escape probe is throttled to ~12 Hz.
 const CHASE_STILL_GRACE_MS = 250;
-// minimum displacement to count as "moving" — prevents wall-pinned jitter from refreshing the movement timestamp
 const CHASE_MOVE_EPSILON_PX = 6;
-// minimum height advantage before grounded chasers attempt an up-leap
 const UP_LEAP_MIN_RISE_PX = 24;
-// throttle for the overhang-escape leap search (~12 Hz) — expensive enough to cap, fast enough to catch the window
 const UP_PROBE_INTERVAL_MS = 80;
-// drift speed fraction for airborne loitering — slow enough to look organic, fast enough to track the player
+
+// ── Airborne loiter / drift ────────────────────────────────────────────────
+// Drift speed is a fraction of move speed (organic but still tracking). Targets sit on a random radius;
+// teleport landings get 5 tiles of headroom so a falling-strike appear clip doesn't clip the player early.
+// Beyond chaseRange × the engagement multiplier the flyer hovers rather than drifting in from across the map.
 const LOITER_SPEED_MULTIPLIER = 0.55;
 const LOITER_TARGET_MIN_RADIUS = 30;
 const LOITER_TARGET_MAX_RADIUS = 60;
-// default Y offset above ground for teleport landing — 5 tiles of headroom so a falling-strike appear clip doesn't clip the player early
 const DEFAULT_TELEPORT_OFFSET_Y = -80;
-// beyond chaseRange × this factor the airborne enemy hovers in place instead of drifting in from across the map
 const LOITER_ENGAGEMENT_CHASE_MULTIPLIER = 4;
-// upper hemisphere sweep [-3π/4, -π/4] so drift targets sit above and around the player
+
+// ── Drift arcs & leash hysteresis ──────────────────────────────────────────
+// Player-anchored drift uses the upper hemisphere [-3π/4, -π/4]; home-anchored wasps orbit the full
+// circle. The leash re-engage factor is a hysteresis ring (wasp only re-engages inside this fraction of
+// the radius) so it doesn't flip-flop at the edge; targets refresh on a random cadence or on arrival.
 const LOITER_ANGLE_MIN = -Math.PI * 0.75;
 const LOITER_ANGLE_MAX = -Math.PI * 0.25;
-// full-circle sweep for home-anchored wasps — the hive can be anywhere so orbit it evenly
 const HOME_LOITER_ANGLE_MIN = -Math.PI;
 const HOME_LOITER_ANGLE_MAX = Math.PI;
-// leash hysteresis — wasp only re-engages when the player re-enters this fraction of the radius, preventing flip-flopping at the edge
 const HOME_LEASH_REENGAGE_FACTOR = 0.85;
 const LOITER_REFRESH_MIN_MS = 1500;
 const LOITER_REFRESH_MAX_MS = 3000;
-// arrival threshold — repick when this close so the crow doesn't stutter on a past-overshot target
 const LOITER_TARGET_REACHED_DIST = 12;
-// patrol dwell cadence — randomized stroll/pause intervals so the back-and-forth never looks mechanical
+
+// ── Patrol cadence ─────────────────────────────────────────────────────────
+// Randomized stroll/pause intervals so the back-and-forth never looks mechanical.
 const PATH_WALK_INTERVAL_MIN_MS = 2500;
 const PATH_WALK_INTERVAL_MAX_MS = 5500;
 const PATH_PAUSE_DURATION_MIN_MS = 700;
 const PATH_PAUSE_DURATION_MAX_MS = 1800;
-// default wander radius for grounded path-less non-boss enemies; behavior.wander.radius overrides this
+
+// ── Spawn-anchored ground wander ───────────────────────────────────────────
+// Default radius for grounded path-less non-bosses (behavior.wander.radius overrides). Targets keep a
+// minimum step so a fresh pick never "arrives" instantly and stutters in place. Leaps allow a symmetric
+// 4-tile climb/drop (so a stroller can always climb back out, no fall damage); the higher launch ceiling
+// lets it top a 4-tile platform while findLeapLanding still starts from the gentlest hop.
 const DEFAULT_WANDER_RADIUS = 200;
-// Minimum step (px) between consecutive wander targets so a fresh pick is never
-// so close it "arrives" instantly and stutters the stroller in place.
 const WANDER_MIN_TARGET_STEP_PX = 24;
-// symmetric 4-tile climb/drop limit so a stroller can always climb back out and never triggers fall damage
 const WANDER_LEAP_MAX_RISE_PX = 64;
 const WANDER_LEAP_MAX_DROP_PX = 64;
-// higher than chase jump ceiling so a stroller can top a 4-tile platform; findLeapLanding still starts from the minimum
 const WANDER_MAX_LAUNCH_VELOCITY = -380;
-// tiny greeting bob impulse — about a 9 px pop so it reads as a friendly bounce, not a real jump
+
+// ── Wander greetings ───────────────────────────────────────────────────────
+// A bob is a tiny ~9px pop (reads as a friendly bounce, not a jump); the hop interval is a cadence floor
+// since a bob only launches when grounded. The partner scan is throttled to ~5 Hz to keep the
+// O(enemy count) search off the per-frame path; the same-floor band rejects partners one platform up.
 const GREET_HOP_VELOCITY = -120;
-// Spacing (ms) between a greeter's successive bobs. It only actually launches
-// when grounded, so this is a floor on the cadence, not an exact period.
 const GREET_HOP_INTERVAL_MS = 240;
-// ~5 Hz scan throttle keeps the O(enemy count) partner search off the per-frame path
 const GREET_SCAN_INTERVAL_MS = 200;
-// tight vertical band so a partner one platform up is never treated as "beside", even though wanderers now leap several tiles
 const GREET_SAME_FLOOR_PX = 12;
-// per-instance speed spread so a same-frame wave desyncs into a staggered pack rather than a lockstep blob
+
+// ── Swarm desync, weave & combo ────────────────────────────────────────────
+// Per-instance speed jitter desyncs a same-frame wave into a staggered pack; the perpendicular weave
+// (random freq per instance) makes airborne swarms arc on independent rhythms while preserving forward
+// closing speed. The combo range tolerance gives a chain slack since the opener's knockback shoves the
+// player out of strict range.
 const CHASE_SPEED_JITTER = 0.18;
-// perpendicular weave so airborne swarms fly in independent arcs — sideways fraction preserves the forward closing speed
 const AIRBORNE_WEAVE_FRACTION = 0.4;
 const AIRBORNE_WEAVE_FREQ_MIN = 2.2; // rad/s
 const AIRBORNE_WEAVE_FREQ_MAX = 4.0; // rad/s
-// range multiplier for combo chaining only — the opener's knockback shoves the player outside strict range, so the chain gets slack
 const COMBO_FOLLOWUP_RANGE_TOLERANCE = 2;
 
-// anim suffixes that pause an entity's ambience loop during teleport and resume it on clip-end
+// ── Teleport anim keys ─────────────────────────────────────────────────────
+// Suffixes that pause an entity's ambience loop during a teleport blink and resume it on clip-end.
 const TELEPORT_ANIM_SUFFIXES: ReadonlyArray<string> = [
   '_teleport_disappear',
   '_teleport_appear',
 ];
+
+/** True when the anim key ends in a teleport disappear/appear suffix (pause/resume the ambience loop). */
 function isTeleportAnimationKey(key: string): boolean {
   for (const suffix of TELEPORT_ANIM_SUFFIXES) {
     if (key.endsWith(suffix)) return true;
@@ -178,16 +200,17 @@ function isTeleportAnimationKey(key: string): boolean {
   return false;
 }
 
-// LDtk intgrid values (kept in sync with Player.ts by hand — they're schema constants, not runtime data)
+// ── LDtk intgrid values ────────────────────────────────────────────────────
+// Surface-type tile values for the footstep probe (kept in sync with Player.ts by hand — schema
+// constants, not runtime data).
 const INTGRID_GROUND_VALUE = 1;
 const INTGRID_BRIDGE_VALUE = 2;
 
-// per-spawn overrides for the boss self-copy system — inherits registry behavior but ships with low HP and no damage
+// Per-spawn overrides for the boss self-copy system — inherits registry behavior but ships low-HP and harmless.
 export interface EnemySpawnOverrides {
   // deals no damage and is invisible to boss/round-fight systems — used for self-copies
   readonly harmless?: boolean;
-  // Overrides the computed max (and starting) health. Lets a copy be low-HP
-  // without needing a separate registry entry.
+  // overrides the computed max (and starting) health, letting a copy be low-HP without a separate registry entry
   readonly maxHealth?: number;
   // X offset from player.x when chasing; gives each self-copy a distinct slot so they don't all stack
   readonly chaseStandoffX?: number;
@@ -196,36 +219,9 @@ export interface EnemySpawnOverrides {
 }
 
 /**
- * Enemy — the enemy/boss AI state machine and combat actor.
- *
- * An AnimatedEntity that gains health, damage, and a registry behavior block,
- * and runs the per-frame AI: idle/loiter, chase (grounded with wall-hop /
- * gap-leap / wall-mount locomotion, or airborne 2D homing), the stealth
- * detection→search→return-to-post loop, and the attack cycle. Attack types
- * are melee (transient overlapRect hitboxes), ranged/magic (an aimed or
- * straight EnemyProjectile), contact (body-overlap, no animation), dive,
- * aoe (a VFX sprite or sprite-less rect at the player's feet), teleport
- * (disappear→appear→strike blink), heal (self-cast below an HP fraction), and
- * summon. Multi-attack bosses authored with `attackPool` pick a weighted-random
- * eligible attack per cycle. Round-fight bosses add the 3-round freeze/banner
- * mechanic and a self-copy split coordinated for one-teleport-at-a-time and
- * lateral de-stacking. A persistent active-combat (aggro) window — not mere
- * range — leashes pursuit and drives the alert HUD.
- *
- * Inputs:  scene, spawn x/y, identifier, LDtk iid, an optional authored
- *          loiterPath, and optional per-spawn overrides; the live Player each
- *          frame; the registry behavior/attack config; the EnemyHelperScene's
- *          tile/level/projectile/summon queries.
- * Outputs: mutates its own body (velocity/facing/position), plays animations
- *          and spatial audio, stamps damage rects / spawns projectiles, drives
- *          the floating HP bar + overhead alert glyph, and emits
- *          BOSS_DEFEATED_EVENT on a boss death.
- * @calledby the gameplay scene — spawned at level load (and on respawn),
- *           ticked every frame, and poked by the boss-fight, gunshot-hearing,
- *           hive-defense, and projectile-dodge systems.
- * @calls    the shared audio layer, the leap probes / nav follower locomotion
- *           helpers, the detection helpers, and the scene's tile/projectile/
- *           summon services.
+ * @file entities/Enemy.ts
+ * @description AnimatedEntity AI actor + combat brain: runs the per-frame state machine (idle/loiter, grounded chase with wall-hop/gap-leap/wall-mount + A* detours or airborne 2D homing, the stealth detect→search→return-to-post loop, and the attack cycle). Attack types: melee (transient overlapRect hitboxes), ranged/magic (EnemyProjectile), contact (body overlap), dive, aoe (VFX or spriteless rect at the player's feet), teleport (disappear→appear→strike blink), heal, and summon; attackPool bosses pick a weighted-random eligible attack. Round-fight bosses add the 3-round freeze/banner and a coordinated self-copy split. A persistent aggro window (not mere range) leashes pursuit and drives the alert HUD. Reads the live player + helper scene each frame; mutates its body, plays animation/spatial audio, stamps damage, spawns projectiles, drives the HP bar + alert glyph, and emits BOSS_DEFEATED_EVENT.
+ * @module entities
  */
 export class Enemy extends AnimatedEntity {
   declare body: Phaser.Physics.Arcade.Body;
@@ -358,7 +354,7 @@ export class Enemy extends AnimatedEntity {
   private lastSeenY = 0;
   private hasLastSeen = false;
 
-  // ── A* nav path-following (NavGraph / NavPathfinder) ──────────────────────
+  // ── A* nav path-following (NavGraph / NavPathfinder) ─────────────────────
   // route state lives in the follower; Enemy drives steering + LOS-grace; shared by chase and search
   private readonly nav = new EnemyNavFollower();
   // grace window so a brief LOS flash (jump apex) doesn't discard the active route
@@ -377,7 +373,7 @@ export class Enemy extends AnimatedEntity {
   // momentary overhead glyph and when it auto-hides; separate from the persistent HUD brackets
   private iconGlyph: AlertGlyph = 'none';
   private iconHideAt = 0;
-  // ── Search-after-losing-sight (last-seen hunt + return to post) ───────────
+  // ── Search-after-losing-sight (last-seen hunt + return to post) ──────────
   // deadline for reaching the last-seen spot before bailing to the look-around; 0 = not hunting
   private searchTravelUntil = 0;
   // when the look-around scan ends; armed on arrival at the last-seen spot
@@ -414,7 +410,18 @@ export class Enemy extends AnimatedEntity {
   // live minions from summon attacks; pruned before each cast to enforce summonMaxAlive
   private activeSummons: Enemy[] = [];
 
-  // builds the enemy from its registry entry — HP, attacks, detection, movement personality, HP bar, alert glyph, and animation event hooks
+  /**
+   * @function    constructor
+   * @description Build the enemy from its registry entry — HP, attacks, detection cone, movement personality, HP bar, alert glyph, and the animation event hooks; holds the dormant pose when configured.
+   * @param   scene           Owning Phaser scene.
+   * @param   x, y            Spawn position (world px).
+   * @param   identifier      Registry identifier whose behavior block configures the enemy.
+   * @param   iid             LDtk instance id; keys the audio anchors and respawn.
+   * @param   loiterPath      Authored patrol waypoints (one point becomes spawn↔point ping-pong), or null.
+   * @param   spawnOverrides  Per-spawn overrides (harmless / maxHealth / standoff / coordinator), or null.
+   * @calledby src/entities/EntityFactory.ts → the registry-behavior spawn branch and summonEnemyAt/respawn helper
+   * @calls    the registry behavior lookup, the teleport-coordinator register, the HP-bar/alert-glyph constructors, and the animation event-handler hookup; throws if the identifier has no behavior block
+   */
   constructor(
     scene: Phaser.Scene,
     x: number,
@@ -561,91 +568,87 @@ export class Enemy extends AnimatedEntity {
     });
   }
 
-  // Current hit points (live, not max).
+  /** Live hit points (not max). */
   getHealth(): number {
     return this.health;
   }
 
-  // Current AI state-machine state.
+  /** Current AI state-machine state. */
   getState(): EnemyState {
     return this.enemyState;
   }
 
-  // The resolved registry behavior block this enemy was built from.
+  /** The resolved registry behavior block this enemy was built from. */
   getBehavior(): AnimatedEntityBehaviorConfig {
     return this.behavior;
   }
 
-  // True once the enemy has entered its terminal dead state.
+  /** True once the enemy has entered its terminal dead state. */
   isDead(): boolean {
     return this.enemyState === 'dead';
   }
 
-  // Stable LDtk instance id. Same iid is reused when the respawn manager
-  // rebuilds this enemy so iid-keyed audio anchors line back up.
+  /** Stable LDtk instance id; reused on respawn so iid-keyed audio anchors line back up. */
   getIid(): string {
     return this.iid;
   }
 
-  // World X this enemy was constructed at (its respawn anchor).
+  /** World X this enemy was constructed at (its respawn anchor). */
   getSpawnX(): number {
     return this.spawnX;
   }
 
-  // World Y this enemy was constructed at (its respawn anchor).
+  /** World Y this enemy was constructed at (its respawn anchor). */
   getSpawnY(): number {
     return this.spawnY;
   }
 
-  // Authored patrol route in world-space px (null when unset). The respawn
-  // manager forwards this so the rebuilt enemy resumes the same path.
+  /** Authored patrol route in world-space px (null when unset); forwarded to the respawned enemy. */
   getLoiterPath(): ReadonlyArray<LoiterPathPoint> | null {
     return this.loiterPath;
   }
 
-  // true for real bosses; harmless copies return false so their death can't trigger a premature win
+  /** True for real bosses; harmless copies return false so their death can't trigger a premature win. */
   isBoss(): boolean {
     return this.behavior.isBoss === true && !this.harmless;
   }
 
-  // True when this boss uses the 3-round fight system (screen-wide segmented
-  // bar + "Round N" banner + per-threshold freeze). Drives GameScene/BossHud.
+  /** True when this boss uses the 3-round fight system (segmented bar + "Round N" banner + per-threshold freeze). */
   isRoundFight(): boolean {
     return this.behavior.roundFight === true && !this.harmless;
   }
 
-  // authored health × ENEMY_HEALTH_MULTIPLIER (bosses keep the raw value)
+  /** Max hit points — authored health × ENEMY_HEALTH_MULTIPLIER (bosses keep the raw value). */
   getMaxHealth(): number {
     return this.maxHealth;
   }
 
-  // Current latched round (1-based). Stays at 1 for non-round-fight enemies.
+  /** Current latched round (1-based); stays at 1 for non-round-fight enemies. */
   getRound(): number {
     return this.roundReached;
   }
 
-  // true once the player stepped into the encounter radius; gates the round UI
+  /** True once the player stepped into the encounter radius; gates the round UI. */
   hasEncountered(): boolean {
     return this.encounterTriggered;
   }
 
-  // true while the aggro window is live (blows traded / attack committed); drives boss convergence swarm
+  /** True while the aggro window is live (blows traded / attack committed); drives the boss convergence swarm. */
   isInConflict(): boolean {
     return this.isAggro();
   }
 
-  // true while the "Round N" freeze is live; projectile overlaps are skipped during this window
+  /** True while the "Round N" freeze is live; projectile overlaps are skipped during this window. */
   isInRoundBreak(): boolean {
     return this.roundBreakUntil > this.scene.time.now;
   }
 
-  // registry displayName or a derived version (strip "_spawn", underscores → spaces, capitalize)
+  /** Registry displayName, or a derived fallback (strip "_spawn", underscores → spaces, capitalize). */
   getDisplayName(): string {
     return this.behavior.displayName ?? this.deriveDisplayName();
   }
 
-  // Fallback display name from the identifier: drop a trailing "_spawn",
-  // underscores → spaces, capitalize; "Boss" if nothing remains.
+  /** Fallback display name from the identifier: drop a trailing "_spawn", underscores → spaces, capitalize; "Boss" if nothing remains. */
   private deriveDisplayName(): string {
     const words = this.getIdentifier()
       .replace(/_spawn$/, '')
@@ -656,12 +659,18 @@ export class Enemy extends AnimatedEntity {
       : 'Boss';
   }
 
-  // true during disappear/appear clips; projectiles pass through and reactions are suppressed to avoid re-trigger loops
+  /** True during the disappear/appear clips — projectiles pass through and reactions are suppressed to avoid re-trigger loops. */
   isInTeleportBlink(): boolean {
     return this.teleportPhase === 'disappear' || this.teleportPhase === 'appear';
   }
 
-  // main per-frame AI tick — runs the whole state machine from cleanup through detection, attack selection, and locomotion
+  /**
+   * @function    update
+   * @description Main per-frame AI tick — runs the whole state machine from cleanup through detection, attack selection, and locomotion; self-destroys if it falls out of the world.
+   * @param   player  The live player this frame.
+   * @calledby Phaser per-frame update loop (via src/scenes/GameScene.ts → the enemy-group update)
+   * @calls    fall-damage tracking, arena clamping, combat-window upkeep, detection, attack selection, and the locomotion/state branches
+   */
   update(player: Player): void {
     // body is null after destroy; guard so stale array entries don't throw
     if (!this.active || !this.body) return;
@@ -830,7 +839,7 @@ export class Enemy extends AnimatedEntity {
       return;
     }
 
-    // ── Stealth/detection gates ───────────────────────────────────────────
+    // ── Stealth/detection gates ────────────────────────────────────────────
     // 1. fresh spot: hold still and show "?" before rushing (the stop-then-rush tell)
     if (
       this.isStealthEnabled() &&
@@ -1118,7 +1127,15 @@ export class Enemy extends AnimatedEntity {
     this.enterEngagedFallback(player);
   }
 
-  // single damage entry point — applies HP loss then routes to death, round-break, or hurt; mid-blink and round-break hits handled specially
+  /**
+   * @function    takeDamage
+   * @description Single damage entry point — applies HP loss then routes to death, round-break, or hurt; mid-blink and round-break hits are handled specially. No-op when dead or round-frozen.
+   * @param   damage   HP to remove.
+   * @param   sourceX  Attacker X, for knockback direction.
+   * @param   options  skipKnockback / sourceIsPlayer flags.
+   * @calledby widely used — a player sword/projectile hit, a trap (src/scenes/trapSystem.ts), the death-explosion AoE, fall damage, and the GameScene one-shot kill
+   * @calls    enterCombat/refreshAggro, the HP-bar update, enterDeadState or beginRoundBreak, the hurt animation/sound, and arms the hurt-exit timer
+   */
   takeDamage(
     damage: number,
     sourceX: number,
@@ -1209,14 +1226,24 @@ export class Enemy extends AnimatedEntity {
     });
   }
 
-  // opens (or slides) the combat window and reveals the HP bar; no-op for bar-less enemies
+  /**
+   * @function    enterCombat
+   * @description Open (or slide) the combat window and reveal the HP bar by pushing the combat-timeout deadline forward; no-op for bar-less enemies.
+   * @calledby src/entities/Enemy.ts → takeDamage (player-sourced hit)
+   * @calls    —
+   */
   private enterCombat(): void {
     if (!this.healthBar) return;
     this.inCombat = true;
     this.combatTimeoutAt = this.scene.time.now + ENEMY_COMBAT_TIMEOUT_MS;
   }
 
-  // when the combat window lapses, restores HP to full and hides the bar
+  /**
+   * @function    maybeExitCombat
+   * @description When the combat window lapses, restore HP to full and hide the bar; otherwise no-op.
+   * @calledby src/entities/Enemy.ts → update, before the dead/hurt early return
+   * @calls    the HP-bar setHealth/setVisible
+   */
   private maybeExitCombat(): void {
     if (!this.inCombat) return;
     if (this.enemyState === 'dead') return;
@@ -1228,7 +1255,12 @@ export class Enemy extends AnimatedEntity {
     this.healthBar?.setVisible(false);
   }
 
-  // freezes the boss invulnerable for the "Round N" banner beat, cancelling any in-flight swing or teleport
+  /**
+   * @function    beginRoundBreak
+   * @description Freeze the boss invulnerable for the "Round N" banner beat — set the deadline, return to idle, cancel any in-flight swing/teleport/hurt, and hold a neutral pose.
+   * @calledby src/entities/Enemy.ts → takeDamage when a boss crosses a new round threshold
+   * @calls    clearCurrentAttack/endTeleport, the walk-sound disable, and the ambient pose play
+   */
   private beginRoundBreak(): void {
     this.roundBreakUntil = this.scene.time.now + BOSS_ROUND_BREAK_MS;
     this.enemyState = 'idle';
@@ -1250,7 +1282,13 @@ export class Enemy extends AnimatedEntity {
     this.playAmbientAnimation();
   }
 
-  // returns the surface type under the enemy's feet for walk-sound selection, or null when airborne/off-grid
+  /**
+   * @function    currentWalkSurface
+   * @description Surface type under the enemy's feet for walk-sound selection ('ground' / 'bridge'), or null when airborne or off a known surface.
+   * @returns 'ground' / 'bridge' for the tile underfoot, or null.
+   * @calledby src/entities/Enemy.ts → the chase/loiter/search locomotion, re-resolving the walk-sound surface each frame
+   * @calls    the scene's IntGrid value query
+   */
   private currentWalkSurface(): 'ground' | 'bridge' | null {
     if (!this.body.allowGravity) return null;
     if (!this.body.blocked.down && !this.body.touching.down) return null;
@@ -1264,7 +1302,14 @@ export class Enemy extends AnimatedEntity {
     return null;
   }
 
-  // picks a weighted-random eligible attack this frame, or null when nothing is in range/off lockout
+  /**
+   * @function    pickAttack
+   * @description Pick a weighted-random eligible attack this frame, or null when none qualifies (mid-jump, on lockout, out of range, teleport-locked, heal above threshold, or a misaligned straight shot).
+   * @param   dist  Current distance to the player.
+   * @returns the chosen attack config, or null.
+   * @calledby src/entities/Enemy.ts → update, after the stealth/search gates and before chase
+   * @calls    the per-attack readyAt/teleport-lock checks, the straight-shot alignment test, and a weighted random draw
+   */
   private pickAttack(dist: number): AnimatedEntityAttackConfig | null {
     // no attacking mid-jump; flyers (gravity off) are exempt
     if (
@@ -1330,7 +1375,14 @@ export class Enemy extends AnimatedEntity {
     return eligible[eligible.length - 1];
   }
 
-  // true when the muzzle's Y line passes through the player's body — gates a straight shooter to only fire on-row
+  /**
+   * @function    straightShotAligned
+   * @description True when the muzzle's Y line passes through the player's body band — gates a straight shooter to fire only on-row.
+   * @param   attack  The straight-shot attack config (muzzle origin Y + vertical-align margin).
+   * @returns true if the muzzle row intersects the player's body band; false on a different elevation or with no player yet.
+   * @calledby src/entities/Enemy.ts → pickAttack, filtering a straight-projectile attack for eligibility
+   * @calls    reads the cached player body bounds
+   */
   private straightShotAligned(attack: AnimatedEntityAttackConfig): boolean {
     const player = this.playerRef;
     if (!player) return false;
@@ -1342,7 +1394,13 @@ export class Enemy extends AnimatedEntity {
     );
   }
 
-  // commits a chosen attack — enters attack state, opens aggro/conflict, resets damage guards, and kicks off the animation
+  /**
+   * @function    enterAttackState
+   * @description Commit a chosen attack — enter attack state, open aggro/conflict, reset damage guards, stamp the recast lockout, and kick off the type-specific animation/velocity.
+   * @param   attack  The chosen attack config.
+   * @calledby src/entities/Enemy.ts → update (pickAttack gave a usable attack with clear LOS), notifyPlayerProjectileFired, and tryEnterComboFollowup
+   * @calls    refreshAggro, the dive-velocity bake, the teleport-coordinator acquire + disappear clip, and the per-type animation play
+   */
   private enterAttackState(attack: AnimatedEntityAttackConfig): void {
     this.enemyState = 'attack';
     // committing an attack sustains aggro and opens the shorter conflict window (red "!")
@@ -1395,7 +1453,14 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // chance-based combo chaining — launches the follow-up attack directly after the opener completes, skipping recover
+  /**
+   * @function    tryEnterComboFollowup
+   * @description Chance-based combo chaining — launch the follow-up attack directly after the opener completes, skipping recover.
+   * @param   attack  The just-finished opener (carries its combo-next animation, chance, and range).
+   * @returns true if a follow-up was committed; false on no link, a failed roll, a missing/recast follow-up, or out-of-tolerance range.
+   * @calledby src/entities/Enemy.ts → onAnimComplete, deciding whether to chain instead of recovering
+   * @calls    the follow-up lookup + recast check, the re-face, and enterAttackState
+   */
   private tryEnterComboFollowup(attack: AnimatedEntityAttackConfig): boolean {
     const nextAnim = attack.comboNextAnimation;
     if (nextAnim == null) return false;
@@ -1425,7 +1490,12 @@ export class Enemy extends AnimatedEntity {
     return true;
   }
 
-  // restores gravity and resumes the body-sound sequence after a teleport blink; safe to call with no active teleport
+  /**
+   * @function    endTeleport
+   * @description Restore gravity (if it was suspended), clear the teleport phase, and resume the body-sound sequence after a blink; safe to call with no active teleport.
+   * @calledby src/entities/Enemy.ts → takeDamage/beginRoundBreak/resetEncounter/enterDeadState interrupts and onAnimComplete (strike done)
+   * @calls    the body gravity setter and the entity sound-sequence resume
+   */
   private endTeleport(): void {
     if (this.teleportRestoreGravity) {
       this.body.setAllowGravity(true);
@@ -1435,7 +1505,12 @@ export class Enemy extends AnimatedEntity {
     resumeEntitySoundSequence(this);
   }
 
-  // releases the group teleport lock (if held) and clears currentAttack — all attack-exit paths go through here
+  /**
+   * @function    clearCurrentAttack
+   * @description Release the group teleport lock (if the current attack was a teleport) and null currentAttack — every attack-exit path goes through here.
+   * @calledby src/entities/Enemy.ts → every attack-exit path (enterIdle/takeDamage/beginRoundBreak/enterDeadState/enterLoiter/onAnimComplete)
+   * @calls    the teleport-coordinator release
+   */
   private clearCurrentAttack(): void {
     if (this.currentAttack?.type === 'teleport') {
       this.teleportCoordinator?.release(this);
@@ -1443,7 +1518,13 @@ export class Enemy extends AnimatedEntity {
     this.currentAttack = null;
   }
 
-  // reactive teleport-dodge — when the player fires within range, blinks the boss beside them
+  /**
+   * @function    notifyPlayerProjectileFired
+   * @description Reactive teleport-dodge — when the player fires within range, blink the boss beside them; gated by dodge config, state, blink, group lock, and cooldown.
+   * @param   originX, originY  The shot's origin position.
+   * @calledby src/scenes/GameScene.ts → the projectile overlap notifying nearby bosses the player fired
+   * @calls    pickProjectileReactionTeleport and enterAttackState
+   */
   notifyPlayerProjectileFired(originX: number, originY: number): void {
     const cfg = this.behavior.dodgeOnProjectile;
     if (!cfg) return;
@@ -1463,7 +1544,13 @@ export class Enemy extends AnimatedEntity {
     this.enterAttackState(teleport);
   }
 
-  // picks a teleport attack for the projectile-dodge reaction, preferring off-recast entries
+  /**
+   * @function    pickProjectileReactionTeleport
+   * @description Pick a teleport attack for the projectile-dodge reaction, preferring off-recast entries.
+   * @returns a teleport attack config (off-recast preferred), or null when the enemy has none.
+   * @calledby src/entities/Enemy.ts → notifyPlayerProjectileFired choosing the dodge move
+   * @calls    a filtered random draw over the teleport attacks
+   */
   private pickProjectileReactionTeleport(): AnimatedEntityAttackConfig | null {
     const teleports = this.attacks.filter((a) => a.type === 'teleport');
     if (teleports.length === 0) return null;
@@ -1475,7 +1562,13 @@ export class Enemy extends AnimatedEntity {
     return pool[Math.floor(Math.random() * pool.length)];
   }
 
-  // teleport phase 1→2: repositions to the player's ground, then plays the appear clip (three-phase) or jumps straight to the strike (two-phase)
+  /**
+   * @function    beginTeleportAppear
+   * @description Teleport phase 1→2: reset the body to the clamped destination above the player's ground, face the player, then play the appear clip (three-phase) or chain straight to the strike (two-phase).
+   * @param   attack  The teleport attack config (target offset, appear animation, appearElevated flag).
+   * @calledby src/entities/Enemy.ts → onAnimComplete when the disappear clip finishes
+   * @calls    the arena-X clamp, findGroundY, the body reset/face, and beginTeleportStrike on the two-phase path
+   */
   private beginTeleportAppear(attack: AnimatedEntityAttackConfig): void {
     if (attack.animation == null) return;
     const player = this.playerRef;
@@ -1509,7 +1602,13 @@ export class Enemy extends AnimatedEntity {
     this.beginTeleportStrike(attack);
   }
 
-  // teleport appear→strike: snaps body to the strike position (elevated slams only) and plays the damage animation
+  /**
+   * @function    beginTeleportStrike
+   * @description Teleport appear→strike: for elevated slams re-snap the body down to the strike spot, then enter the strike phase and play the damage clip.
+   * @param   attack  The teleport attack config (animation, appearElevated flag, target offset).
+   * @calledby src/entities/Enemy.ts → onAnimComplete (three-phase, appear done) or beginTeleportAppear directly (two-phase)
+   * @calls    findGroundY and the body reset (elevated only), then the strike animation play
+   */
   private beginTeleportStrike(attack: AnimatedEntityAttackConfig): void {
     if (attack.animation == null) return;
     if (attack.appearAnimation != null && attack.appearElevated === true) {
@@ -1531,7 +1630,15 @@ export class Enemy extends AnimatedEntity {
     this.playLogical(attack.animation);
   }
 
-  // no +1 on startTileY — body.bottom is on the tile boundary so Math.floor already points at the floor tile
+  /**
+   * @function    findGroundY
+   * @description Probe downward for the first solid tile's top Y (no +1 on startTileY — body.bottom sits on the tile boundary, so Math.floor already lands on the floor tile).
+   * @param   x       World column to probe.
+   * @param   startY  Y to begin the downward scan.
+   * @returns the world Y of the first solid tile top below startY, or startY if none within the scan window.
+   * @calledby src/entities/Enemy.ts → beginTeleportAppear/beginTeleportStrike resolving where the boss lands
+   * @calls    the scene's solid-tile query per scanned tile
+   */
   private findGroundY(x: number, startY: number): number {
     const helper = this.scene as unknown as EnemyHelperScene;
     const TILE_SIZE = 16;
@@ -1546,7 +1653,13 @@ export class Enemy extends AnimatedEntity {
     return startY;
   }
 
-  // sets a one-shot velocity so the dive body lands on the player exactly when the clip ends
+  /**
+   * @function    applyDiveVelocity
+   * @description Set a one-shot X/Y velocity so the dive body reaches the player exactly when the clip ends; no-op without a player or clip duration.
+   * @param   attack  The dive attack config; its animation duration paces the arc.
+   * @calledby src/entities/Enemy.ts → enterAttackState when committing a dive attack
+   * @calls    the animation lookup for the clip duration, then the velocity setters
+   */
   private applyDiveVelocity(attack: AnimatedEntityAttackConfig): void {
     if (!this.playerRef || attack.animation == null) return;
     const fullKey = entityAnimFullKey(this.getIdentifier(), attack.animation);
@@ -1560,13 +1673,26 @@ export class Enemy extends AnimatedEntity {
     this.setVelocityY((dy * 1000) / durationMs);
   }
 
-  // snaps the body forward by the lunge distance (clamped so it can't cross gaps or world edges)
+  /**
+   * @function    applyLungeDisplacement
+   * @description Snap the body forward along the facing by the safe (clamped) lunge distance, so it can't cross gaps or world edges.
+   * @param   distance  Requested forward lunge in px.
+   * @calledby src/entities/Enemy.ts → onAnimComplete advancing the body at the end of a lunge attack
+   * @calls    safeLungeDistance and the body reset
+   */
   private applyLungeDisplacement(distance: number): void {
     const safe = this.safeLungeDistance(distance);
     this.body.reset(this.x + safe * this.facingDirection, this.y);
   }
 
-  // clamps lunge distance to the furthest step that stays in world bounds and over solid ground
+  /**
+   * @function    safeLungeDistance
+   * @description Clamp lunge distance to the furthest sampled step that stays in world bounds and (for grounded entities) over solid floor; flyers skip the gap guard.
+   * @param   distance  Requested forward lunge in px.
+   * @returns the largest safe distance.
+   * @calledby src/entities/Enemy.ts → applyLungeDisplacement before moving the body
+   * @calls    the scene's solid-tile query per probe step
+   */
   private safeLungeDistance(distance: number): number {
     if (distance <= 0) return distance;
     const helper = this.scene as unknown as EnemyHelperScene;
@@ -1593,7 +1719,12 @@ export class Enemy extends AnimatedEntity {
     return safe;
   }
 
-  // drops to idle: cancels any swing, parks the body, shows the resting pose, and mutes footsteps
+  /**
+   * @function    enterIdle
+   * @description Drop to idle: clear any swing, zero velocity, show the resting pose, and mute footsteps.
+   * @calledby src/entities/Enemy.ts → the recover/round-break/search/return-to-post transitions and any reset to rest
+   * @calls    clearCurrentAttack, playAmbientAnimation, and the walk-sound disable
+   */
   private enterIdle(): void {
     this.enemyState = 'idle';
     this.clearCurrentAttack();
@@ -1605,7 +1736,12 @@ export class Enemy extends AnimatedEntity {
     setEnemyWalkSoundEnabled(this, false);
   }
 
-  // shows the resting pose — airborne loiterers keep their walk clip, everything else shows the idle animation
+  /**
+   * @function    playAmbientAnimation
+   * @description Show the resting pose — airborne loiterers hold their fly clip, everything else snaps to the default idle animation.
+   * @calledby src/entities/Enemy.ts → enterIdle, beginRoundBreak, and onAnimComplete (recover) resetting to a neutral pose
+   * @calls    effectiveWalkAnimation and the logical animation play
+   */
   private playAmbientAnimation(): void {
     // airborne loiterers hold their fly clip at rest; grounded entities snap to idle so they don't "run in place"
     if (!this.body.allowGravity && this.canLoiter()) {
@@ -1618,7 +1754,12 @@ export class Enemy extends AnimatedEntity {
     this.playLogical(this.config.defaultAnimation);
   }
 
-  // plays the sleep clip (or freezes on wake-clip frame 0) while the entity waits to be spotted
+  /**
+   * @function    holdDormantPose
+   * @description Play the sleep clip while the entity waits to be spotted, or freeze on frame 0 of the wake clip when no sleep clip is authored.
+   * @calledby src/entities/Enemy.ts → the constructor when arming a dormant ambusher
+   * @calls    the logical animation play, or a direct play then anim pause for the frozen wake pose
+   */
   private holdDormantPose(): void {
     // play the sleep clip if authored; bad config falls through to the wake-frame-0 pose
     const sleepAnim = this.behavior.dormant?.sleepAnimation;
@@ -1630,7 +1771,7 @@ export class Enemy extends AnimatedEntity {
     this.anims.pause();
   }
 
-  // clamps x to the spawn-level arena bounds so teleport destinations can't follow the player out of the room
+  /** Clamp x to the spawn-level arena bounds so teleport destinations can't follow the player out of the room. */
   private clampArenaX(x: number): number {
     const bounds = this.spawnLevelBounds;
     if (!bounds) return x;
@@ -1640,7 +1781,12 @@ export class Enemy extends AnimatedEntity {
     return Phaser.Math.Clamp(x, minCenterX, maxCenterX);
   }
 
-  // pulls the body back inside the arena rect each frame and zeroes outward velocity; X-only, no-op without stayInSpawnLevel
+  /**
+   * @function    clampToArena
+   * @description Pull the body X back inside the arena rect each frame and zero any outward X velocity; X-only, no-op for non-arena (non-stayInSpawnLevel) enemies.
+   * @calledby src/entities/Enemy.ts → update, before the AI branches
+   * @calls    only body position/velocity writes
+   */
   private clampToArena(): void {
     const bounds = this.spawnLevelBounds;
     if (!bounds) return;
@@ -1656,24 +1802,30 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // true while the aggro window is live (traded blows recently); lapses ENEMY_COMBAT_TIMEOUT_MS after the last exchange
+  /** True while the aggro window is live (recently traded blows); lapses ENEMY_COMBAT_TIMEOUT_MS after the last exchange. */
   private isAggro(): boolean {
     return this.scene.time.now < this.aggroUntil;
   }
 
-  // re-arms the aggro window; called on every exchange of blows to keep a sustained fight engaged
+  /** Re-arm the aggro window; called on every exchange of blows to keep a sustained fight engaged. */
   private refreshAggro(): void {
     this.aggroUntil = this.scene.time.now + ENEMY_COMBAT_TIMEOUT_MS;
   }
 
   // ── Stealth / detection ──────────────────────────────────────────────────
 
-  // 0/1/2 for normal/investigating/conflict; GameScene takes the max to colour the HUD corner brackets
+  /** 0/1/2 for normal/investigating/conflict; GameScene takes the max to colour the HUD corner brackets. */
   getAlertLevel(): 0 | 1 | 2 {
     return alertLevel(this.alertState);
   }
 
-  // stealth is disabled for bosses, boss-fight enemies, and stealth-exempt swarmers (wasps)
+  /**
+   * @function    isStealthEnabled
+   * @description True when the cone/glyph/HUD detection system applies; false for attack-less, stealth-exempt swarmers (wasps), bosses, and the scene-disabled case.
+   * @returns whether stealth detection governs this enemy this frame.
+   * @calledby src/entities/Enemy.ts → the detection, facing, search, and chase gates throughout the AI
+   * @calls    the scene's stealth-disabled query
+   */
   private isStealthEnabled(): boolean {
     if (this.alertIcon == null) return false; // attack-less / stealth-exempt
     if (this.ignoresStealth) return false; // wasps & other legacy swarmers
@@ -1681,7 +1833,13 @@ export class Enemy extends AnimatedEntity {
     return !(this.scene as unknown as EnemyHelperScene).isStealthDisabled();
   }
 
-  // true when the enemy should face the player this frame; stealth-off enemies always do (legacy behavior)
+  /**
+   * @function    shouldFacePlayer
+   * @description True to track the player's side this frame; stealth-off enemies always do, otherwise face only when in conflict or investigating with LOS.
+   * @returns whether to re-face the player this frame.
+   * @calledby src/entities/Enemy.ts → update, deciding whether to re-face outside of attacks
+   * @calls    isStealthEnabled; otherwise reads alert state only
+   */
   private shouldFacePlayer(): boolean {
     if (!this.isStealthEnabled()) return true;
     if (this.alertState === 'conflict') return true;
@@ -1689,14 +1847,25 @@ export class Enemy extends AnimatedEntity {
     return false; // normal
   }
 
-  // Snapshots the player's position as the last-seen spot a searcher heads for.
+  /** Snapshot the player's position as the last-seen spot a searcher heads for. */
   private recordLastSeen(player: Player): void {
     this.lastSeenX = player.x;
     this.lastSeenY = player.y;
     this.hasLastSeen = true;
   }
 
-  // true when the player is visible this frame — cone+range+LOS for stealth, range+LOS only for bosses
+  /**
+   * @function    canSeePlayer
+   * @description True when the player passes the detection test (cone+range for stealth, range only for bosses) and LOS is clear this frame.
+   * @param   player          The live player.
+   * @param   dx              Signed horizontal delta to the player.
+   * @param   dist            Distance to the player.
+   * @param   stealthEnabled  Whether the cone gate applies (vs. plain range).
+   * @param   helper          The scene's LOS query.
+   * @returns whether the player is visible this frame.
+   * @calledby src/entities/Enemy.ts → updateAlertState resolving visibility each frame
+   * @calls    the detection-cone test and the scene's line-blocked query
+   */
   private canSeePlayer(
     player: Player,
     dx: number,
@@ -1723,7 +1892,12 @@ export class Enemy extends AnimatedEntity {
     return !helper.isLineBlocked(this.x, this.y, player.x, player.y);
   }
 
-  // handles a fresh spot — opens aggro, arms the stop-and-investigate telegraph, plays the alert sting
+  /**
+   * @function    onSpotted
+   * @description Handle a fresh spot — open aggro, clear search/return state, arm the stop-then-rush telegraph, and play the alert sting (unless harmless).
+   * @calledby src/entities/Enemy.ts → updateAlertState on a first sighting, and hearGunshot on a fresh cue
+   * @calls    refreshAggro and the alert-sting one-shot
+   */
   private onSpotted(): void {
     this.refreshAggro();
     this.returningToPost = false;
@@ -1735,7 +1909,13 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // alerts the enemy to a nearby gunshot, pointing last-seen at the exact shot location regardless of LOS
+  /**
+   * @function    hearGunshot
+   * @description Alert the enemy to a nearby gunshot, pointing last-seen at the exact shot location regardless of LOS; opens a fresh hunt or retargets an existing one. No-op when dead or stealth-disabled.
+   * @param   x, y  The shot's world location.
+   * @calledby src/scenes/GameScene.ts → the gunshot broadcast to enemies within earshot
+   * @calls    onSpotted on a fresh alert, or refreshAggro + a search-budget reset when already hunting
+   */
   hearGunshot(x: number, y: number): void {
     if (this.isDead() || !this.isStealthEnabled()) return;
     const fresh = !this.isAggro();
@@ -1753,7 +1933,15 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // per-frame detection pass: checks LOS, opens/refreshes aggro on a spot, classifies alert state, and drives the overhead glyph
+  /**
+   * @function    updateAlertState
+   * @description Per-frame detection pass: update lastVisible, open/refresh aggro on a spot, classify the alert state, and position/drive the overhead glyph.
+   * @param   player  The live player.
+   * @param   dx      Signed horizontal delta to the player.
+   * @param   dist    Distance to the player.
+   * @calledby src/entities/Enemy.ts → update, before the facing and chase logic
+   * @calls    canSeePlayer, recordLastSeen/onSpotted/refreshAggro, the alert classifier, and updateAlertIcon
+   */
   private updateAlertState(player: Player, dx: number, dist: number): void {
     if (this.alertIcon == null) return;
     const now = this.scene.time.now;
@@ -1790,7 +1978,13 @@ export class Enemy extends AnimatedEntity {
     this.updateAlertIcon(now);
   }
 
-  // flashes "?" or "!" on an alert escalation and auto-hides after the hold window
+  /**
+   * @function    updateAlertIcon
+   * @description Flash "?" or "!" on an alert escalation edge (setting the glyph + hide deadline) and clear it once the hold window lapses.
+   * @param   now  Current scene time in ms.
+   * @calledby src/entities/Enemy.ts → updateAlertState at the end of the detection pass
+   * @calls    the alert-icon setGlyph; reads the previous/current alert states
+   */
   private updateAlertIcon(now: number): void {
     const icon = this.alertIcon;
     if (icon == null) return;
@@ -1815,7 +2009,7 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // true when alerted but LOS is lost; stealth-enabled only — boss-fight enemies keep legacy pursuit
+  /** True when alerted but LOS is lost; stealth-enabled only — boss-fight enemies keep legacy pursuit. */
   private isSearching(): boolean {
     return (
       this.isStealthEnabled() &&
@@ -1825,7 +2019,13 @@ export class Enemy extends AnimatedEntity {
     );
   }
 
-  // two-phase hunt: beeline to the last-seen spot, then look around before giving up
+  /**
+   * @function    updateSearch
+   * @description Two-phase hunt: travel to the last-seen spot (A* or grounded/airborne beeline), then scan by flipping facing, giving up when the look-around budget lapses.
+   * @param   player  The live player; used only when the hunt ends and hands off to idle/loiter.
+   * @calledby src/entities/Enemy.ts → update while searching (aware but LOS lost)
+   * @calls    followNavPath/steerToNavWaypoint, the leap probes, the walk-sound toggle, and giveUpHunt → enterIdleOrLoiter on timeout
+   */
   private updateSearch(player: Player): void {
     const now = this.scene.time.now;
     if (this.searchTravelUntil === 0 && this.searchLookUntil === 0) {
@@ -1850,7 +2050,7 @@ export class Enemy extends AnimatedEntity {
         ? this.followNavPath(this.lastSeenX, this.lastSeenY)
         : null;
 
-    // ── Travel phase ──────────────────────────────────────────────────────
+    // ── Travel phase ───────────────────────────────────────────────────────
     // head to the spot; refresh aggro each step so a distant gunshot hunt doesn't lapse mid-walk
     if (
       !arrived &&
@@ -1894,7 +2094,7 @@ export class Enemy extends AnimatedEntity {
       return;
     }
 
-    // ── Look-around phase ─────────────────────────────────────────────────
+    // ── Look-around phase ──────────────────────────────────────────────────
     // arm once on arrival, then flip facing at intervals until the budget lapses
     if (this.searchLookUntil === 0) {
       this.searchLookUntil = now + ENEMY_SEARCH_LOOK_MS;
@@ -1918,7 +2118,12 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // gives up the hunt: clears aggro/converge/search state and arms the walk-back-to-post
+  /**
+   * @function    giveUpHunt
+   * @description Give up the hunt: zero the aggro/converge/search budgets, drop the last-seen, clear the nav path, and flag the return-to-post.
+   * @calledby src/entities/Enemy.ts → updateSearch when the look-around budget lapses
+   * @calls    clearNavPath; otherwise field writes only
+   */
   private giveUpHunt(): void {
     this.aggroUntil = 0;
     this.convergeUntil = 0;
@@ -1931,14 +2136,19 @@ export class Enemy extends AnimatedEntity {
     this.returnPostDeadline = 0; // armed fresh on the first updateReturnToPost frame
   }
 
-  // true while walking back to spawn post after giving up the chase; cleared on arrival or re-detection
+  /** True while walking back to the spawn post after giving up the chase; cleared on arrival or re-detection. */
   private isReturningToPost(): boolean {
     return (
       this.returningToPost && this.isStealthEnabled() && !this.isAggro()
     );
   }
 
-  // walks back to the spawn post via A*, settling in place if the route stalls or the post becomes unreachable
+  /**
+   * @function    updateReturnToPost
+   * @description Walk back to the spawn post (A* or beeline), settling in place if the route stalls or the post becomes unreachable; finishes on arrival or a no-progress timeout.
+   * @calledby src/entities/Enemy.ts → update while returning to post (unaware, post-hunt)
+   * @calls    followNavPath/steerToNavWaypoint, the leap probes, the walk-sound toggle, and finishReturnToPost on arrival/timeout
+   */
   private updateReturnToPost(): void {
     const now = this.scene.time.now;
     const moveSpeed = this.effectiveMoveSpeed();
@@ -2014,7 +2224,12 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // finishes the return-to-post walk: clears flags and drops to idle
+  /**
+   * @function    finishReturnToPost
+   * @description Finish the return-to-post walk: clear the return flags/budgets, drop the nav path, and enter idle.
+   * @calledby src/entities/Enemy.ts → updateReturnToPost on arrival, timeout, or an immovable/speed-less enemy
+   * @calls    clearNavPath and enterIdle
+   */
   private finishReturnToPost(): void {
     this.returningToPost = false;
     this.returnPostDeadline = 0;
@@ -2023,18 +2238,28 @@ export class Enemy extends AnimatedEntity {
     this.enterIdle();
   }
 
-  // forces the entity into pursuit by opening the aggro window without needing a hit
+  /** Force the entity into pursuit by opening the aggro window without needing a hit. */
   forcePursue(): void {
     this.refreshAggro();
   }
 
-  // forcePursue plus LOS bypass — enemies close through walls, un-stranding reinforcements on upper ledges
+  /**
+   * @function    forceConverge
+   * @description forcePursue plus an LOS bypass — open aggro and the converge window so chase closes through walls for one combat window, un-stranding reinforcements on upper ledges.
+   * @calledby src/level/BossEncounterController.ts → the convergence pass rallying stranded arena enemies onto the player
+   * @calls    forcePursue, then stamps the converge deadline
+   */
   forceConverge(): void {
     this.forcePursue();
     this.convergeUntil = this.scene.time.now + ENEMY_COMBAT_TIMEOUT_MS;
   }
 
-  // immediately clears all aggro/converge/alarm windows so the enemy stops chasing right now
+  /**
+   * @function    dropPursuit
+   * @description Immediately zero all aggro/converge/home-alarm/leash windows so the enemy stops chasing now; drops to idle if currently mid-chase.
+   * @calledby src/level/BossEncounterController.ts → a fight/scene reset that must call off pursuit at once
+   * @calls    enterIdle when mid-chase; otherwise field writes only
+   */
   dropPursuit(): void {
     this.aggroUntil = 0;
     this.convergeUntil = 0;
@@ -2045,7 +2270,12 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // full fight reset: restores HP/round, re-arms encounter gate, clears all windows, and snaps the body home
+  /**
+   * @function    resetEncounter
+   * @description Full fight reset: refill HP, reset round/encounter/engage state, clear every window + summons + timers, snap the body home, and idle.
+   * @calledby src/level/BossEncounterController.ts → restarting a boss encounter (player death/respawn or fight reset)
+   * @calls    the HP-bar update, clearCurrentAttack/endTeleport, the body reset, and enterIdle
+   */
   resetEncounter(): void {
     this.health = this.maxHealth;
     this.healthBar?.setHealth(this.health, this.maxHealth);
@@ -2079,13 +2309,24 @@ export class Enemy extends AnimatedEntity {
     this.enterIdle();
   }
 
-  // joins this enemy to a boss self-copy group's coordinator (used on the boss itself when the split begins)
+  /**
+   * @function    setTeleportCoordinator
+   * @description Join this enemy to a self-copy group's coordinator and register it as a member (used on the boss itself when the split begins).
+   * @param   coordinator  The shared TeleportCoordinator for the self-copy group.
+   * @calledby src/level/BossEncounterController.ts → the boss split wiring the boss into the freshly-created copy group
+   * @calls    the coordinator's register
+   */
   setTeleportCoordinator(coordinator: TeleportCoordinator): void {
     this.teleportCoordinator = coordinator;
     coordinator.register(this);
   }
 
-  // nudges boss self-copies apart when they stack, proportional to overlap; skips the active teleporter
+  /**
+   * @function    applyHoarderSeparation
+   * @description Shift this body's X by an overlap-weighted push so stacked self-copies ease apart (closer overlap pushes harder); skips the active teleporter, no-op outside a group or mid-teleport.
+   * @calledby src/entities/Enemy.ts → update, before the AI branches
+   * @calls    the coordinator's member list; otherwise position math (clampToArena keeps the nudge in-arena)
+   */
   private applyHoarderSeparation(): void {
     const coordinator = this.teleportCoordinator;
     if (!coordinator || !this.body) return;
@@ -2109,42 +2350,52 @@ export class Enemy extends AnimatedEntity {
     this.x += clamped * HOARDER_SEPARATION_PUSH_SPEED;
   }
 
-  // spawn point exposed so GameScene can anchor wasps to the nearest hive
+  /** Spawn point, exposed so GameScene can anchor wasps to the nearest hive. */
   getSpawnPoint(): { readonly x: number; readonly y: number } {
     return { x: this.spawnX, y: this.spawnY };
   }
 
-  // sets the hive orbit/leash anchor; idempotent so re-applying on respawn is safe
+  /** Set the hive orbit/leash anchor; idempotent, so re-applying on respawn is safe. */
   setHomeAnchor(x: number, y: number): void {
     this.homeAnchorX = x;
     this.homeAnchorY = y;
   }
 
-  // home anchor or null for player-anchored enemies; GameScene uses this to match a wasp to its hive
+  /** The home anchor, or null for player-anchored enemies; GameScene uses it to match a wasp to its hive. */
   getHomeAnchor(): { readonly x: number; readonly y: number } | null {
     return this.homeAnchorX != null && this.homeAnchorY != null
       ? { x: this.homeAnchorX, y: this.homeAnchorY }
       : null;
   }
 
-  // raises hive-defense alarm — drops the home leash and chases the player for one combat window
+  /**
+   * @function    raiseHomeAlarm
+   * @description Raise the hive-defense alarm — open the home-alarm window (leash suppressed) and refresh aggro so the wasp chases the player for one combat window.
+   * @calledby src/scenes/GameScene.ts → the hive-defense response when the player attacks a hive
+   * @calls    refreshAggro; otherwise a timestamp write
+   */
   raiseHomeAlarm(): void {
     this.homeAlarmUntil = this.scene.time.now + ENEMY_COMBAT_TIMEOUT_MS;
     this.refreshAggro();
   }
 
-  // True while the hive-defense alarm window is live (leash suppressed).
+  /** True while the hive-defense alarm window is live (leash suppressed). */
   private isHomeAlarmed(): boolean {
     return this.scene.time.now < this.homeAlarmUntil;
   }
 
-  // True while the converge window (opened by forceConverge) is live. Read by
-  // the chase LOS gate to let arena enemies pursue through geometry.
+  /** True while the converge window (opened by forceConverge) is live; the chase LOS gate reads this to pursue through geometry. */
   private isConverging(): boolean {
     return this.scene.time.now < this.convergeUntil;
   }
 
-  // engaged but can't reach the player — holds position for path-walkers, falls to loiter for drifters
+  /**
+   * @function    enterEngagedFallback
+   * @description Engaged but can't reach the player — hold an aggroed path-walker still, otherwise route to idle/loiter.
+   * @param   player  The live player; forwarded to the loiter fallback.
+   * @calledby src/entities/Enemy.ts → update's chase branch when LOS is blocked (airborne) or no chase is possible
+   * @calls    enterIdle or enterIdleOrLoiter
+   */
   private enterEngagedFallback(player: Player): void {
     if (this.isAggro() && this.loiterPath) {
       if (this.enemyState !== 'idle') {
@@ -2158,7 +2409,13 @@ export class Enemy extends AnimatedEntity {
   // ══ Idle-motion cluster: loiter / patrol / wander / greet ══════════════════
   // Kept in-class (not extracted): shared state with chase locomotion would need a ~25-member accessor surface to pull out.
 
-  // routes the "nothing to do" outcome — loiter-capable entities loiter, everything else idles
+  /**
+   * @function    enterIdleOrLoiter
+   * @description Route the "nothing to do" outcome — loiter-capable entities enter/continue loiter, everything else drops to idle.
+   * @param   player  Forwarded to the loiter logic.
+   * @calledby src/entities/Enemy.ts → the attack-less, oblivious, engaged-fallback, and end-of-hunt branches
+   * @calls    canLoiter, enterLoiter/updateLoiter, or enterIdle
+   */
   private enterIdleOrLoiter(player: Player): void {
     if (this.canLoiter()) {
       if (this.enemyState !== 'loiter') {
@@ -2172,16 +2429,23 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // attacks[0] wins; falls back to behavior block so attack-less characters (spirit walkers) can still patrol
+  /** Effective walk clip: attacks[0] wins, falling back to the behavior block so attack-less characters (spirit walkers) can still patrol. */
   private effectiveWalkAnimation(): string | undefined {
     return this.attacks[0]?.walkAnimation ?? this.behavior.walkAnimation;
   }
 
+  /** Effective move speed: attacks[0] wins, falling back to the behavior block (mirrors effectiveWalkAnimation). */
   private effectiveMoveSpeed(): number | undefined {
     return this.attacks[0]?.moveSpeed ?? this.behavior.moveSpeed;
   }
 
-  // true when this entity can patrol/wander/drift — path-walkers, default wanderers, and airborne enemies all qualify
+  /**
+   * @function    canLoiter
+   * @description True when this entity can patrol/wander/drift — needs a walk clip + move speed, plus a path, a wander radius, or being airborne (path-walkers, default wanderers, and flyers all qualify).
+   * @returns whether the entity can loiter rather than sit idle.
+   * @calledby src/entities/Enemy.ts → enterIdleOrLoiter, playAmbientAnimation, update's recover branch, and onAnimComplete
+   * @calls    effectiveWalkAnimation/effectiveMoveSpeed and wanderRadius
+   */
   private canLoiter(): boolean {
     if (this.behavior.immovable) return false;
     if (
@@ -2196,7 +2460,13 @@ export class Enemy extends AnimatedEntity {
     return true;
   }
 
-  // returns the wander radius (authored or default), or null for bosses/stationary enemies that should hold idle
+  /**
+   * @function    wanderRadius
+   * @description The wander radius — authored config, the default for eligible grounded enemies, or null for bosses/stationary enemies that should hold idle.
+   * @returns the radius in px, or null when wandering doesn't apply.
+   * @calledby src/entities/Enemy.ts → canLoiter, updateLoiter, and the wander helpers bounding the stroll band
+   * @calls    reads config/flags only
+   */
   private wanderRadius(): number | null {
     if (this.wanderConfig) return this.wanderConfig.radius;
     if (
@@ -2210,7 +2480,13 @@ export class Enemy extends AnimatedEntity {
     return null;
   }
 
-  // enters loiter and seeds the appropriate movement mode (patrol snap, wander start, or drift target pick)
+  /**
+   * @function    enterLoiter
+   * @description Enter loiter — set the state, play the walk clip, and seed the appropriate mode + cadence (patrol-index snap, wander start, or drift-target pick).
+   * @param   player  Used to seed the drift target for player-anchored loiterers.
+   * @calledby src/entities/Enemy.ts → enterIdleOrLoiter when a loiter-capable entity first idles
+   * @calls    clearCurrentAttack, the walk animation, and the per-mode seed (findNearestWaypointIndex, pickWanderTarget, or pickLoiterTarget)
+   */
   private enterLoiter(player: Player): void {
     this.enemyState = 'loiter';
     this.clearCurrentAttack();
@@ -2236,7 +2512,13 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // per-frame loiter dispatch — routes to path-follow, area-wander, or the legacy anchored drift
+  /**
+   * @function    updateLoiter
+   * @description Per-frame loiter dispatch — route to path-follow, area-wander, or the legacy anchored drift, advancing one frame of it.
+   * @param   player  Used by the anchored-drift branch for engagement-range hover and target picks.
+   * @calledby src/entities/Enemy.ts → enterIdleOrLoiter and update's recover branch while loitering
+   * @calls    updatePathLoiter, updateAreaWander, or the inline anchored-drift steering + pickLoiterTarget
+   */
   private updateLoiter(player: Player): void {
     if (this.loiterPath) {
       this.updatePathLoiter();
@@ -2281,7 +2563,12 @@ export class Enemy extends AnimatedEntity {
     this.setVelocityY(this.behavior.horizontalMovementOnly ? 0 : (dy / dist) * speed);
   }
 
-  // walks the authored patrol path in ping-pong order, with periodic idle dwells so it looks like strolling
+  /**
+   * @function    updatePathLoiter
+   * @description Walk the authored patrol path in ping-pong order with periodic idle dwells (so it reads as strolling) — steers toward the current waypoint (grounded X-only, horizontal-locked, or airborne 2D) and flips at endpoints.
+   * @calledby src/entities/Enemy.ts → updateLoiter for path-walking entities
+   * @calls    the dwell helpers, the leap probe for obstacle hops, the walk-sound toggle, and advancePathIndex on arrival
+   */
   private updatePathLoiter(): void {
     const path = this.loiterPath;
     if (!path) return;
@@ -2349,7 +2636,13 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // starts a patrol dwell: parks the body, shows idle pose, and mutes footsteps for a randomized beat
+  /**
+   * @function    beginPathPause
+   * @description Start a patrol dwell: set a randomized dwell deadline, zero velocity, show the idle pose, and mute footsteps for the beat.
+   * @param   now  Current scene time in ms.
+   * @calledby src/entities/Enemy.ts → updatePathLoiter when the next-pause time arrives
+   * @calls    the default-animation play and the walk-sound disable
+   */
   private beginPathPause(now: number): void {
     this.pathPauseUntil =
       now +
@@ -2361,7 +2654,7 @@ export class Enemy extends AnimatedEntity {
     setEnemyWalkSoundEnabled(this, false);
   }
 
-  // Schedules the next dwell a randomized stroll-interval out from `now`.
+  /** Schedule the next dwell a randomized stroll-interval out from `now`. */
   private scheduleNextPathPause(now: number): void {
     this.nextPathPauseAt =
       now +
@@ -2369,7 +2662,12 @@ export class Enemy extends AnimatedEntity {
       Math.random() * (PATH_WALK_INTERVAL_MAX_MS - PATH_WALK_INTERVAL_MIN_MS);
   }
 
-  // advances the ping-pong path index, flipping direction at either endpoint
+  /**
+   * @function    advancePathIndex
+   * @description Step the ping-pong path index, reversing direction when it would pass either endpoint.
+   * @calledby src/entities/Enemy.ts → updatePathLoiter on reaching the current waypoint
+   * @calls    index/direction math only
+   */
   private advancePathIndex(): void {
     if (!this.loiterPath) return;
     const lastIndex = this.loiterPath.length - 1;
@@ -2381,7 +2679,13 @@ export class Enemy extends AnimatedEntity {
     this.pathIndex = next;
   }
 
-  // returns the index of the nearest waypoint so patrol resumes from the right spot after a chase
+  /**
+   * @function    findNearestWaypointIndex
+   * @description Index of the nearest waypoint, so a resumed patrol snaps to the right spot after a chase.
+   * @returns the closest waypoint's index (0 when the path is empty).
+   * @calledby src/entities/Enemy.ts → enterLoiter and onAnimComplete (recover) snapping a resumed patrol
+   * @calls    distance math over the waypoints
+   */
   private findNearestWaypointIndex(): number {
     const path = this.loiterPath;
     if (!path || path.length === 0) return 0;
@@ -2399,7 +2703,13 @@ export class Enemy extends AnimatedEntity {
     return bestIndex;
   }
 
-  // picks the next drift target — home-anchored enemies orbit the hive, player-anchored ones hover above the player
+  /**
+   * @function    pickLoiterTarget
+   * @description Pick the next drift target on the chosen anchor's arc (home-anchored enemies orbit the hive full-circle; player-anchored ones hover above the player) plus a randomized refresh deadline.
+   * @param   player  The player-anchored drift origin when no home anchor is set.
+   * @calledby src/entities/Enemy.ts → enterLoiter, updateLoiter's anchored-drift branch, and onAnimComplete (recover)
+   * @calls    randomized radius/angle math around the home or player anchor
+   */
   private pickLoiterTarget(player: Player): void {
     const radius =
       LOITER_TARGET_MIN_RADIUS +
@@ -2421,7 +2731,12 @@ export class Enemy extends AnimatedEntity {
 
   // ── Spawn-anchored ground wander (behavior.wander) ───────────────────────
 
-  // picks the next stroll target within the wander band, always at least WANDER_MIN_TARGET_STEP_PX away
+  /**
+   * @function    pickWanderTarget
+   * @description Pick the next stroll target X inside the wander band, nudged toward spawn if it lands within WANDER_MIN_TARGET_STEP_PX of the feet.
+   * @calledby src/entities/Enemy.ts → enterLoiter and updateAreaWander on reaching the current target
+   * @calls    randomized band math only
+   */
   private pickWanderTarget(): void {
     const radius = this.wanderRadius() ?? 0;
     const minX = this.spawnX - radius;
@@ -2435,7 +2750,14 @@ export class Enemy extends AnimatedEntity {
     this.wanderTargetX = Math.max(minX, Math.min(maxX, target));
   }
 
-  // true if the wander leap's landing is inside the band and within the climb/drop reach
+  /**
+   * @function    isWanderLandingAllowed
+   * @description True when a wander leap's landing stays inside the band and within the symmetric climb/drop reach.
+   * @param   landing  Candidate leap-landing world point {x, y}.
+   * @returns whether the landing is allowed.
+   * @calledby src/entities/Enemy.ts → updateAreaWander vetting a candidate leap landing
+   * @calls    wanderRadius; otherwise bounds math
+   */
   private isWanderLandingAllowed(landing: { x: number; y: number }): boolean {
     const radius = this.wanderRadius() ?? 0;
     if (Math.abs(landing.x - this.spawnX) > radius) return false;
@@ -2447,7 +2769,13 @@ export class Enemy extends AnimatedEntity {
     return true;
   }
 
-  // sets a new target back toward spawn so the stroller doesn't re-probe a ledge or wall it just declined
+  /**
+   * @function    turnBackFromEdge
+   * @description Retarget the wander a step back the other way (clamped to the band) so the stroller doesn't re-probe a ledge or wall it just declined.
+   * @param   blockedDir  The direction that was blocked, +1/-1.
+   * @calledby src/entities/Enemy.ts → updateAreaWander when a leap/edge ahead is declined
+   * @calls    wanderRadius; otherwise bounds math
+   */
   private turnBackFromEdge(blockedDir: 1 | -1): void {
     const radius = this.wanderRadius() ?? 0;
     const back = (-blockedDir) as 1 | -1;
@@ -2459,7 +2787,13 @@ export class Enemy extends AnimatedEntity {
     );
   }
 
-  // swaps between the walk clip and the idle pose for the wander, only on change to avoid restarting the animation
+  /**
+   * @function    setWanderWalking
+   * @description Swap between the walk clip and the idle pose for the wander, only on a change so the animation isn't restarted, toggling the walk sound to match.
+   * @param   walking  True to show the walk clip + footsteps, false for idle.
+   * @calledby src/entities/Enemy.ts → updateAreaWander when starting/stopping movement
+   * @calls    the logical animation play and the walk-sound toggle
+   */
   private setWanderWalking(walking: boolean): void {
     if (walking === this.wanderWalkAnimOn) return;
     this.wanderWalkAnimOn = walking;
@@ -2473,12 +2807,17 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // The authored greeting config (behavior.wander.greet), or null.
+  /** The authored greeting config (behavior.wander.greet), or null. */
   private greetConfig(): AnimatedEntityGreetConfig | null {
     return this.wanderConfig?.greet ?? null;
   }
 
-  // per-frame stroll: greet partner if nearby, rest-break cadence, then walk toward target with obstacle hopping
+  /**
+   * @function    updateAreaWander
+   * @description Per-frame stroll: run the greeting bob, then the rest-break cadence, then the walk-toward-target step with edge/leap handling.
+   * @calledby src/entities/Enemy.ts → updateLoiter for grounded default-wander entities
+   * @calls    tryStartGreeting, setWanderWalking, pickWanderTarget, the leap probes/landing checks, and the walk-sound toggle
+   */
   private updateAreaWander(): void {
     const moveSpeed = this.effectiveMoveSpeed();
     if (moveSpeed == null) {
@@ -2590,9 +2929,15 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // ── Wander greetings (behavior.wander.greet) ──────────────────────────────
+  // ── Wander greetings (behavior.wander.greet) ─────────────────────────────
 
-  // looks for a same-floor wanderer to greet; on a chance roll, starts a synchronized greeting on both
+  /**
+   * @function    tryStartGreeting
+   * @description Look for the nearest same-floor wanderer to greet and, on a chance roll, start a synchronized mutual greeting on this entity and the partner.
+   * @param   now  Current scene time in ms.
+   * @calledby src/entities/Enemy.ts → updateAreaWander on the throttled greet scan
+   * @calls    the scene's forEachEnemy iterator, isGreetAvailable on candidates, and beginGreet on both partners
+   */
   private tryStartGreeting(now: number): void {
     const greet = this.greetConfig();
     if (greet == null) return;
@@ -2628,7 +2973,15 @@ export class Enemy extends AnimatedEntity {
     chosen.beginGreet(this.x, now);
   }
 
-  // true when this entity is willing and ready to accept a greeting from a same-group partner
+  /**
+   * @function    isGreetAvailable
+   * @description True when this entity is willing and ready to accept a greeting — same group, loitering, grounded, and off both the greet-active and greet-cooldown windows.
+   * @param   group  The partner's greet group.
+   * @param   now    Current scene time in ms.
+   * @returns whether this entity can be greeted right now.
+   * @calledby src/entities/Enemy.ts → a partner's tryStartGreeting vetting this entity as a greeting candidate
+   * @calls    greetConfig; otherwise reads state/flags
+   */
   isGreetAvailable(group: string, now: number): boolean {
     const greet = this.greetConfig();
     if (greet == null || greet.group !== group) return false;
@@ -2639,7 +2992,14 @@ export class Enemy extends AnimatedEntity {
     return true;
   }
 
-  // starts the greeting bob sequence, facing the partner — called on both entities the same frame
+  /**
+   * @function    beginGreet
+   * @description Start the greeting bob sequence — face the partner, arm the hop count + greet/cooldown windows, and stop to idle. Called on both entities the same frame.
+   * @param   partnerX  The partner's X, for facing.
+   * @param   now       Current scene time in ms.
+   * @calledby src/entities/Enemy.ts → tryStartGreeting on both partners of a starting greeting
+   * @calls    setWanderWalking and the facing setter
+   */
   beginGreet(partnerX: number, now: number): void {
     const greet = this.greetConfig();
     if (greet == null) return;
@@ -2659,7 +3019,12 @@ export class Enemy extends AnimatedEntity {
 
   // ══ End of the idle-motion cluster ═════════════════════════════════════════
 
-  // kills the enemy: emits the boss-defeated event, tears down audio, plays death anim, or destroys immediately if no anim
+  /**
+   * @function    enterDeadState
+   * @description Kill the enemy — enter dead state, emit BOSS_DEFEATED_EVENT for bosses, tear down audio, and play the death anim (or drop loot + destroy immediately when there is none).
+   * @calledby src/entities/Enemy.ts → takeDamage when HP reaches zero
+   * @calls    clearCurrentAttack/endTeleport, unregisterEntityAudio, the death animation, and the explosion/loot fallbacks
+   */
   private enterDeadState(): void {
     this.enemyState = 'dead';
     this.clearCurrentAttack();
@@ -2688,7 +3053,12 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // fires the death-explosion AoE (if configured), damaging the player and nearby enemies; latched to fire once
+  /**
+   * @function    maybeTriggerDeathExplosion
+   * @description Fire the death-explosion AoE (if configured) once, damaging the player and other enemies inside the blast circle; no-op without an explosion config.
+   * @calledby src/entities/Enemy.ts → enterDeadState (no-anim path) and onAnimUpdate (on the death-explosion frame)
+   * @calls    a physics overlap-rect (circle-filtered), then player.hurt / enemy takeDamage
+   */
   private maybeTriggerDeathExplosion(): void {
     if (this.deathExplosionFired) return;
     const explosion = this.behavior.deathExplosion;
@@ -2725,7 +3095,12 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // rolls the drops table and spawns any loot at the corpse's position; harmless copies drop nothing
+  /**
+   * @function    maybeSpawnAmmoDrop
+   * @description Roll the drops table and spawn each rolled drop at the corpse; no-op for harmless copies (otherwise farmable) or an empty table.
+   * @calledby src/entities/Enemy.ts → enterDeadState (no-anim path) and onAnimComplete (death clip done)
+   * @calls    the drop roll and the scene's ammo-drop spawner
+   */
   private maybeSpawnAmmoDrop(): void {
     // Harmless copies (boss self-clones) drop nothing — otherwise killing them
     // would yield the source boss's full loot table and be farmable.
@@ -2742,7 +3117,14 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // per-frame animation hook: fires audio triggers, the death-explosion, and damage frames for the current attack
+  /**
+   * @function    onAnimUpdate
+   * @description Per-frame animation hook: fire once-per-play sound triggers, the death-explosion on its frame, and the current attack's melee / AoE / single damage frames.
+   * @param   animation  The currently playing animation.
+   * @param   frame      The frame just shown.
+   * @calledby Phaser ANIMATION_UPDATE event (registered in the constructor)
+   * @calls    the trigger one-shot player, maybeTriggerDeathExplosion, and fireSingleMeleeHitbox / fireAttackEffect
+   */
   private onAnimUpdate(
     animation: Phaser.Animations.Animation,
     frame: Phaser.Animations.AnimationFrame,
@@ -2822,7 +3204,13 @@ export class Enemy extends AnimatedEntity {
     this.attackFired = true;
   }
 
-  // re-arms the trigger set on a new clip, stops overhanging sounds, and pauses audio sequences for teleport clips
+  /**
+   * @function    onAnimStart
+   * @description On a new clip, clear the fired-trigger set, stop overhanging sounds, and pause the body-sound sequence for teleport clips.
+   * @param   animation  The animation that just started.
+   * @calledby Phaser ANIMATION_START event (registered in the constructor)
+   * @calls    stopActiveTriggerSounds and the entity sound-sequence pause
+   */
   private onAnimStart(animation: Phaser.Animations.Animation): void {
     this.firedTriggers.clear();
     this.stopActiveTriggerSounds();
@@ -2831,7 +3219,13 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // re-arms only per-loop triggers (footsteps, beat impacts) on each repeat; long one-shots stay fired
+  /**
+   * @function    onAnimRepeat
+   * @description Re-arm only the per-loop triggers (footsteps, beat impacts) on each repeat so they re-fire next loop; long one-shots stay fired.
+   * @param   animation  The looping animation that just repeated.
+   * @calledby Phaser ANIMATION_REPEAT event (registered in the constructor)
+   * @calls    the trigger lookup; otherwise set edits
+   */
   private onAnimRepeat(animation: Phaser.Animations.Animation): void {
     const triggers = getTriggersFor(animation.key);
     for (const trigger of triggers) {
@@ -2841,7 +3235,12 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // stops any trigger sounds that shouldn't outlive the current animation clip
+  /**
+   * @function    stopActiveTriggerSounds
+   * @description Stop each still-playing/paused stop-on-complete trigger sound and clear the list, so none outlives the current clip.
+   * @calledby src/entities/Enemy.ts → onAnimStart/onAnimComplete and the constructor's destroy cleanup
+   * @calls    each sound's stop; otherwise list edits
+   */
   private stopActiveTriggerSounds(): void {
     for (const sound of this.activeTriggerSounds) {
       if (sound.isPlaying || sound.isPaused) sound.stop();
@@ -2849,7 +3248,13 @@ export class Enemy extends AnimatedEntity {
     this.activeTriggerSounds = [];
   }
 
-  // clip-end router: handles death → destroy, wake → idle, teleport phase chain, and attack → combo/recover
+  /**
+   * @function    onAnimComplete
+   * @description Clip-end router: drop loot + destroy on death, wake to idle, advance the teleport phase, or chain a combo / fall through to recover.
+   * @param   animation  The animation that completed.
+   * @calledby Phaser ANIMATION_COMPLETE event (registered in the constructor)
+   * @calls    maybeSpawnAmmoDrop/destroy, beginTeleportAppear/beginTeleportStrike, tryEnterComboFollowup, applyLungeDisplacement, and the recover transition
+   */
   private onAnimComplete(animation: Phaser.Animations.Animation): void {
     this.stopActiveTriggerSounds();
     if (isTeleportAnimationKey(animation.key)) {
@@ -2943,7 +3348,13 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // dispatches a damage-frame event to the correct per-type handler (melee, AoE, projectile, heal, summon)
+  /**
+   * @function    fireAttackEffect
+   * @description Dispatch a damage-frame event to the per-type handler (melee / heal / aoe / teleport / summon / projectile) for the attack's type.
+   * @param   attack  The current attack config.
+   * @calledby src/entities/Enemy.ts → onAnimUpdate when an attack's damage frame is reached
+   * @calls    the per-type fire/apply handlers
+   */
   private fireAttackEffect(attack: AnimatedEntityAttackConfig): void {
     if (attack.type === 'melee') {
       this.fireMeleeAttack(attack);
@@ -2970,7 +3381,13 @@ export class Enemy extends AnimatedEntity {
     this.fireProjectileAttack(attack);
   }
 
-  // checks body overlap each tick of a dive and damages the player once on contact
+  /**
+   * @function    applyDiveContact
+   * @description On the first body overlap during a dive, hurt the player (unless harmless) and latch attackFired so it hits once.
+   * @param   player  The live player.
+   * @calledby src/entities/Enemy.ts → update during a dive attack, before the hit lands
+   * @calls    the physics overlap test and player.hurt
+   */
   private applyDiveContact(player: Player): void {
     const attack = this.currentAttack;
     if (!attack || attack.type !== 'dive') return;
@@ -2981,7 +3398,13 @@ export class Enemy extends AnimatedEntity {
     this.attackFired = true;
   }
 
-  // fires an AoE at the player's ground position — optional dodge gates (airborne, open sky), VFX sprite or spriteless rect
+  /**
+   * @function    fireAoeAttack
+   * @description Fire an AoE at the player's ground position — resolve the strike point, apply the airborne/open-sky dodge gates, schedule the sound, and stamp a VFX sprite or a spriteless damage rect.
+   * @param   attack  The AoE attack config (VFX, damage, dodge gates, delays, damage rect size).
+   * @calledby src/entities/Enemy.ts → fireAttackEffect for an aoe attack
+   * @calls    the scene's tile/LOS probes, the delayed-call scheduler, the one-shot sound, and a delayed overlap-rect for spriteless damage
+   */
   private fireAoeAttack(attack: AnimatedEntityAttackConfig): void {
     if (!this.playerRef) return;
     const vfxKey = attack.vfxAnimation;
@@ -3180,7 +3603,13 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // spawns minions flanking the caster, alternating sides, capped by summonMaxAlive
+  /**
+   * @function    fireSummonAttack
+   * @description Spawn up to the remaining-budget minions flanking the caster (alternating sides, capped by summonMaxAlive) and record them as active summons; no-op for harmless copies.
+   * @param   attack  The summon config (kinds, count, max-alive cap).
+   * @calledby src/entities/Enemy.ts → fireAttackEffect for a summon attack
+   * @calls    the live-summon prune and the scene's summonEnemyAt
+   */
   private fireSummonAttack(attack: AnimatedEntityAttackConfig): void {
     if (this.harmless) return;
     const kinds = attack.summonKinds;
@@ -3212,7 +3641,13 @@ export class Enemy extends AnimatedEntity {
     this.activeSummons = [...live, ...spawned];
   }
 
-  // stamps each hitbox in order until one connects; used for teleport's single damage event
+  /**
+   * @function    fireMeleeAttack
+   * @description Stamp each hitbox in order, stopping at the first that connects; also serves teleport's single damage event.
+   * @param   attack  The attack config (hitboxes + damage).
+   * @calledby src/entities/Enemy.ts → fireAttackEffect for melee and teleport attacks
+   * @calls    fireSingleMeleeHitbox per hitbox
+   */
   private fireMeleeAttack(attack: AnimatedEntityAttackConfig): void {
     const hitboxes = attack.hitboxes;
     const damage = attack.damage;
@@ -3222,7 +3657,15 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // stamps one transient hitbox rect and hurts the player on overlap; harmless copies skip the damage but still return true
+  /**
+   * @function    fireSingleMeleeHitbox
+   * @description Stamp one transient hitbox rect and hurt the player on overlap; harmless copies still "connect" (return true) but deal no damage.
+   * @param   hb      The hitbox config (matchBody flag, or offset/size).
+   * @param   damage  HP to deal.
+   * @returns true if the rect caught the player (resolving the strike), false otherwise.
+   * @calledby src/entities/Enemy.ts → fireMeleeAttack and onAnimUpdate's per-frame melee hitbox loop
+   * @calls    a physics overlap-rect and player.hurt
+   */
   private fireSingleMeleeHitbox(
     hb: AnimatedEntityHitboxConfig,
     damage: number,
@@ -3267,7 +3710,13 @@ export class Enemy extends AnimatedEntity {
     return false;
   }
 
-  // spawns a projectile from the muzzle — straight (horizontal) or aimed at the player's position
+  /**
+   * @function    fireProjectileAttack
+   * @description Spawn an enemy projectile from the muzzle — flying horizontally (straight, dodge by elevation) or homed at the player's fire-time position (aimed).
+   * @param   attack  The ranged/magic config (muzzle origin, speed, damage, straight flag, projectile art).
+   * @calledby src/entities/Enemy.ts → fireAttackEffect for ranged/magic attacks
+   * @calls    the scene's spawnEnemyProjectile
+   */
   private fireProjectileAttack(attack: AnimatedEntityAttackConfig): void {
     if (!this.playerRef) return;
     const idleKey = attack.projectileAnimIdle;
@@ -3314,14 +3763,26 @@ export class Enemy extends AnimatedEntity {
     });
   }
 
-  // restores HP by the heal amount, clamped to maxHealth
+  /**
+   * @function    applyHeal
+   * @description Raise HP by the heal amount, clamped to maxHealth; no-op when no amount is set.
+   * @param   attack  The heal config (heal amount).
+   * @calledby src/entities/Enemy.ts → fireAttackEffect for a heal attack
+   * @calls    clamp math only
+   */
   private applyHeal(attack: AnimatedEntityAttackConfig): void {
     const amount = attack.heal;
     if (amount == null) return;
     this.health = Math.min(this.maxHealth, this.health + amount);
   }
 
-  // damages the player on body overlap for each contact attack, gated by per-attack cooldowns
+  /**
+   * @function    applyContactDamage
+   * @description For each off-cooldown contact attack overlapping the player, hurt them, refresh aggro/conflict, and re-arm the per-attack cooldown.
+   * @param   player  The live player.
+   * @calledby src/entities/Enemy.ts → update, before the state machine, so a contact attack lands even mid-recover
+   * @calls    the physics overlap test, player.hurt, and refreshAggro
+   */
   private applyContactDamage(player: Player): void {
     for (const attack of this.attacks) {
       if (attack.type !== 'contact') continue;
@@ -3341,7 +3802,12 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // records peak fall velocity each airborne frame and applies impact damage on landing
+  /**
+   * @function    trackFallDamage
+   * @description Accumulate peak descent speed while airborne and deal scaled (knockback-free) damage on a hard landing; airborne (gravity-off) entities are exempt.
+   * @calledby src/entities/Enemy.ts → update, unconditionally, before the AI branches
+   * @calls    takeDamage on a hard landing
+   */
   private trackFallDamage(): void {
     if (this.enemyState === 'dead') return;
     if (!this.body.allowGravity) return;
@@ -3373,7 +3839,7 @@ export class Enemy extends AnimatedEntity {
     this.peakFallVelocity = 0;
   }
 
-  // read-only snapshot for the locomotion probe helpers in enemyLeapProbes.ts
+  /** Read-only LeapProbeContext snapshot for the locomotion probe helpers in enemyLeapProbes.ts. */
   private get probeCtx(): LeapProbeContext {
     return {
       body: this.body,
@@ -3384,12 +3850,19 @@ export class Enemy extends AnimatedEntity {
     };
   }
 
-  // Drops the current nav path so the next pursuit replans from a clean state.
+  /** Drop the current nav path so the next pursuit replans from a clean state. */
   private clearNavPath(): void {
     this.nav.clear();
   }
 
-  // thin wrapper around the nav follower — returns the next waypoint toward the goal, or null if no route
+  /**
+   * @function    followNavPath
+   * @description Thin wrapper around the nav follower — return the next waypoint along the A* route toward the goal, or null when no route exists.
+   * @param   goalX, goalY  The world target to route toward.
+   * @returns the next waypoint {x, y}, or null.
+   * @calledby src/entities/Enemy.ts → the chase, search, and return-to-post branches when LOS is blocked
+   * @calls    the nav follower with the body's foot position and the scene helper
+   */
   private followNavPath(
     goalX: number,
     goalY: number,
@@ -3405,7 +3878,14 @@ export class Enemy extends AnimatedEntity {
     );
   }
 
-  // steers one grounded step toward a nav waypoint using the chase locomotion primitives (hop, leap, mount)
+  /**
+   * @function    steerToNavWaypoint
+   * @description Steer one grounded step toward a nav waypoint with the chase locomotion primitives — face it and set velocity to walk, hop, leap, or wall-mount toward it.
+   * @param   wp         The next waypoint {x, y}.
+   * @param   moveSpeed  Base horizontal speed.
+   * @calledby src/entities/Enemy.ts → the chase, search, and return-to-post branches following an A* route
+   * @calls    the leap probes (shouldJumpOverObstacle, isLedgeAhead, findLeapLanding, findWallMountLaunch)
+   */
   private steerToNavWaypoint(
     wp: { x: number; y: number },
     moveSpeed: number,
@@ -3451,7 +3931,15 @@ export class Enemy extends AnimatedEntity {
     }
   }
 
-  // steps sideways to escape from under a platform, refusing if a ledge is ahead; returns false so caller can try the other way
+  /**
+   * @function    tryEscapeStep
+   * @description Step sideways to escape from under a platform, refusing when a ledge ahead makes that direction unsafe (so the caller can try the other way).
+   * @param   escapeDir  Which way to step, +1/-1.
+   * @param   moveX      Horizontal speed.
+   * @returns true if it committed the sideways step; false when a ledge is ahead.
+   * @calledby src/entities/Enemy.ts → update's chase up-leap branch walking out from under an overhang
+   * @calls    the ledge-ahead probe and the facing/velocity setters
+   */
   private tryEscapeStep(escapeDir: 1 | -1, moveX: number): boolean {
     if (isLedgeAhead(this.probeCtx, escapeDir)) return false;
     this.facingDirection = escapeDir;

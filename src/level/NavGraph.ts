@@ -8,26 +8,9 @@ import {
 } from './navProbe';
 
 /**
- * NavGraph — platformer navigation graph built from the LDtk IntGrid collision.
- *
- * Nodes are "standable" tile cells (an empty cell with a floor below and body
- * headroom); edges are the moves a grounded enemy can make between them — WALK
- * (same-row or a one-tile step, cross-level aware) and JUMP (ballistic arcs found
- * by the same physics probe the live enemy uses, so a planned jump is always one
- * the body can land). A* (NavPathfinder) searches this graph; the enemy then
- * follows the node path with its existing hop/leap/mount locomotion.
- *
- * Build strategy: the NODE pass is eager and cheap (a few O(1) csv lookups per
- * cell across every level). EDGES are computed lazily per node and memoized, so
- * the expensive ballistic edge probing is paid only for nodes A* actually
- * expands, and cross-level walk edges work because every node already exists
- * before any edge is computed.
- *
- * Inputs:  one collision grid (positioned in world space) per LDtk level.
- * Outputs: nodes, lazily-built outgoing edges, and a world-point → node snap —
- *          read-only data for the pathfinder; mutates only its own caches.
- * @calledby the navigation layer at level load, then the A* search per expansion.
- * @calls    the Phaser-free ballistic probe for jump edges; no engine access.
+ * @file level/NavGraph.ts
+ * @description Platformer navigation graph from the LDtk IntGrid collision: nodes are standable tile cells (empty cell, floor below, body headroom); edges are WALK (same-row or a one-tile step, cross-level aware) and JUMP (ballistic arcs from the same physics probe the live enemy uses, so a planned jump is always one the body can land); A* (NavPathfinder) searches it and the enemy follows the node path with its hop/leap/mount locomotion; the NODE pass is eager and cheap (a few O(1) csv lookups per cell across every level) while EDGES are computed lazily per node and memoized, paying the expensive ballistic probing only for nodes A* actually expands (cross-level walk edges work because every node exists before any edge is computed).
+ * @module level
  */
 
 // One LDtk level's collision grid, positioned in world space.
@@ -52,7 +35,9 @@ export interface NavEdge {
   readonly kind: 'walk' | 'jump';
 }
 
-// Representative body for graph-edge planning; the executing enemy re-validates each jump with its own body anyway.
+// ── Graph build tuning ─────────────────────────────────────────────────────
+// Canonical body, jump-cost bias, leap launch speed, and snap radius used when planning edges and
+// resolving a world point to a node; the executing enemy re-validates every jump with its own body.
 const NAV_BODY_W = 14;
 const NAV_BODY_H = 26;
 // Jump edges cost more than walking so A* only routes a jump when it genuinely shortcuts the path.
@@ -62,12 +47,19 @@ const NAV_LEAP_VX = PLAYER_RUN_SPEED;
 // Tile radius nodeAt() searches outward when the world point doesn't sit on a node cell.
 const NAV_SNAP_RADIUS_TILES = 3;
 
-// Packs world grid coords into one number; ±32768 offset covers a ~0.5M px world.
+/** Packs world grid coords into one number; ±32768 offset covers a ~0.5M px world. */
 function packCell(gx: number, gy: number): number {
   return (gx + 32768) * 65536 + (gy + 32768);
 }
 
-// Builds a solidity predicate for one level's IntGrid csv; out-of-level samples return false so arcs stay within the level.
+/**
+ * @function    makeLevelSolid
+ * @description Builds a solidity predicate for one level's IntGrid csv; out-of-level samples return false so arcs stay within the level.
+ * @param   lvl  One NavLevel: world origin, cell dims, grid size, IntGrid csv.
+ * @returns a SolidAt closure mapping a world (x, y) to true when the covering cell is non-zero, false outside the level.
+ * @calledby src/level/NavGraph.ts → the NavGraph constructor, once per level to capture its collision lookup
+ * @calls    pure csv indexing inside the returned closure; no delegation
+ */
 function makeLevelSolid(lvl: NavLevel): SolidAt {
   const { worldX, worldY, cWid, cHei, gridSize, csv } = lvl;
   return (x: number, y: number): boolean => {
@@ -87,7 +79,13 @@ export class NavGraph {
   private readonly levelBounds: LevelBounds[] = [];
   private builtNodes = false;
 
-  // Precomputes level bounds and solidity predicates; nodes/edges build lazily on first query.
+  /**
+   * @function    constructor
+   * @description Precomputes per-level bounds and solidity predicates; node/edge caches stay empty and build lazily on first query.
+   * @param   levels  The per-level collision grids, positioned in world space.
+   * @calledby src/scenes/GameScene.ts → buildNavGraph (new NavGraph at level load, when the world's collision is ready)
+   * @calls    the per-level solidity-predicate builder
+   */
   constructor(private readonly levels: ReadonlyArray<NavLevel>) {
     for (const lvl of levels) {
       this.levelBounds.push({
@@ -100,7 +98,12 @@ export class NavGraph {
     }
   }
 
-  // Eager pass registering a node for every standable cell across all levels; idempotent.
+  /**
+   * @function    buildNodes
+   * @description Eager pass registering a node for every standable cell across all levels; idempotent (no-op after the first call).
+   * @calledby src/level/NavGraph.ts → nodeCount / getNodes / nodeAt, on the first query against the graph
+   * @calls    src/level/NavGraph.ts → standable per cell and the cell-packing key
+   */
   buildNodes(): void {
     if (this.builtNodes) return;
     this.builtNodes = true;
@@ -127,7 +130,15 @@ export class NavGraph {
     }
   }
 
-  // True if the cell is empty, has a solid floor one tile below, and has clear headroom for the body.
+  /**
+   * @function    standable
+   * @description True if the cell is empty, has a solid floor one tile below, and clear headroom for the body.
+   * @param   solid   The level's solidity predicate.
+   * @param   wx, wy  World-px cell center.
+   * @returns whether a body can stand in this cell.
+   * @calledby src/level/NavGraph.ts → buildNodes, filtering cells down to standable ones
+   * @calls    the solidity predicate at the cell, the floor below, and up the body's height
+   */
   private standable(solid: SolidAt, wx: number, wy: number): boolean {
     if (solid(wx, wy)) return false;
     if (!solid(wx, wy + TILE_PX)) return false;
@@ -154,7 +165,14 @@ export class NavGraph {
     return this.nodes;
   }
 
-  // Returns a node's outgoing edges, computing and caching them on the first request.
+  /**
+   * @function    getEdges
+   * @description Returns a node's outgoing edges, computing and memoizing them on the first request.
+   * @param   id  Node id (assumed valid).
+   * @returns the node's outgoing edges.
+   * @calledby src/level/NavPathfinder.ts → A* search, each time it expands a node
+   * @calls    src/level/NavGraph.ts → computeEdges, on a cache miss
+   */
   getEdges(id: number): ReadonlyArray<NavEdge> {
     const cached = this.edgeCache[id];
     if (cached) return cached;
@@ -163,7 +181,14 @@ export class NavGraph {
     return edges;
   }
 
-  // Computes walk edges to adjacent cells and jump edges to all reachable ballistic landings.
+  /**
+   * @function    computeEdges
+   * @description Walk edges to left/right/step neighbours (cross-level aware) plus jump edges to distinct ballistic landings off each side, deduplicated.
+   * @param   id  Node id to expand.
+   * @returns the node's outgoing walk + jump edges.
+   * @calledby src/level/NavGraph.ts → getEdges, on the first request for a node
+   * @calls    the cell-to-node index for walk neighbours and src/level/navProbe.ts → collectLeapLandings for jump landings
+   */
   private computeEdges(id: number): NavEdge[] {
     const node = this.nodes[id];
     const li = this.nodeLevel[id];
@@ -218,7 +243,14 @@ export class NavGraph {
     return edges;
   }
 
-  // Node for a landing foot point (nudges y up half a tile to find the cell), or undefined if none.
+  /**
+   * @function    nodeForFoot
+   * @description Node whose cell covers a landing foot point (nudges y up half a tile to find the cell), or undefined if none.
+   * @param   footX, footY  World px of a landing foot point.
+   * @returns the covering node id, or undefined when no node sits there.
+   * @calledby src/level/NavGraph.ts → computeEdges, mapping each ballistic landing back to a node
+   * @calls    the cell-packing key and the cell-to-node index
+   */
   private nodeForFoot(footX: number, footY: number): number | undefined {
     return this.cellToNode.get(
       packCell(
@@ -228,7 +260,14 @@ export class NavGraph {
     );
   }
 
-  // Snaps a world point to the nearest standable node, searching outward ring by ring; returns -1 if none found.
+  /**
+   * @function    nodeAt
+   * @description Snaps a world point to the nearest standable node, searching outward ring by ring; -1 if none within the snap radius.
+   * @param   worldX, worldY  World px to snap.
+   * @returns the nearest node id within the snap radius, or -1.
+   * @calledby src/scenes/GameScene.ts → findEnemyPath, resolving an enemy/target position to a node
+   * @calls    src/level/NavGraph.ts → buildNodes, then the cell-to-node index over expanding tile rings
+   */
   nodeAt(worldX: number, worldY: number): number {
     this.buildNodes();
     const gx0 = Math.floor(worldX / TILE_PX);
